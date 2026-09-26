@@ -1,0 +1,100 @@
+---
+name: commitments
+description: Keeps a record of what the user has actually decided, drafted, or is still exploring, and checks times, dates and budgets; use it in multi-step work where decisions accumulate.
+---
+
+# Commitments
+
+Maintain a decision record so later steps do not treat a draft as a decision, or
+miss a scheduling conflict. The record is a memory aid, nothing more.
+
+## Inputs and outputs
+
+- Record file: `.rumbo/record.json` in the user's project.
+- All subcommands: `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/record.py" <sub> --record "<record path>"`.
+- `init --objective TEXT --quote - <<'QUOTE'` — create the record with the goal and the user's own words, then a line with the user's exact words, then a line `QUOTE`; refuses to overwrite. Always pass the user's words through `--quote -` with a quoted heredoc (`<<'QUOTE'`); inside double quotes the shell rewrites `$` amounts and backticks.
+- `validate` — print `RECORD_OK`, or one fault line per problem.
+- `check` — validate, then print `PASS`/`FAIL` per check; exit 1 if any check fails.
+- `show [--max-chars N]` — compact summary; silent when no record exists.
+- `stop-gate` — read the Stop hook input on stdin; block once when checks fail.
+- Exit codes: 0 clean, 1 content problem, 2 tool or I/O problem.
+
+## When to start
+
+Run `init` the first time the user sets a multi-step goal, passing the user's
+own words verbatim through `--quote -` with a quoted heredoc (`<<'QUOTE'`),
+since inside double quotes the shell rewrites `$` amounts and backticks. The objective is what the user is trying to
+achieve. Constraints, cautions and limits go in items, never in the objective.
+If a hook line says "no decision record yet", decide whether this is multi-step
+work with decisions; if it is, run init with the user's own words; if not,
+ignore it.
+
+## When to update
+
+Update only when a message adds, narrows, replaces, defers or rejects something
+that affects later work. Do not atomize every sentence into an item.
+
+## Status rules
+
+| What the user said | Status |
+| --- | --- |
+| "please draft X", "sketch X" | `draft` — work to produce, not a decision |
+| "I like X" | `preference` |
+| "let's try X", "compare these" | `authorized` — for that experiment only, not adoption |
+| Clear assent to a concrete proposal | `commitment` — within its stated scope |
+| "not yet", "wait on X" | `deferred` |
+| An explicit no | `rejected` |
+| Anything ambiguous | `uncertain` |
+
+Record the scope words literally. "for this workshop" means `scope: this
+workshop only` — do not widen it or treat other questions as closed.
+
+A status becomes `commitment` only when the item's `quote` is the user adopting
+it; confirming one piece (for example a start time) does not make the rest of a
+draft decided.
+
+## Sourced values
+
+A check's values must come from the user's quoted words. If you must assume a value (a year, a shortened break), leave it visible (`check` shows it as UNSOURCED) and tell the user plainly that it is your assumption. Never change a value to make a check pass.
+
+Add items and checks by editing the JSON directly, then run `validate`:
+
+```json
+{"id": "I3", "text": "Maker-space team only", "quote": "I think we should go with just the maker-space team for this workshop.",
+ "ref": "E12", "status": "commitment", "scope": "this workshop only", "replaces": []}
+{"id": "C1", "kind": "fits_window", "label": "session schedule", "start": "09:45", "segments_min": [75, 20, 75], "end": "12:30", "refs": ["I1"]}
+```
+
+Every item carries the user's verbatim words in `quote`. A newer item that
+supersedes an older one lists the older id in `replaces`; never delete history.
+
+## Times, dates and money
+
+Whenever the record holds a schedule, a deadline relative to an event, or a
+budget cap, add a check:
+
+- `fits_window` — `start`, `end` as `HH:MM`, `segments_min` as a list of minutes.
+- `before` — `first`, `second` as either both `MM-DD` or both `YYYY-MM-DD`.
+- `within_budget` — `amounts`, `total_cap`, optional `item_cap`.
+
+Run `check` before delivering any plan, schedule or summary. A FAIL line is a
+conflict: resolve it, or state it plainly to the user.
+
+Write dates as MM-DD unless the user stated the year; never add a year the user
+did not say; if the dates cross a year boundary, you need the user's years.
+
+## Tell the user
+
+When an item becomes a commitment or is replaced, say it in one line:
+"Treating as decided: ...". If the user corrects an item, fix the record
+immediately; the user's correction always wins over the record.
+
+## Stopping
+
+The Stop hook blocks once when checks fail. Resolve each conflict or disclose it,
+update the record, then finish.
+
+## Authority boundary
+
+The record never creates permission the user did not give. A summary field in
+the record is not evidence of what the user said — the verbatim quote is.

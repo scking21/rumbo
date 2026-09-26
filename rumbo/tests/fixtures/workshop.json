@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "objective": {"text": "Plan a half-day workshop on March 12", "quote": "I'm organizing a half-day workshop on data visualization for our regional library association. It's the morning of March 12. The venue holds 40 people and we've budgeted $600 total.", "ref": "E1"},
+  "items": [
+    {"id": "I1", "text": "Schedule frame", "quote": "Please draft the schedule: 9:00 arrival, two 75-minute sessions with a 20-minute break, 12:30 close.", "ref": "E4", "status": "draft", "scope": "", "replaces": []},
+    {"id": "I2", "text": "Maker-space team only, for this workshop", "quote": "I think we should go with just the maker-space team for this workshop.", "ref": "E12", "status": "commitment", "scope": "this workshop only", "replaces": []},
+    {"id": "I3", "text": "Maker-space session start", "quote": "The maker-space team just confirmed for the 9:45 session.", "ref": "E9", "status": "commitment", "scope": "", "replaces": []},
+    {"id": "I4", "text": "Printer deadline", "quote": "The printer needs final details by March 20: session titles, speaker names, and the schedule.", "ref": "E13", "status": "commitment", "scope": "", "replaces": []},
+    {"id": "I5", "text": "Budget", "quote": "Our budget review came back: the $600 total is firm, and no line item can exceed $300. Catering coverage up to $200.", "ref": "E11", "status": "commitment", "scope": "", "replaces": []}
+  ],
+  "checks": [
+    {"id": "C1", "kind": "fits_window", "label": "session schedule", "start": "09:45", "segments_min": [75, 20, 75], "end": "12:30", "refs": ["I1"]},
+    {"id": "C2", "kind": "before", "label": "printer deadline precedes workshop", "first": "2026-03-20", "second": "2026-03-12", "refs": []},
+    {"id": "C3", "kind": "within_budget", "label": "budget", "amounts": [200], "total_cap": 600, "item_cap": 300, "refs": []}
+  ]
+}
