@@ -1195,6 +1195,16 @@ class RecordTest(unittest.TestCase):
                                      {"id": "C1", "kind": "fits_window", "start": "00:00", "segments_min": [60], "end": "01:00"})
         self.assertEqual((code, out.strip(), err), (0, "C1: PASS fits_window", ""))
 
+    def test_scientific_notation_is_one_value(self):
+        for amount in (1, 3):
+            code, out, err = self._check("Budget is 1e3",
+                                         {"id": "C1", "kind": "within_budget", "amounts": [amount], "total_cap": 1000})
+            self.assertEqual(code, 1)
+            self.assertIn("amounts %d" % amount, out)
+        code, out, err = self._check("Budget is 1e3",
+                                     {"id": "C1", "kind": "within_budget", "amounts": [1000], "total_cap": 1000})
+        self.assertEqual((code, out.strip()), (0, "C1: PASS within_budget"))
+
     def test_digits_inside_a_time_do_not_source_a_number(self):
         code, out, err = self._check("doors 9:45",
                                      {"id": "C1", "kind": "within_budget", "amounts": [45], "total_cap": 45})

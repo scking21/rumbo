@@ -115,9 +115,10 @@ def _is_number_sourced(num, source_text):
     # Remove commas from source text for number matching
     no_commas = source_text.replace(",", "")
     # Compare values, not text: sign kept, trailing zeros equal ("$1.50" is 1.5), no
-    # rounding. Digits next to ":" belong to a time, so "9:45" does not source 45.
+    # rounding. Digits next to ":" belong to a time, so "9:45" does not source 45; an
+    # exponent stays part of its number, so "1e3" sources 1000, not 1 or 3.
     target = decimal.Decimal(str(num))
-    for match in re.finditer(r"(?<![\d.:])(\d+(?:\.\d+)?)(?![\d:]|\.\d)", no_commas):
+    for match in re.finditer(r"(?<![\d.:])(\d+(?:\.\d+)?(?:[eE][-+]?\d+)?)(?![\d:]|\.\d)", no_commas):
         value = decimal.Decimal(match.group(1))
         # A minus sign (or "-$") not preceded by a digit negates; "30-50" stays a range.
         if re.search(r"(?:^|[^\d])[-\u2212]\$?$", no_commas[:match.start()]):
