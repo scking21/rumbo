@@ -1033,5 +1033,173 @@ class RecordTest(unittest.TestCase):
         self.assertIn("checks[0].first: CHECK_BAD_VALUE", out)
         self.assertNotIn("Traceback", err)
 
+    # Tests for ticket T10: make the source check compare parsed VALUES instead of text patterns
+    def test_refund_negative_number_unsourced(self):
+        """quote "refund -$50": within_budget amounts [50], total_cap 50 -> output names "amounts 50" as unsourced."""
+        record = {
+            "version": 1,
+            "objective": {"text": "Test", "quote": "refund -$50"},
+            "items": [],
+            "checks": [
+                {
+                    "id": "C1",
+                    "kind": "within_budget",
+                    "amounts": [50],
+                    "total_cap": 50
+                }
+            ]
+        }
+        with open(self.record_path, "w", encoding="utf-8") as handle:
+            json.dump(record, handle, indent=2)
+        code, out, err = run_record(["check", "--record", self.record_path])
+        self.assertEqual(code, 1)  # fails due to unsourced
+        self.assertIn("C1: UNSOURCED", out)  # Should be UNSOURCED line
+        self.assertIn("amounts 50", out)
+        self.assertIn("total_cap 50", out)
+        self.assertEqual(err, "")
+
+    def test_the_30_50_range_cap_50_passes(self):
+        """quote "the 30-50 range, cap 50": amounts [50], total_cap 50 -> PASS, no unsourced."""
+        record = {
+            "version": 1,
+            "objective": {"text": "Test", "quote": "the 30-50 range, cap 50"},
+            "items": [],
+            "checks": [
+                {
+                    "id": "C1",
+                    "kind": "within_budget",
+                    "amounts": [50],
+                    "total_cap": 50
+                }
+            ]
+        }
+        with open(self.record_path, "w", encoding="utf-8") as handle:
+            json.dump(record, handle, indent=2)
+        code, out, err = run_record(["check", "--record", self.record_path])
+        self.assertEqual(code, 0)  # should pass
+        self.assertEqual(out.strip(), "C1: PASS within_budget")
+        self.assertEqual(err, "")
+
+    def test_rate_1_23457_unsourced_for_1_234567(self):
+        """quote "rate 1.23457": amounts [1.234567], total_cap 2 is unsourced for 1.234567"""
+        record = {
+            "version": 1,
+            "objective": {"text": "Test", "quote": "rate 1.23457"},
+            "items": [],
+            "checks": [
+                {
+                    "id": "C1",
+                    "kind": "within_budget",
+                    "amounts": [1.234567],
+                    "total_cap": 2
+                }
+            ]
+        }
+        with open(self.record_path, "w", encoding="utf-8") as handle:
+            json.dump(record, handle, indent=2)
+        code, out, err = run_record(["check", "--record", self.record_path])
+        self.assertEqual(code, 1)  # fails due to unsourced
+        self.assertIn("amounts 1.23457", out)  # fmt_num formats 1.234567 as 1.23457
+        self.assertEqual(err, "")
+
+    def test_doors_9_45pm_close_11_30pm_unsourced_start(self):
+        """quote "doors 9:45pm, close 11:30pm": fits_window start "09:45" -> "start 09:45" unsourced"""
+        record = {
+            "version": 1,
+            "objective": {"text": "Test", "quote": "doors 9:45pm, close 11:30pm"},
+            "items": [],
+            "checks": [
+                {
+                    "id": "C1",
+                    "kind": "fits_window",
+                    "start": "09:45",
+                    "end": "11:30",
+                    "segments_min": [60]  # 60 must be in the quote for the next test
+                }
+            ]
+        }
+        with open(self.record_path, "w", encoding="utf-8") as handle:
+            json.dump(record, handle, indent=2)
+        code, out, err = run_record(["check", "--record", self.record_path])
+        self.assertEqual(code, 1)  # fails due to unsourced
+        self.assertIn("start 09:45", out)
+        self.assertEqual(err, "")
+
+    def test_doors_9_45pm_60_minutes_close_11_30pm_passes(self):
+        """quote "doors 9:45pm, 60 minutes, close 11:30pm": start "21:45", segments [60], end "23:30" -> no unsourced values"""
+        record = {
+            "version": 1,
+            "objective": {"text": "Test", "quote": "doors 9:45pm, 60 minutes, close 11:30pm"},
+            "items": [],
+            "checks": [
+                {
+                    "id": "C1",
+                    "kind": "fits_window",
+                    "start": "21:45",  # 9:45pm + 60 minutes = 21:45 + 60min = 22:45? Wait, let me recalculate
+                    # 9:45pm = 21:45, plus 60 minutes = 22:45, but end is 23:30 (11:30pm)
+                    # Actually the example says: start "21:45", segments [60], end "23:30"
+                    # So 21:45 + 60min = 22:45, which is <= 23:30, so that works
+                    "end": "23:30",
+                    "segments_min": [60]
+                }
+            ]
+        }
+        with open(self.record_path, "w", encoding="utf-8") as handle:
+            json.dump(record, handle, indent=2)
+        code, out, err = run_record(["check", "--record", self.record_path])
+        self.assertEqual(code, 0)  # should pass
+        self.assertIn("C1: PASS fits_window", out)
+        self.assertEqual(err, "")
+
+    def test_at_09_45_30_unsourced_start(self):
+        """quote "at 09:45:30": start "09:45" unsourced"""
+        record = {
+            "version": 1,
+            "objective": {"text": "Test", "quote": "at 09:45:30"},
+            "items": [],
+            "checks": [
+                {
+                    "id": "C1",
+                    "kind": "fits_window",
+                    "start": "09:45",
+                    "end": "10:00",
+                    "segments_min": [15]  # arbitrary, just need to make the check valid
+                }
+            ]
+        }
+        with open(self.record_path, "w", encoding="utf-8") as handle:
+            json.dump(record, handle, indent=2)
+        code, out, err = run_record(["check", "--record", self.record_path])
+        self.assertEqual(code, 1)  # fails due to unsourced
+        self.assertIn("start 09:45", out)
+        self.assertEqual(err, "")
+
+    def _check(self, quote, check):
+        record = {"version": 1, "objective": {"text": "Test", "quote": quote}, "items": [], "checks": [check]}
+        with open(self.record_path, "w", encoding="utf-8") as handle:
+            json.dump(record, handle)
+        return run_record(["check", "--record", self.record_path])
+
+    def test_zero_seconds_time_is_sourced(self):
+        code, out, err = self._check("doors 09:45:00, done 10:45, 60 minutes",
+                                     {"id": "C1", "kind": "fits_window", "start": "09:45", "segments_min": [60], "end": "10:45"})
+        self.assertEqual((code, out.strip(), err), (0, "C1: PASS fits_window", ""))
+
+    def test_am_times_are_sourced(self):
+        code, out, err = self._check("9:45am to 11:15am, 90 minutes",
+                                     {"id": "C1", "kind": "fits_window", "start": "09:45", "segments_min": [90], "end": "11:15"})
+        self.assertEqual((code, out.strip(), err), (0, "C1: PASS fits_window", ""))
+
+    def test_midnight_am_sources_00_00(self):
+        code, out, err = self._check("12:00am until 1:00am, 60 minutes",
+                                     {"id": "C1", "kind": "fits_window", "start": "00:00", "segments_min": [60], "end": "01:00"})
+        self.assertEqual((code, out.strip(), err), (0, "C1: PASS fits_window", ""))
+
+    def test_digits_inside_a_time_do_not_source_a_number(self):
+        code, out, err = self._check("doors 9:45",
+                                     {"id": "C1", "kind": "within_budget", "amounts": [45], "total_cap": 45})
+        self.assertEqual(code, 1)
+        self.assertIn("amounts 45", out)
+
 if __name__ == "__main__":
     unittest.main()

@@ -6,6 +6,7 @@ Exit codes: 0 clean, 1 content problem, 2 tool or I/O problem.
 """
 
 import argparse
+import decimal
 import datetime
 import json
 import os
@@ -113,27 +114,70 @@ def _is_number_sourced(num, source_text):
         return True
     # Remove commas from source text for number matching
     no_commas = source_text.replace(",", "")
-    N = fmt_num(num)
-    # Use regex to avoid being part of another number
-    # Trailing zeros are the same value: 1.5 is sourced by "$1.50", 600 by "600.00".
-    zeros = r"0*" if "." in N else r"(?:\.0+)?"
-    pattern = r"(?<![\d.])" + re.escape(N) + zeros + r"(?!\d|\.\d)"
-    return re.search(pattern, no_commas) is not None
+    # Compare values, not text: sign kept, trailing zeros equal ("$1.50" is 1.5), no
+    # rounding. Digits next to ":" belong to a time, so "9:45" does not source 45.
+    target = decimal.Decimal(str(num))
+    for match in re.finditer(r"(?<![\d.:])(\d+(?:\.\d+)?)(?![\d:]|\.\d)", no_commas):
+        value = decimal.Decimal(match.group(1))
+        # A minus sign (or "-$") not preceded by a digit negates; "30-50" stays a range.
+        if re.search(r"(?:^|[^\d])[-\u2212]\$?$", no_commas[:match.start()]):
+            value = -value
+        if value == target:
+            return True
+    return False
 
 
 def _is_time_sourced(time_str, source_text):
     """Return True if time_str (HH:MM) is sourced in source_text.
-    Sourced if either HH:MM or H:MM (no leading zero) appears.
+    Parse the check time as (h, m) from "HH:MM"; return False if malformed.
+    Find time tokens with re.finditer("(?<![0-9:])([0-9]{1,2}):([0-9]{2})(?::([0-9]{2}))?(?![0-9:])(?:\\s*([AaPp])\\.?\\s*[Mm]\\b\\.)?", text).
+    Skip a token whose seconds group is present and not "00". Meridiem: p/P and hour < 12 -> hour + 12; a/A and hour == 12 -> 0. Skip hours > 23 or minutes > 59.
+    Sourced if any token's (hour, minute) == (h, m).
     """
     if not isinstance(time_str, str):
         return False
     parts = time_str.split(":")
     if len(parts) != 2 or not (parts[0].isdigit() and parts[1].isdigit()):
         return False
-    # Match the whole time token so 09:45 is not sourced by 19:45.
     h = int(parts[0])
-    mm = parts[1]
-    return re.search(rf"(?<!\d)0?{h}:{mm}(?!\d)", source_text) is not None
+    m = int(parts[1])
+    if h > 23 or m > 59:
+        return False
+
+    # Find time tokens with the specified regex
+    for match in re.finditer(r"(?<![0-9:])([0-9]{1,2}):([0-9]{2})(?::([0-9]{2}))?(?![0-9:])(?:\s*([AaPp])\.?\s*[Mm]\b\.?)?", source_text):
+        hour_group = match.group(1)
+        minute_group = match.group(2)
+        seconds_group = match.group(3)
+        meridiem_group = match.group(4)
+
+        # Skip if seconds group is present and not "00"
+        if seconds_group is not None and seconds_group != "00":
+            continue
+
+        try:
+            hour = int(hour_group)
+            minute = int(minute_group)
+        except ValueError:
+            continue
+
+        # Apply meridiem correction
+        if meridiem_group:
+            meridiem = meridiem_group.lower()
+            if meridiem.startswith('p') and hour < 12:
+                hour += 12
+            elif meridiem.startswith('a') and hour == 12:
+                hour = 0
+
+        # Skip hours > 23 or minutes > 59 after meridiem correction
+        if hour > 23 or minute > 59:
+            continue
+
+        # Check if this token matches the target time
+        if hour == h and minute == m:
+            return True
+
+    return False
 
 
 MONTHS = ["January", "February", "March", "April", "May", "June", "July",

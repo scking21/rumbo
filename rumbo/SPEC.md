@@ -47,7 +47,7 @@ Field rules:
 
 ### Sourced values
 
-SOURCE TEXT is the objective quote plus every item quote. A check value is sourced when it appears there: numbers as standalone numbers (commas ignored; 0 always counts), times as `HH:MM` or `H:MM`, dates by month and day ("March 20", "Mar. 20" or "03-20") and, for `YYYY-MM-DD`, also the four-digit year. A check whose arithmetic passes but uses an unsourced value is reported as `UNSOURCED`.
+SOURCE TEXT is the objective quote plus every item quote. Values are compared, not text: a number is sourced when a number in SOURCE TEXT has the same value (commas ignored, sign kept so "-$50" does not source 50, trailing zeros equal so "$1.50" sources 1.5, no rounding; 0 always counts; digits inside a time such as "9:45" are not numbers). A time is sourced by a time token with the same hour and minute after reading am/pm ("9:45pm" sources 21:45, not 09:45) and ignoring only zero seconds ("09:45:30" sources nothing). A date is sourced by its month and day ("March 20", "Mar. 20" or "03-20") and, for `YYYY-MM-DD`, also by the four-digit year. A check whose arithmetic passes but uses an unsourced value is reported as `UNSOURCED`.
 
 ## `scripts/record.py` (Python 3.9+, standard library only)
 
