@@ -886,6 +886,142 @@ class RecordTest(unittest.TestCase):
             marker_s4 = os.path.join(tmpdir, "s4.nudged")
             self.assertFalse(os.path.exists(marker_s4), f"Marker incorrectly created for non-planning prompt: {marker_s4}")
 
+    # Regression tests for ticket T9b
+    def test_partial_token_number_not_sourced(self):
+        """Defect 1: partial-token matches should not count as sourced.
+        Quote: "Tickets cost $1.50 each; doors 19:45."
+        Check: amounts [1], total_cap 1 should be UNSOURCED (1 is not the same as 1.50)
+        """
+        record = {
+            "version": 1,
+            "objective": {"text": "Test", "quote": "Tickets cost $1.50 each; doors 19:45."},
+            "items": [],
+            "checks": [
+                {
+                    "id": "C1",
+                    "kind": "within_budget",
+                    "amounts": [1],
+                    "total_cap": 1
+                }
+            ],
+        }
+        with open(self.record_path, "w", encoding="utf-8") as handle:
+            json.dump(record, handle, indent=2)
+        code, out, err = run_record(["check", "--record", self.record_path])
+        self.assertEqual(code, 1)  # fails due to unsourced
+        self.assertIn("amounts 1", out)
+        self.assertIn("total_cap 1", out)
+        self.assertEqual(err, "")
+
+    def test_partial_token_time_not_sourced(self):
+        """Defect 1: partial-token matches should not count as sourced.
+        Quote: "Tickets cost $1.50 each; doors 19:45."
+        Check: start "09:45" should be UNSOURCED (09:45 is not the same as 19:45)
+        """
+        record = {
+            "version": 1,
+            "objective": {"text": "Test", "quote": "Tickets cost $1.50 each; doors 19:45."},
+            "items": [],
+            "checks": [
+                {
+                    "id": "C1",
+                    "kind": "fits_window",
+                    "start": "09:45",
+                    "end": "10:00",
+                    "segments_min": [15]
+                }
+            ],
+        }
+        with open(self.record_path, "w", encoding="utf-8") as handle:
+            json.dump(record, handle, indent=2)
+        code, out, err = run_record(["check", "--record", self.record_path])
+        self.assertEqual(code, 1)  # fails due to unsourced
+        self.assertIn("C1: UNSOURCED fits_window", out)
+        self.assertIn("start 09:45", out)
+        self.assertEqual(err, "")
+
+    def test_items_null_does_not_crash(self):
+        """Defect 2: "items": null should not cause TypeError in source check.
+        Record with "items": null and a within_budget check whose values appear in quote
+        should pass with no Traceback in stderr.
+        """
+        record = {
+            "version": 1,
+            "objective": {"text": "Test", "quote": "Budget is 500 dollars"},
+            "items": None,  # This used to cause TypeError: 'NoneType' object is not iterable
+            "checks": [
+                {
+                    "id": "C1",
+                    "kind": "within_budget",
+                    "amounts": [500],
+                    "total_cap": 500  # sourced by "Budget is 500 dollars"
+                }
+            ],
+        }
+        with open(self.record_path, "w", encoding="utf-8") as handle:
+            json.dump(record, handle, indent=2)
+        code, out, err = run_record(["check", "--record", self.record_path])
+        self.assertEqual(code, 0)  # should pass
+        self.assertEqual(out.strip(), "C1: PASS within_budget")
+        self.assertEqual(err, "")  # no Traceback
+
+    def test_positive_control_time_and_money_sourced(self):
+        """Positive control: quote "doors 9:45, budget $600" with fits_window start "09:45"
+        and within_budget total_cap 600 reports no unsourced values.
+        """
+        record = {
+            "version": 1,
+            "objective": {"text": "Test", "quote": "doors 9:45, budget $600"},
+            "items": [],
+            "checks": [
+                {
+                    "id": "C1",
+                    "kind": "fits_window",
+                    "start": "09:45",
+                    "end": "09:45",
+                    "segments_min": [9]  # 9 is sourced by the "9" in "09:45"
+                },
+                {
+                    "id": "C2",
+                    "kind": "within_budget",
+                    "amounts": [0],  # 0 is always sourced
+                    "total_cap": 600   # 600 is sourced by "$600"
+                }
+            ],
+        }
+        with open(self.record_path, "w", encoding="utf-8") as handle:
+            json.dump(record, handle, indent=2)
+        code, out, err = run_record(["check", "--record", self.record_path])
+        # We expect the check to fail due to arithmetic in C1, but there should be no unsourced values.
+        self.assertEqual(code, 1)  # because C1 fails
+        self.assertNotIn("UNSOURCED", out)
+        self.assertIn("C1: FAIL fits_window", out)
+        self.assertIn("C2: PASS within_budget", out)
+        self.assertEqual(err, "")
+
+    def test_number_1_5_sourced_by_1_50_and_600_by_600_00(self):
+        """Positive test: within_budget amount 1.5 is sourced by quote "Tickets cost $1.50"
+        and total_cap 600 by "600.00" (no unsourced values; check exits 0).
+        """
+        record = {
+            "version": 1,
+            "objective": {"text": "Test", "quote": "Tickets cost $1.50 and the limit is 600.00"},
+            "items": [],
+            "checks": [
+                {
+                    "id": "C1",
+                    "kind": "within_budget",
+                    "amounts": [1.5],
+                    "total_cap": 600
+                }
+            ],
+        }
+        with open(self.record_path, "w", encoding="utf-8") as handle:
+            json.dump(record, handle, indent=2)
+        code, out, err = run_record(["check", "--record", self.record_path])
+        self.assertEqual(code, 0)  # should pass
+        self.assertEqual(out.strip(), "C1: PASS within_budget")
+        self.assertEqual(err, "")
 
     def test_before_impossible_mmdd_is_bad_value_not_crash(self):
         record = {"version": 1, "objective": {"text": "x", "quote": "y"}, "items": [],

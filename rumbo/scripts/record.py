@@ -100,7 +100,7 @@ def fmt_num(value):
 def _source_text(record):
     """Return objective quote plus each item's quote, joined by newlines."""
     quotes = [record["objective"]["quote"]]
-    for item in record.get("items", []):
+    for item in (record.get("items") or []):
         quotes.append(item["quote"])
     return "\n".join(quotes)
 
@@ -115,7 +115,9 @@ def _is_number_sourced(num, source_text):
     no_commas = source_text.replace(",", "")
     N = fmt_num(num)
     # Use regex to avoid being part of another number
-    pattern = r"(?<![\d.])" + re.escape(N) + r"(?!\d)"
+    # Trailing zeros are the same value: 1.5 is sourced by "$1.50", 600 by "600.00".
+    zeros = r"0*" if "." in N else r"(?:\.0+)?"
+    pattern = r"(?<![\d.])" + re.escape(N) + zeros + r"(?!\d|\.\d)"
     return re.search(pattern, no_commas) is not None
 
 
@@ -125,19 +127,13 @@ def _is_time_sourced(time_str, source_text):
     """
     if not isinstance(time_str, str):
         return False
-    # Check HH:MM as given
-    if time_str in source_text:
-        return True
-    # Check H:MM by removing leading zero from hour if present
     parts = time_str.split(":")
-    if len(parts) == 2 and len(parts[0]) == 2 and parts[0].isdigit() and parts[1].isdigit():
-        hour = parts[0]
-        if hour.startswith("0") and len(hour) == 2:
-            hour_no_zero = str(int(hour))  # "0" -> "0", "09" -> "9"
-            time_no_zero = hour_no_zero + ":" + parts[1]
-            if time_no_zero in source_text:
-                return True
-    return False
+    if len(parts) != 2 or not (parts[0].isdigit() and parts[1].isdigit()):
+        return False
+    # Match the whole time token so 09:45 is not sourced by 19:45.
+    h = int(parts[0])
+    mm = parts[1]
+    return re.search(rf"(?<!\d)0?{h}:{mm}(?!\d)", source_text) is not None
 
 
 MONTHS = ["January", "February", "March", "April", "May", "June", "July",
