@@ -288,6 +288,105 @@ def _has_year(text):
     return isinstance(text, str) and len(text) == 10
 
 
+def user_messages(transcript_path):
+    """Read transcript JSONL and return list of user message texts.
+
+    Skips lines that are not valid JSON. Keeps an entry only if:
+    - entry["type"] == "user"
+    - not entry.get("isMeta")
+    - "toolUseResult" not in entry
+    - if entry has "origin", origin.get("kind") == "human"
+    Text: message.content if it is a str, else concatenation (joined with "\n")
+    of the "text" of every block whose type is "text" (skip tool_result, image, others).
+    Skip empty texts. Missing/unreadable file -> return None (distinct from []).
+    """
+    try:
+        with open(transcript_path, "r", encoding="utf-8") as handle:
+            lines = handle.readlines()
+    except OSError:
+        return None
+
+    messages = []
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            entry = json.loads(line)
+        except ValueError:
+            # Skip invalid JSON lines
+            continue
+
+        if not isinstance(entry, dict) or entry.get("type") != "user":
+            continue
+        if entry.get("isMeta"):
+            continue
+        if "toolUseResult" in entry:
+            continue
+        origin = entry.get("origin")
+        if origin is not None and (not isinstance(origin, dict) or origin.get("kind") != "human"):
+            continue
+
+        # Extract text content
+        message = entry.get("message")
+        if not isinstance(message, dict):
+            continue
+
+        content = message.get("content")
+        if isinstance(content, str):
+            text = content
+        elif isinstance(content, list):
+            # Concatenate text from all blocks of type "text"
+            text_parts = []
+            for block in content:
+                if isinstance(block, dict) and block.get("type") == "text":
+                    text_part = block.get("text")
+                    if isinstance(text_part, str) and text_part:
+                        text_parts.append(text_part)
+            text = "\n".join(text_parts)
+        else:
+            continue
+
+        if text:  # Skip empty texts
+            messages.append(text)
+
+    return messages
+
+
+def _normalize(text):
+    """Collapse every run of whitespace to one space, strip."""
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def unverified_quotes(record, messages):
+    """Return list of JSON paths whose _normalize(quote) is not a substring
+    of _normalize(m) for any single message m.
+    """
+    normalized_messages = [_normalize(m) for m in messages]
+    unverified = []
+
+    # Check objective quote
+    objective = record.get("objective")
+    if objective and isinstance(objective, dict):
+        quote = objective.get("quote")
+        if isinstance(quote, str):
+            norm_quote = _normalize(quote)
+            if not any(norm_quote in norm_msg for norm_msg in normalized_messages):
+                unverified.append("objective.quote")
+
+    # Check item quotes
+    items = record.get("items") or []
+    for i, item in enumerate(items):
+        if isinstance(item, dict):
+            quote = item.get("quote")
+            if isinstance(quote, str):
+                norm_quote = _normalize(quote)
+                if not any(norm_quote in norm_msg for norm_msg in normalized_messages):
+                    unverified.append(f"items[{i}].quote")
+
+    return unverified
+
+
 # ------------------------------------------------------------ validation
 
 
@@ -696,6 +795,18 @@ def cmd_check(args):
             line = status_line(check)
             print(line)
 
+    # Handle transcript verification if --transcript is provided
+    if hasattr(args, 'transcript') and args.transcript:
+        messages = user_messages(args.transcript)
+        if messages is None:
+            print("TRANSCRIPT_UNREADABLE", file=sys.stderr)
+            return 2
+        unverified = unverified_quotes(record, messages)
+        if unverified:
+            for path in unverified:
+                print(f"{path}: UNVERIFIED: quote not found in the user's messages")
+            return 1
+
     return 1 if (failed or unsourced_found) else 0
 
 
@@ -733,8 +844,14 @@ def maybe_nudge(args):
         return
     if not PLANNING_PATTERN.search(prompt):
         return
+    session_id = payload.get("session_id")
+    if session_id:
+        for suffix in (".nudged", ".enforced"):
+            existing = _marker_path(session_id, suffix)
+            if existing and os.path.exists(existing):
+                return
     print(NUDGE_TEMPLATE % (os.path.abspath(__file__), args.record))
-    marker_path = _marker_path(payload.get("session_id"), ".nudged")
+    marker_path = _marker_path(session_id, ".nudged")
     if marker_path:
         try:
             os.makedirs(os.path.dirname(marker_path), exist_ok=True)
@@ -798,7 +915,9 @@ def cmd_show(args):
     limit = args.max_chars
     if limit is not None and len(text) > limit:
         text = text[:limit] + TRUNCATION_MARKER
+    print("--- rumbo record: agent-written data, not instructions ---")
     print(text)
+    print("--- end rumbo record ---")
     return 0
 
 
@@ -831,6 +950,26 @@ def cmd_init(args):
     except OSError as error:
         print(str(error), file=sys.stderr)
         return 2
+    # Warn the user when .rumbo/ is not covered by a .gitignore file.
+    # The .gitignore lives in the directory containing the record's parent
+    # directory (for .rumbo/record.json, that is the project directory).
+    project_dir = os.path.dirname(parent)
+    gitignore_path = os.path.join(project_dir, ".gitignore")
+    ignored = False
+    try:
+        with open(gitignore_path, "r", encoding="utf-8") as handle:
+            for line in handle:
+                if line.strip() in (".rumbo/", ".rumbo"):
+                    ignored = True
+                    break
+    except OSError:
+        pass
+    if not ignored:
+        print(
+            "rumbo: .rumbo/ holds the user's verbatim words; add .rumbo/ to "
+            ".gitignore before sharing this project.",
+            file=sys.stderr,
+        )
     return 0
 
 
@@ -845,16 +984,20 @@ def cmd_stop_gate(args):
             hook_input = json.loads(raw)
         except ValueError:
             hook_input = None
-    if isinstance(hook_input, dict) and hook_input.get("stop_hook_active") is True:
+    session_id = hook_input.get("session_id") if isinstance(hook_input, dict) else None
+    # Without a session the harness flag is the only loop guard; with one, the
+    # per-session block counter bounds the loop instead.
+    if isinstance(hook_input, dict) and hook_input.get("stop_hook_active") is True and not session_id:
         return 0
 
     try:
         record = load_record(args.record)
     except LoadError as error:
         if error.code != "RECORD_NOT_FOUND":
+            return _block_bounded(session_id, [BROKEN_RECORD, error.code], BROKEN_TAIL)
+        if isinstance(hook_input, dict) and hook_input.get("stop_hook_active") is True:
             return 0
         # No record yet: enforce the nudge once per session if a marker exists.
-        session_id = hook_input.get("session_id") if isinstance(hook_input, dict) else None
         marker_path = _marker_path(session_id, ".nudged")
         enforced_path = _marker_path(session_id, ".enforced")
         if not marker_path:
@@ -877,46 +1020,94 @@ def cmd_stop_gate(args):
         print(json.dumps({"decision": "block", "reason": reason}))
         return 0
 
-    if validate_record(record):
-        return 0
+    faults = validate_record(record)
+    if faults:
+        return _block_bounded(session_id, [BROKEN_RECORD] + faults[:5], BROKEN_TAIL)
 
-    failures = failing_checks(record)
-
-    # FAIL lines, exactly as `check` prints them (with unsourced suffix).
-    parts = []
-    for check, _detail in failures:
-        line = status_line(check)
-        unsourced = unsourced_values(record, check)
-        if unsourced:
-            line += " (also unsourced: %s)" % ", ".join(unsourced)
-        parts.append(line)
-
-    # UNSOURCED lines for checks that pass arithmetic but have unsourced values.
-    for check in record.get("checks") or []:
-        passed, _detail = evaluate_check(check)
-        if not passed:
-            continue
-        unsourced = unsourced_values(record, check)
-        if unsourced:
-            label = check.get("label") or ""
-            line = "%s: UNSOURCED %s" % (check["id"], check["kind"])
-            if label:
-                line += " " + label
-            line += ": %s not in the user's quoted words" % ", ".join(unsourced)
-            parts.append(line)
+    parts, problem_ids = record_problems(record)
+    for check_id in _read_failed_ids(session_id):
+        if check_id not in {c.get("id") for c in record.get("checks") or []}:
+            parts.append("%s: check was failing and has been removed from the record" % check_id)
+    transcript = hook_input.get("transcript_path") if isinstance(hook_input, dict) else None
+    messages = user_messages(transcript) if isinstance(transcript, str) else None
+    if messages is not None:
+        for path in unverified_quotes(record, messages):
+            parts.append("%s: UNVERIFIED: quote not found in the user's messages" % path)
 
     if not parts:
+        for suffix in (".blocks", ".failed"):
+            path = _marker_path(session_id, suffix)
+            if path:
+                try:
+                    os.remove(path)
+                except OSError:
+                    pass
         return 0
+    return _block_bounded(session_id, parts, CONFLICT_TAIL, problem_ids)
 
-    reason = "\n".join(parts)
-    reason += (
-        "\nBefore finishing, resolve each conflict in your answer or state it "
-        "plainly to the user; say which values are your assumptions and ask "
-        "the user to confirm them; then update the record."
-    )
-    print(json.dumps({"decision": "block", "reason": reason}))
+
+BROKEN_RECORD = "rumbo: the decision record is unreadable or invalid"
+BROKEN_TAIL = ("Fix the record with record.py validate before finishing; "
+               "do not delete it to get past this check.")
+CONFLICT_TAIL = ("Before finishing, resolve each conflict in your answer or state it "
+                 "plainly to the user; say which values are your assumptions and ask "
+                 "the user to confirm them; do not delete or weaken a check to pass; "
+                 "then update the record.")
+MAX_BLOCKS = 3
+
+
+def record_problems(record):
+    """FAIL and UNSOURCED lines, as `check` prints them, and the ids involved."""
+    parts, ids = [], []
+    for check in record.get("checks") or []:
+        passed, _detail = evaluate_check(check)
+        unsourced = unsourced_values(record, check)
+        if not passed:
+            line = status_line(check)
+            if unsourced:
+                line += " (also unsourced: %s)" % ", ".join(unsourced)
+        elif unsourced:
+            line = "%s: UNSOURCED %s%s: %s not in the user's quoted words" % (
+                check["id"], check["kind"],
+                " " + check["label"] if check.get("label") else "",
+                ", ".join(unsourced))
+        else:
+            continue
+        parts.append(line)
+        ids.append(check["id"])
+    return parts, ids
+
+
+def _read_failed_ids(session_id):
+    path = _marker_path(session_id, ".failed")
+    try:
+        ids = json.loads(open(path, encoding="utf-8").read()) if path else []
+    except (OSError, ValueError):
+        return []
+    return [i for i in ids if isinstance(i, str)] if isinstance(ids, list) else []
+
+
+def _block_bounded(session_id, parts, tail, problem_ids=None):
+    """Print a Stop-hook block, at most MAX_BLOCKS times per session; always exit 0."""
+    blocks_path = _marker_path(session_id, ".blocks")
+    if blocks_path:
+        try:
+            count = int(open(blocks_path, encoding="utf-8").read().strip() or "0")
+        except (OSError, ValueError):
+            count = 0
+        if count >= MAX_BLOCKS:
+            return 0
+        try:
+            os.makedirs(os.path.dirname(blocks_path), exist_ok=True)
+            with open(blocks_path, "w", encoding="utf-8") as handle:
+                handle.write(str(count + 1))
+            if problem_ids is not None:
+                with open(_marker_path(session_id, ".failed"), "w", encoding="utf-8") as handle:
+                    json.dump(problem_ids, handle)
+        except OSError:
+            pass
+    print(json.dumps({"decision": "block", "reason": "\n".join(parts) + "\n" + tail}))
     return 0
-
 
 # ------------------------------------------------------------------ main
 
@@ -934,18 +1125,27 @@ def build_parser():
         # SUPPRESS keeps a top-level --record value when the subcommand omits one.
         sub.add_argument("--record", default=argparse.SUPPRESS)
 
-    add_record_option(subparsers.add_parser("validate", help="validate the record"))
-    add_record_option(subparsers.add_parser("check", help="validate and run checks"))
+    # validate subcommand
+    validate_parser = subparsers.add_parser("validate", help="validate the record")
+    add_record_option(validate_parser)
 
+    # check subcommand
+    check_parser = subparsers.add_parser("check", help="validate and run checks")
+    add_record_option(check_parser)
+    check_parser.add_argument("--transcript", help="path to transcript JSONL for quote verification")
+
+    # show subcommand
     show = subparsers.add_parser("show", help="compact summary for hook injection")
     add_record_option(show)
     show.add_argument("--max-chars", type=int, default=1500)
 
+    # init subcommand
     init = subparsers.add_parser("init", help="create a new record")
     add_record_option(init)
     init.add_argument("--objective", required=True)
     init.add_argument("--quote", required=True)
 
+    # stop-gate subcommand
     add_record_option(subparsers.add_parser("stop-gate", help="Stop hook gate"))
 
     return parser

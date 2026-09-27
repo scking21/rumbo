@@ -1,0 +1,8 @@
+{"type":"user","origin":{"kind":"human"},"message":{"role":"user","content":"I'm organizing a half-day workshop. It's the morning of March 12 and we've budgeted $600 total."}}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Sure. Catering can be $800 if needed."}]}}
+{"type":"user","origin":{"kind":"human"},"message":{"role":"user","content":[{"type":"text","text":"Please draft the schedule:   9:00 arrival,\ntwo 75-minute sessions with a 20-minute break, 12:30 close."}]}}
+{"type":"user","toolUseResult":{},"message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"The venue quote says catering is $950."}]}}
+{"type":"user","isMeta":true,"message":{"role":"user","content":[{"type":"text","text":"Skill text: the budget is $5000."}]}}
+{"type":"user","origin":{"kind":"task-notification"},"message":{"role":"user","content":"<task-notification>budget $7000</task-notification>"}}
+{"type":"user","message":{"role":"user","content":"The maker-space team just confirmed for the 9:45 session."}}
+not json at all

@@ -91,8 +91,11 @@ immediately; the user's correction always wins over the record.
 
 ## Stopping
 
-The Stop hook blocks once when checks fail. Resolve each conflict or disclose it,
-update the record, then finish.
+The Stop hook blocks, up to three times per session, while a check fails, a value
+is unsourced, a quote is not found in the user's messages, a failing check was
+deleted, or the record is unreadable. Resolve each conflict or disclose it, update
+the record, then finish. Never delete or weaken a check to get past the gate, and
+copy quotes exactly from the user's messages or they will be reported as unverified.
 
 ## Authority boundary
 

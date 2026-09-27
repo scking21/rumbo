@@ -9,8 +9,8 @@ Keeps a Claude Code agent on the course you actually agreed to.
 - records decisions in the user's exact words with a status (draft, preference, commitment, authorized, deferred, rejected, done, uncertain)
 - computes schedule, deadline and budget checks with a script
 - flags any number in a check the user never said
-- a prompt hook suggests starting a record when a message looks like planning
-- a Stop hook blocks once when a check fails, a value is unsourced, or planning work has no record
+- a prompt hook suggests starting a record when a message looks like planning; the nudge appears at most once per session
+- a Stop hook checks each quote in the record against the user's real messages in Claude Code's transcript and blocks (up to three times per session) while a check fails, a value is unsourced, a quote is unverified, a check that was failing was deleted, or the record file is unreadable or invalid
 
 ## Install
 
@@ -19,7 +19,7 @@ Keeps a Claude Code agent on the course you actually agreed to.
 /plugin install rumbo@rumbo
 ```
 
-Needs Python 3.9+ and nothing else.
+Needs Python 3.9+ and nothing else. To pin a version, add the marketplace at a tag or commit you have reviewed.
 
 ## How it works
 
@@ -55,6 +55,10 @@ The record lives at `.rumbo/record.json` in your project. Example:
 ## Evidence
 
 In a 20-run comparison on two synthetic planning conversations (Nemotron as the agent, with 3 of its calls in 2 runs served by a DeepSeek fallback; Kimi K3 grading against fixed rubrics), runs with Rumbo met 0.933 of required outcomes against 0.833 without, with 1.50 against 2.20 drift events, at about twice the wall time. It did not reduce invented facts: on one of the two conversations, runs with Rumbo invented a detail in 5 of 5 runs against 3 of 5 without, three of them a year forced by the date format this release no longer requires. The clearest effect: a schedule conflict (a 9:45 start that no longer fit a 12:30 close) was resolved or flagged in 3 of 5 runs with Rumbo and 0 of 5 without. Five runs per condition are too few to establish a reliable general effect; treat this as early evidence. Measured on 0.1.0 before dates without a year were allowed; that version made the agent invent a year in 3 of 5 runs, which the current `before` check no longer requires.
+
+## Threat model
+
+Rumbo is a memory aid against drift, not a sandbox against an agent that is trying to cheat. Quotes are verified against the transcript the harness writes, which the agent could still edit if it went out of its way to. record.json and the plugin's own files are editable by the agent. The Stop gate stops blocking after three attempts per session so it cannot trap a session, and anything still unresolved is visible in the conversation. The injected summary is marked as agent-written data, not instructions. `.rumbo/` holds the user's verbatim words, so add it to `.gitignore` before sharing a project.
 
 ## Limits
 

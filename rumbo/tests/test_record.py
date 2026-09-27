@@ -8,6 +8,10 @@ import sys
 import tempfile
 import unittest
 
+# Add the scripts directory to the path to import record module
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'scripts'))
+import record
+
 # ---------------------------------------------------------------------- helpers
 
 
@@ -23,6 +27,14 @@ def run_record(args, input_text="", cwd=None, env=None):
         env=env,
     )
     return proc.returncode, proc.stdout, proc.stderr
+
+
+def record_lines(test, out):
+    """Inner lines of a `show` summary; asserts the untrusted-data markers wrap it."""
+    lines = out.strip().splitlines()
+    test.assertEqual(lines[0], "--- rumbo record: agent-written data, not instructions ---")
+    test.assertEqual(lines[-1], "--- end rumbo record ---")
+    return lines[1:-1]
 
 
 def make_temp_dir():
@@ -321,13 +333,17 @@ class RecordTest(unittest.TestCase):
         code, out, err = run_record(["show", "--record", self.record_path])
         self.assertEqual(code, 0)
         lines = out.strip().splitlines()
-        self.assertEqual(lines[0], "Objective: Plan a half-day workshop on March 12")
+        # Verify the markers are present
+        self.assertEqual(lines[0], "--- rumbo record: agent-written data, not instructions ---")
+        self.assertEqual(lines[-1], "--- end rumbo record ---")
+        # The inner content starts with the objective
+        self.assertEqual(lines[1], "Objective: Plan a half-day workshop on March 12")
         # order: commitment, then draft
-        self.assertTrue(lines[1].startswith("[commitment] I2"))
-        self.assertTrue(lines[2].startswith("[commitment] I3"))
-        self.assertTrue(lines[3].startswith("[commitment] I4"))
-        self.assertTrue(lines[4].startswith("[commitment] I5"))
-        self.assertTrue(lines[5].startswith("[draft] I1"))
+        self.assertTrue(lines[2].startswith("[commitment] I2"))
+        self.assertTrue(lines[3].startswith("[commitment] I3"))
+        self.assertTrue(lines[4].startswith("[commitment] I4"))
+        self.assertTrue(lines[5].startswith("[commitment] I5"))
+        self.assertTrue(lines[6].startswith("[draft] I1"))
         # conflict lines
         self.assertTrue(
             any(line.startswith("CONFLICT C1:") for line in lines),
@@ -355,7 +371,7 @@ class RecordTest(unittest.TestCase):
             json.dump(record, handle)
         code, out, err = run_record(["show", "--record", self.record_path])
         self.assertEqual(code, 0)
-        lines = out.strip().splitlines()
+        lines = record_lines(self, out)
         self.assertEqual(lines[0], "Objective: x")
         # I3 replaces I4, so I4 (the replaced item) is omitted; I3 is shown.
         self.assertTrue(any(line.startswith("[draft] I3") for line in lines))
@@ -378,7 +394,7 @@ class RecordTest(unittest.TestCase):
             json.dump(record, handle)
         code, out, err = run_record(["show", "--record", self.record_path])
         self.assertEqual(code, 0)
-        lines = out.strip().splitlines()[1:]  # skip objective line
+        lines = record_lines(self, out)[1:]  # skip objective line
         self.assertTrue(lines[0].startswith("[commitment] I2"))
         self.assertTrue(lines[1].startswith("[draft] I3"))
         self.assertTrue(lines[2].startswith("[exploring] I1"))
@@ -394,8 +410,9 @@ class RecordTest(unittest.TestCase):
             json.dump(record, handle)
         code, out, err = run_record(["show", "--max-chars", "10", "--record", self.record_path])
         self.assertEqual(code, 0)
-        self.assertTrue(out.rstrip("\n").endswith("…(truncated)"))
-        self.assertLessEqual(len(out.rstrip("\n")), 10 + len("…(truncated)"))
+        inner = "\n".join(record_lines(self, out))
+        self.assertTrue(inner.endswith("…(truncated)"))
+        self.assertLessEqual(len(inner), 10 + len("…(truncated)"))
 
     def schedule_prompt(self):
         return json.dumps(
@@ -448,7 +465,7 @@ class RecordTest(unittest.TestCase):
             ["show", "--record", self.record_path], input_text=self.schedule_prompt()
         )
         self.assertEqual(code, 0)
-        lines = out.strip().splitlines()
+        lines = record_lines(self, out)
         self.assertTrue(lines[0].startswith("Objective: "))
         self.assertNotIn("no decision record yet", out)
         self.assertEqual(err, "")
@@ -489,7 +506,8 @@ class RecordTest(unittest.TestCase):
             input_text="we've budgeted $600 total, `x`\n",
         )
         self.assertEqual(code, 0)
-        self.assertEqual(err, "")
+        # Expect stderr to contain the .gitignore warning
+        self.assertIn("rumbo: .rumbo/ holds the user's verbatim words", err)
         self.assertTrue(os.path.isfile(self.record_path))
         with open(self.record_path, "r", encoding="utf-8") as handle:
             data = json.load(handle)
@@ -813,7 +831,7 @@ class RecordTest(unittest.TestCase):
 
         code, out, err = run_record(["show", "--record", self.record_path])
         self.assertEqual(code, 0)
-        lines = out.strip().splitlines()
+        lines = record_lines(self, out)
         self.assertEqual(lines[0], "Objective: Test")
         # Should have ASSUMPTION line for the unsourced check
         assumption_lines = [line for line in lines if line.startswith("ASSUMPTION C1:")]
@@ -1174,6 +1192,134 @@ class RecordTest(unittest.TestCase):
         self.assertIn("start 09:45", out)
         self.assertEqual(err, "")
 
+    def test_stop_gate_blocks_at_most_three_times_per_session(self):
+        record = self.workshop_record()
+        with open(self.record_path, "w", encoding="utf-8") as handle:
+            json.dump(record, handle)
+        with tempfile.TemporaryDirectory() as state:
+            env = dict(os.environ, RUMBO_STATE_DIR=state)
+            outs = []
+            for call in range(4):
+                hook = {"session_id": "s1", "stop_hook_active": call > 0}
+                code, out, err = run_record(["stop-gate", "--record", self.record_path], json.dumps(hook), env=env)
+                self.assertEqual((code, err), (0, ""))
+                outs.append(out.strip())
+            for out in outs[:3]:
+                self.assertEqual(json.loads(out)["decision"], "block")
+                self.assertIn("do not delete or weaken a check to pass", json.loads(out)["reason"])
+            self.assertEqual(outs[3], "")
+
+    def _gate(self, hook, env):
+        code, out, err = run_record(["stop-gate", "--record", self.record_path], json.dumps(hook), env=env)
+        self.assertEqual((code, err), (0, ""))
+        return json.loads(out) if out.strip() else None
+
+    def _write(self, record_or_text):
+        with open(self.record_path, "w", encoding="utf-8") as handle:
+            handle.write(record_or_text if isinstance(record_or_text, str) else json.dumps(record_or_text))
+
+    def test_stop_gate_reports_a_failing_check_that_was_deleted(self):
+        record = self.workshop_record()
+        self._write(record)
+        with tempfile.TemporaryDirectory() as state:
+            env = dict(os.environ, RUMBO_STATE_DIR=state)
+            self.assertIsNotNone(self._gate({"session_id": "s1"}, env))
+            record["checks"] = [c for c in record["checks"] if c["id"] == "C3"]
+            self._write(record)
+            reason = self._gate({"session_id": "s1", "stop_hook_active": True}, env)["reason"]
+            self.assertIn("C1: check was failing and has been removed from the record", reason)
+            self.assertIn("C2: check was failing and has been removed from the record", reason)
+
+    def test_stop_gate_goes_quiet_and_resets_when_problems_are_fixed(self):
+        record = self.workshop_record()
+        self._write(record)
+        with tempfile.TemporaryDirectory() as state:
+            env = dict(os.environ, RUMBO_STATE_DIR=state)
+            self.assertIsNotNone(self._gate({"session_id": "s1"}, env))
+            self.assertTrue(os.path.exists(os.path.join(state, "s1.blocks")))
+            # Fixed the right way: the failing checks now pass (not deleted).
+            for check in record["checks"]:
+                if check["id"] == "C1":
+                    check["start"] = "09:00"
+                if check["id"] == "C2":
+                    check["first"], check["second"] = "03-12", "03-20"
+            self._write(record)
+            self.assertIsNone(self._gate({"session_id": "s1"}, env))
+            self.assertFalse(os.path.exists(os.path.join(state, "s1.blocks")))
+            self.assertFalse(os.path.exists(os.path.join(state, "s1.failed")))
+
+    def test_stop_gate_flags_quotes_missing_from_the_transcript(self):
+        fixture = os.path.join(os.path.dirname(__file__), "fixtures", "transcript.jsonl")
+        record = {"version": 1, "objective": {"text": "Plan", "quote": "we agreed catering can be $800"},
+                  "items": [{"id": "I1", "text": "Budget", "quote": "we've budgeted $600 total", "status": "commitment"}],
+                  "checks": []}
+        self._write(record)
+        with tempfile.TemporaryDirectory() as state:
+            env = dict(os.environ, RUMBO_STATE_DIR=state)
+            reason = self._gate({"session_id": "s1", "transcript_path": fixture}, env)["reason"]
+            self.assertIn("objective.quote: UNVERIFIED", reason)
+            self.assertNotIn("items[0].quote", reason)
+            self.assertIsNone(self._gate({"session_id": "s2"}, env))
+            self.assertIsNone(self._gate({"session_id": "s3", "transcript_path": "/nonexistent.jsonl"}, env))
+
+    def test_stop_gate_fails_closed_on_a_broken_record(self):
+        with tempfile.TemporaryDirectory() as state:
+            env = dict(os.environ, RUMBO_STATE_DIR=state)
+            self._write("{not json")
+            reason = self._gate({"session_id": "s1"}, env)["reason"]
+            self.assertIn("unreadable or invalid", reason)
+            self.assertIn("RECORD_UNREADABLE", reason)
+            self._write({"version": 1, "objective": {"text": "x", "quote": "y"},
+                         "items": [{"id": "I1", "text": "t", "status": "draft"}], "checks": []})
+            reason = self._gate({"session_id": "s1", "stop_hook_active": True}, env)["reason"]
+            self.assertIn("items[0].quote: RECORD_MISSING_FIELD", reason)
+            self.assertIsNotNone(self._gate({"session_id": "s1", "stop_hook_active": True}, env))
+            self.assertIsNone(self._gate({"session_id": "s1", "stop_hook_active": True}, env))
+            self.assertIsNotNone(self._gate({}, env))
+            self.assertIsNone(self._gate({"stop_hook_active": True}, env))
+
+    def test_nudge_appears_once_per_session_and_is_not_wrapped(self):
+        missing = os.path.join(self.dir, "none", ".rumbo", "record.json")
+        prompt = {"prompt": "Please draft the schedule: 9:00 arrival, 12:30 close."}
+        with tempfile.TemporaryDirectory() as state:
+            env = dict(os.environ, RUMBO_STATE_DIR=state)
+            outs = [run_record(["show", "--record", missing], json.dumps(dict(prompt, session_id="s1")), env=env)[1]
+                    for _ in range(2)]
+            self.assertTrue(outs[0].startswith("rumbo: no decision record yet."))
+            self.assertNotIn("--- rumbo record", outs[0])
+            self.assertEqual(outs[1], "")
+            no_session = [run_record(["show", "--record", missing], json.dumps(prompt), env=env)[1] for _ in range(2)]
+            self.assertTrue(all(o.startswith("rumbo: no decision record yet.") for o in no_session))
+
+    def test_init_warns_unless_gitignore_covers_rumbo(self):
+        warning = "add .rumbo/ to .gitignore before sharing this project"
+        for content, warns in ((None, True), ("node_modules/\n", True), (".rumbo/\n", False), ("dist\n.rumbo\n", False)):
+            with tempfile.TemporaryDirectory() as project:
+                gitignore = os.path.join(project, ".gitignore")
+                if content is not None:
+                    with open(gitignore, "w") as handle:
+                        handle.write(content)
+                code, _out, err = run_record(["init", "--record", os.path.join(project, ".rumbo", "record.json"),
+                                              "--objective", "o", "--quote", "q"])
+                self.assertEqual(code, 0)
+                self.assertEqual(warning in err, warns, content)
+                self.assertEqual(open(gitignore).read() if content is not None else None, content)
+
+    def test_user_messages_skips_malformed_entries(self):
+        path = os.path.join(self.dir, "odd.jsonl")
+        with open(path, "w") as handle:
+            handle.write('[1, 2]\n42\n{"type":"user","origin":"human","message":{"content":"x"}}\n'
+                         '{"type":"user","message":"not a dict"}\n'
+                         '{"type":"user","origin":{"kind":"human"},"message":{"content":"real words"}}\n')
+        record = {"version": 1, "objective": {"text": "o", "quote": "real words"}, "items": [], "checks": []}
+        with open(self.record_path, "w") as handle:
+            json.dump(record, handle)
+        code, out, err = run_record(["check", "--record", self.record_path, "--transcript", path])
+        self.assertEqual((code, err), (0, ""))
+        code, out, err = run_record(["stop-gate", "--record", self.record_path],
+                                    json.dumps({"session_id": "s9", "transcript_path": path}))
+        self.assertEqual((code, out, err), (0, "", ""))
+
     def _check(self, quote, check):
         record = {"version": 1, "objective": {"text": "Test", "quote": quote}, "items": [], "checks": [check]}
         with open(self.record_path, "w", encoding="utf-8") as handle:
@@ -1210,6 +1356,175 @@ class RecordTest(unittest.TestCase):
                                      {"id": "C1", "kind": "within_budget", "amounts": [45], "total_cap": 45})
         self.assertEqual(code, 1)
         self.assertIn("amounts 45", out)
+
+    # Tests for ticket T11: verify record quotes against the harness transcript
+    def test_user_messages_extracts_correct_messages(self):
+        """user_messages keeps exactly 3 messages (the two human ones and the one with no origin)"""
+        transcript_path = os.path.join(os.path.dirname(__file__), "fixtures", "transcript.jsonl")
+        messages = record.user_messages(transcript_path)
+        self.assertIsNotNone(messages)
+        self.assertEqual(len(messages), 3)
+        self.assertEqual(messages[0], "I'm organizing a half-day workshop. It's the morning of March 12 and we've budgeted $600 total.")
+        self.assertEqual(messages[1], "Please draft the schedule:   9:00 arrival,\ntwo 75-minute sessions with a 20-minute break, 12:30 close.")
+        self.assertEqual(messages[2], "The maker-space team just confirmed for the 9:45 session.")
+
+    def test_user_messages_skips_invalid_and_non_human(self):
+        """user_messages drops the assistant, tool_result, isMeta, task-notification and invalid lines"""
+        transcript_path = os.path.join(os.path.dirname(__file__), "fixtures", "transcript.jsonl")
+        messages = record.user_messages(transcript_path)
+        # Should not contain assistant message content
+        self.assertFalse(any("Sure. Catering can be $800 if needed." in msg for msg in messages))
+        # Should not contain tool result content
+        self.assertFalse(any("The venue quote says catering is $950." in msg for msg in messages))
+        # Should not contain isMeta content
+        self.assertFalse(any("Skill text: the budget is $5000." in msg for msg in messages))
+        # Should not contain task-notification content
+        self.assertFalse(any("<task-notification>budget $7000</task-notification>" in msg for msg in messages))
+        # Should not contain invalid JSON line
+        self.assertFalse(any("not json at all" in msg for msg in messages))
+
+    def test_normalize_function(self):
+        """_normalize collapses whitespace and strips"""
+        self.assertEqual(record._normalize("  hello   world  "), "hello world")
+        self.assertEqual(record._normalize("\thello\n\nworld\t"), "hello world")
+        self.assertEqual(record._normalize("  multiple   spaces   and\t\ttabs  "), "multiple spaces and tabs")
+        self.assertEqual(record._normalize(""), "")
+
+    def test_unverified_quotes_detects_missing_quotes(self):
+        """unverified_quotes returns paths for quotes not found in messages"""
+        transcript_path = os.path.join(os.path.dirname(__file__), "fixtures", "transcript.jsonl")
+        messages = record.user_messages(transcript_path)
+
+        # Test with a record that has unverified quotes
+        record_data = {
+            "version": 1,
+            "objective": {
+                "text": "Test",
+                "quote": "we've budgeted $600 total"  # This should verify
+            },
+            "items": [
+                {
+                    "id": "I1",
+                    "text": "Schedule",
+                    "quote": "Please draft the schedule: 9:00 arrival, two 75-minute sessions"  # This should verify despite extra spaces/newline
+                },
+                {
+                    "id": "I2",
+                    "text": "Catering",
+                    "quote": "we agreed catering can be $800"  # This should be UNVERIFIED (only in assistant message)
+                },
+                {
+                    "id": "I3",
+                    "text": "Venue",
+                    "quote": "The venue quote says catering is $950"  # This should be UNVERIFIED (tool result)
+                },
+                {
+                    "id": "I4",
+                    "text": "Budget info",
+                    "quote": "the budget is $5000"  # This should be UNVERIFIED (isMeta)
+                }
+            ],
+            "checks": []
+        }
+
+        unverified = record.unverified_quotes(record_data, messages)
+        # Should find unverified quotes for items I2, I3, I4 (objective and I1 should verify)
+        expected_unverified = {"items[1].quote", "items[2].quote", "items[3].quote"}
+        self.assertEqual(set(unverified), expected_unverified)
+
+    def test_check_with_transcript_verifies_quotes(self):
+        """check with --transcript verifies quotes and exits 1 if any unverified"""
+        transcript_path = os.path.join(os.path.dirname(__file__), "fixtures", "transcript.jsonl")
+        record_path = os.path.join(self.dir, "test_record.json")
+
+        # Create a record with an unverified quote
+        record_data = {
+            "version": 1,
+            "objective": {
+                "text": "Test",
+                "quote": "we agreed catering can be $800"  # Unverified quote
+            },
+            "items": [],
+            "checks": []
+        }
+        with open(record_path, "w", encoding="utf-8") as f:
+            json.dump(record_data, f)
+
+        code, out, err = run_record(["check", "--record", record_path, "--transcript", transcript_path])
+        self.assertEqual(code, 1)
+        self.assertEqual(out.strip(), "objective.quote: UNVERIFIED: quote not found in the user's messages")
+        self.assertEqual(err, "")
+
+    def test_check_with_transcript_passes_when_all_verified(self):
+        """check with --transcript passes when all quotes are verified"""
+        transcript_path = os.path.join(os.path.dirname(__file__), "fixtures", "transcript.jsonl")
+        record_path = os.path.join(self.dir, "test_record.json")
+
+        # Create a record with verified quotes
+        record_data = {
+            "version": 1,
+            "objective": {
+                "text": "Test",
+                "quote": "we've budgeted $600 total"  # Verified quote
+            },
+            "items": [
+                {
+                    "id": "I1",
+                    "text": "Schedule",
+                    "quote": "Please draft the schedule: 9:00 arrival, two 75-minute sessions",  # Verified despite formatting
+                    "status": "draft"  # Add required status field
+                }
+            ],
+            "checks": []
+        }
+        with open(record_path, "w", encoding="utf-8") as f:
+            json.dump(record_data, f)
+
+        code, out, err = run_record(["check", "--record", record_path, "--transcript", transcript_path])
+        self.assertEqual(code, 0)  # Should pass
+        self.assertEqual(out.strip(), "")  # No output for passing check
+        self.assertEqual(err, "")
+
+    def test_check_with_missing_transcript_exits_2(self):
+        """check with missing transcript path exits 2 with TRANSCRIPT_UNREADABLE"""
+        record_path = os.path.join(self.dir, "test_record.json")
+        record_data = {
+            "version": 1,
+            "objective": {"text": "Test", "quote": "test"},
+            "items": [],
+            "checks": []
+        }
+        with open(record_path, "w", encoding="utf-8") as f:
+            json.dump(record_data, f)
+
+        code, out, err = run_record(["check", "--record", record_path, "--transcript", "/nonexistent/file.jsonl"])
+        self.assertEqual(code, 2)
+        self.assertEqual(out, "")
+        self.assertEqual(err.strip(), "TRANSCRIPT_UNREADABLE")
+
+    def test_check_without_transcript_unchanged(self):
+        """check without --transcript behaves as before"""
+        record_path = os.path.join(self.dir, "test_record.json")
+        record_data = {
+            "version": 1,
+            "objective": {"text": "Test", "quote": "any quote"},
+            "items": [],
+            "checks": [
+                {
+                    "id": "C1",
+                    "kind": "within_budget",
+                    "amounts": [100],
+                    "total_cap": 50  # This will fail the check
+                }
+            ]
+        }
+        with open(record_path, "w", encoding="utf-8") as f:
+            json.dump(record_data, f)
+
+        code, out, err = run_record(["check", "--record", record_path])
+        self.assertEqual(code, 1)  # Should fail due to check, not transcript
+        self.assertIn("C1: FAIL within_budget", out)
+        self.assertEqual(err, "")
 
 if __name__ == "__main__":
     unittest.main()
