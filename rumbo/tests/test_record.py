@@ -1310,7 +1310,9 @@ class RecordTest(unittest.TestCase):
                                               "--objective", "o", "--quote", "q"])
                 self.assertEqual(code, 0)
                 self.assertEqual(warning in err, warns, content)
-                self.assertEqual(open(gitignore).read() if content is not None else None, content)
+                if content is not None:
+                    with open(gitignore) as handle:
+                        self.assertEqual(handle.read(), content)
 
     def test_user_messages_skips_malformed_entries(self):
         path = os.path.join(self.dir, "odd.jsonl")
@@ -1372,6 +1374,26 @@ class RecordTest(unittest.TestCase):
             self.assertIn("items[%d].quote: UNVERIFIED" % i, out)
         self.assertNotIn("items[3].quote", out)
         self.assertNotIn("objective.quote", out)
+
+    def test_quote_cannot_drop_a_minus_sign(self):
+        path = os.path.join(self.dir, "signs.jsonl")
+        with open(path, "w") as handle:
+            for m in ("Refund -$900 to the client.", "Refund \u2212900 as credit.", "Budget is 30-50 dollars."):
+                handle.write(json.dumps({"type": "user", "message": {"content": m}}) + "\n")
+        quotes = ["$900 to the client", "900 as credit", "Refund -$900", "50 dollars"]
+        record = {"version": 1, "objective": {"text": "o", "quote": "Refund -$900 to the client."},
+                  "items": [{"id": "I%d" % i, "text": "t", "quote": q, "status": "commitment"} for i, q in enumerate(quotes)],
+                  "checks": [{"id": "C1", "kind": "within_budget", "amounts": [900], "total_cap": 900}]}
+        with open(self.record_path, "w") as handle:
+            json.dump(record, handle)
+        code, out, err = run_record(["check", "--record", self.record_path, "--transcript", path])
+        self.assertEqual(code, 1)
+        self.assertIn("items[0].quote: UNVERIFIED", out)
+        self.assertIn("items[1].quote: UNVERIFIED", out)
+        self.assertNotIn("items[2].quote", out)
+        self.assertNotIn("items[3].quote", out)
+        # 900 is "sourced" only by the laundered quote, which is what gets flagged.
+        self.assertIn("C1: PASS within_budget", out)
 
     def test_deleted_failing_check_stays_remembered_until_limit(self):
         record = self.workshop_record()

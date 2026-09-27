@@ -374,6 +374,9 @@ def _quote_in(quote, message):
         return False
     pattern = r"(?<!\w)(?<!\d[.,])" + re.escape(quote) + r"(?!\w|[.,]\d)"
     for match in re.finditer(pattern, message):
+        # A sign in front of a quoted number changes its value: "-$900" is not "$900".
+        if re.search(r"(?:^|[^\d])[-\u2212]\$?$", message[:match.start()]):
+            continue
         clause = re.split(r"[.!?;:\n]", message[:match.start()])[-1]
         if not NEGATION.search(clause[-40:]):
             return True
@@ -1107,7 +1110,10 @@ def record_problems(record):
 def _read_failed_ids(session_id):
     path = _marker_path(session_id, ".failed")
     try:
-        ids = json.loads(open(path, encoding="utf-8").read()) if path else []
+        if not path:
+            return []
+        with open(path, encoding="utf-8") as handle:
+            ids = json.loads(handle.read())
     except (OSError, ValueError):
         return []
     return [i for i in ids if isinstance(i, str)] if isinstance(ids, list) else []
@@ -1118,7 +1124,8 @@ def _block_bounded(session_id, parts, tail, problem_ids=None):
     blocks_path = _marker_path(session_id, ".blocks")
     if blocks_path:
         try:
-            count = int(open(blocks_path, encoding="utf-8").read().strip() or "0")
+            with open(blocks_path, encoding="utf-8") as handle:
+                count = int(handle.read().strip() or "0")
         except (OSError, ValueError):
             count = 0
         if count >= MAX_BLOCKS:
