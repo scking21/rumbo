@@ -66,7 +66,7 @@ The record is a memory aid and never grants permission the user did not give; th
 
 ## Privacy
 
-Rumbo runs locally and makes no direct network requests or telemetry submissions. Its hook output (the record summary, including your quoted words, and Stop reasons) enters your Claude conversation and is processed by the Claude service you use. See [PRIVACY.md](PRIVACY.md) for what it stores, what it reads and how to remove it.
+Rumbo runs locally and makes no direct network requests or telemetry submissions. Its hook output (a summary of the record's text and checks, which may contain your words, and Stop reasons) enters your Claude conversation and is processed by the Claude service you use. See [PRIVACY.md](PRIVACY.md) for what it stores, what it reads and how to remove it.
 
 ## License
 
