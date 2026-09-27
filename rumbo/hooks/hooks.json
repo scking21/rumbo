@@ -5,7 +5,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/record.py\" show --record \"${CLAUDE_PROJECT_DIR}/.rumbo/record.json\"",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}\"/scripts/show.sh",
             "timeout": 10
           }
         ]
@@ -16,7 +16,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/record.py\" stop-gate --record \"${CLAUDE_PROJECT_DIR}/.rumbo/record.json\"",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}\"/scripts/stop-gate.sh",
             "timeout": 10
           }
         ]

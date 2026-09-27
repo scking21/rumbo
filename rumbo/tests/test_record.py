@@ -1418,6 +1418,26 @@ class RecordTest(unittest.TestCase):
                 self.assertTrue(out.startswith("rumbo: no decision record yet."), sid)
             self.assertEqual(len(os.listdir(state)), 2)
 
+    def test_hook_wrappers_run_record_with_plugin_and_project_dirs(self):
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        with open(os.path.join(root, "hooks", "hooks.json")) as handle:
+            hooks = json.load(handle)["hooks"]
+        for event, script in (("UserPromptSubmit", "show.sh"), ("Stop", "stop-gate.sh")):
+            self.assertEqual(hooks[event][0]["hooks"][0]["command"], '"${CLAUDE_PLUGIN_ROOT}"/scripts/' + script)
+            self.assertTrue(os.access(os.path.join(root, "scripts", script), os.X_OK), script)
+        with tempfile.TemporaryDirectory() as project, tempfile.TemporaryDirectory() as state:
+            env = dict(os.environ, CLAUDE_PLUGIN_ROOT=root, CLAUDE_PROJECT_DIR=project, RUMBO_STATE_DIR=state)
+            hook = json.dumps({"prompt": "Please draft the schedule: 9:00 arrival.", "session_id": "w1"})
+            out = subprocess.run([os.path.join(root, "scripts", "show.sh")], input=hook, text=True,
+                                 capture_output=True, env=env, cwd=project).stdout
+            self.assertIn(os.path.join(project, ".rumbo", "record.json"), out)
+            os.makedirs(os.path.join(project, ".rumbo"))
+            with open(os.path.join(project, ".rumbo", "record.json"), "w") as handle:
+                json.dump(self.workshop_record(), handle)
+            out = subprocess.run([os.path.join(root, "scripts", "stop-gate.sh")], input=json.dumps({"session_id": "w1"}),
+                                 text=True, capture_output=True, env=env, cwd=project).stdout
+            self.assertEqual(json.loads(out)["decision"], "block")
+
     def _check(self, quote, check):
         record = {"version": 1, "objective": {"text": "Test", "quote": quote}, "items": [], "checks": [check]}
         with open(self.record_path, "w", encoding="utf-8") as handle:
