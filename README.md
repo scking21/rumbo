@@ -58,7 +58,7 @@ In a 20-run comparison on two synthetic planning conversations (Nemotron as the 
 
 ## Threat model
 
-Rumbo is a memory aid against drift, not a sandbox against an agent that is trying to cheat. Quotes are verified against the transcript the harness writes, which the agent could still edit if it went out of its way to. record.json and the plugin's own files are editable by the agent. The Stop gate stops blocking after three attempts per session so it cannot trap a session, and anything still unresolved is visible in the conversation. The injected summary is marked as agent-written data, not instructions. `.rumbo/` holds the user's verbatim words, so add it to `.gitignore` before sharing a project.
+Rumbo is a memory aid against drift, not a sandbox against an agent that is trying to cheat. Quotes are verified against the transcript the harness writes, which the agent could still edit if it went out of its way to. Verification is lexical, not semantic: a quote must appear in one of the user's messages as whole words ("$900" does not match "$9000" or "$900.50") and must not sit under a negation in the same clause ("spend $900" does not match "Do not spend $900"); it cannot tell whether the user meant it as a decision. record.json and the plugin's own files are editable by the agent. The Stop gate stops blocking after three attempts per session so it cannot trap a session, and anything still unresolved is visible in the conversation. The injected summary is marked as agent-written data, not instructions. `.rumbo/` holds the user's verbatim words, so add it to `.gitignore` before sharing a project.
 
 ## Limits
 

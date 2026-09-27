@@ -8,6 +8,7 @@ Exit codes: 0 clean, 1 content problem, 2 tool or I/O problem.
 import argparse
 import decimal
 import datetime
+import hashlib
 import json
 import os
 import re
@@ -73,8 +74,10 @@ def load_record(path):
     try:
         with open(path, "r", encoding="utf-8") as handle:
             raw = handle.read()
-    except OSError:
+    except FileNotFoundError:
         raise LoadError("RECORD_NOT_FOUND")
+    except (OSError, UnicodeDecodeError):
+        raise LoadError("RECORD_UNREADABLE")
     try:
         return json.loads(raw)
     except ValueError:
@@ -301,7 +304,7 @@ def user_messages(transcript_path):
     Skip empty texts. Missing/unreadable file -> return None (distinct from []).
     """
     try:
-        with open(transcript_path, "r", encoding="utf-8") as handle:
+        with open(transcript_path, "r", encoding="utf-8", errors="replace") as handle:
             lines = handle.readlines()
     except OSError:
         return None
@@ -358,6 +361,25 @@ def _normalize(text):
     return re.sub(r"\s+", " ", text).strip()
 
 
+NEGATION = re.compile(r"\b(?:not|no|never|don't|dont|doesn't|didn't|can't|cannot|won't|without|avoid)\b", re.IGNORECASE)
+
+
+def _quote_in(quote, message):
+    """True when quote occurs in message as whole tokens and is not negated in its clause.
+
+    Lexical, not semantic: "$900" does not match inside "$9000" or "$900.50", and
+    "spend $900" does not match "Do not spend $900".
+    """
+    if not quote:
+        return False
+    pattern = r"(?<!\w)(?<!\d[.,])" + re.escape(quote) + r"(?!\w|[.,]\d)"
+    for match in re.finditer(pattern, message):
+        clause = re.split(r"[.!?;:\n]", message[:match.start()])[-1]
+        if not NEGATION.search(clause[-40:]):
+            return True
+    return False
+
+
 def unverified_quotes(record, messages):
     """Return list of JSON paths whose _normalize(quote) is not a substring
     of _normalize(m) for any single message m.
@@ -371,7 +393,7 @@ def unverified_quotes(record, messages):
         quote = objective.get("quote")
         if isinstance(quote, str):
             norm_quote = _normalize(quote)
-            if not any(norm_quote in norm_msg for norm_msg in normalized_messages):
+            if not any(_quote_in(norm_quote, norm_msg) for norm_msg in normalized_messages):
                 unverified.append("objective.quote")
 
     # Check item quotes
@@ -381,7 +403,7 @@ def unverified_quotes(record, messages):
             quote = item.get("quote")
             if isinstance(quote, str):
                 norm_quote = _normalize(quote)
-                if not any(norm_quote in norm_msg for norm_msg in normalized_messages):
+                if not any(_quote_in(norm_quote, norm_msg) for norm_msg in normalized_messages):
                     unverified.append(f"items[{i}].quote")
 
     return unverified
@@ -817,7 +839,9 @@ def _marker_path(session_id, suffix):
     state_dir = os.environ.get("RUMBO_STATE_DIR") or os.path.join(
         tempfile.gettempdir(), "rumbo"
     )
-    return os.path.join(state_dir, re.sub(r"[^A-Za-z0-9_-]", "_", session_id) + suffix)
+    digest = hashlib.sha256(session_id.encode("utf-8", "replace")).hexdigest()[:12]
+    safe = re.sub(r"[^A-Za-z0-9_-]", "_", session_id)[:64]
+    return os.path.join(state_dir, "%s-%s%s" % (safe, digest, suffix))
 
 
 def maybe_nudge(args):
@@ -1043,7 +1067,9 @@ def cmd_stop_gate(args):
                 except OSError:
                     pass
         return 0
-    return _block_bounded(session_id, parts, CONFLICT_TAIL, problem_ids)
+    present = {c.get("id") for c in record.get("checks") or []}
+    remembered = problem_ids + [i for i in _read_failed_ids(session_id) if i not in present]
+    return _block_bounded(session_id, parts, CONFLICT_TAIL, remembered)
 
 
 BROKEN_RECORD = "rumbo: the decision record is unreadable or invalid"

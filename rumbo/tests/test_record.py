@@ -37,6 +37,13 @@ def record_lines(test, out):
     return lines[1:-1]
 
 
+def marker(state_dir, session_id, suffix):
+    """Path the script uses for a per-session marker (sanitized id + short hash)."""
+    import hashlib, re as _re
+    digest = hashlib.sha256(session_id.encode("utf-8")).hexdigest()[:12]
+    return os.path.join(state_dir, "%s-%s%s" % (_re.sub(r"[^A-Za-z0-9_-]", "_", session_id)[:64], digest, suffix))
+
+
 def make_temp_dir():
     td = tempfile.TemporaryDirectory()
     return td, td.name
@@ -853,7 +860,7 @@ class RecordTest(unittest.TestCase):
             self.assertEqual(code, 0)
             self.assertTrue(out.startswith("rumbo: no decision record yet."))
             # Check that marker file exists.
-            marker_path = os.path.join(tmpdir, "s1.nudged")
+            marker_path = marker(tmpdir, "s1", ".nudged")
             self.assertTrue(os.path.exists(marker_path), f"Marker not found at {marker_path}")
 
             # 2. Stop-gate with {"session_id":"s1"} and no record blocks with the reason.
@@ -864,7 +871,7 @@ class RecordTest(unittest.TestCase):
             self.assertEqual(payload["decision"], "block")
             self.assertIn("This session looked like planning work", payload["reason"])
             # Check that marker was renamed to .enforced.
-            enforced_path = os.path.join(tmpdir, "s1.enforced")
+            enforced_path = marker(tmpdir, "s1", ".enforced")
             self.assertTrue(os.path.exists(enforced_path), f"Enforced marker not found at {enforced_path}")
             self.assertFalse(os.path.exists(marker_path), f"Original marker still exists at {marker_path}")
 
@@ -886,7 +893,7 @@ class RecordTest(unittest.TestCase):
             code5, out5, err5 = run_record(["show", "--record", record_path], input_text=prompt_s3, env=env)
             self.assertEqual(code5, 0)
             self.assertTrue(out5.startswith("rumbo: no decision record yet."))
-            marker_s3 = os.path.join(tmpdir, "s3.nudged")
+            marker_s3 = marker(tmpdir, "s3", ".nudged")
             self.assertTrue(os.path.exists(marker_s3))
             # Now call stop-gate with stop_hook_active true.
             code6, out6, err6 = run_record(["stop-gate", "--record", record_path], input_text=json.dumps({"session_id": "s3", "stop_hook_active": True}), env=env)
@@ -901,7 +908,7 @@ class RecordTest(unittest.TestCase):
             code7, out7, err7 = run_record(["show", "--record", record_path], input_text=prompt_s4, env=env)
             self.assertEqual(code7, 0)
             self.assertEqual(out7.strip(), "", f"Expected no output for non-planning prompt, got: {out7}")
-            marker_s4 = os.path.join(tmpdir, "s4.nudged")
+            marker_s4 = marker(tmpdir, "s4", ".nudged")
             self.assertFalse(os.path.exists(marker_s4), f"Marker incorrectly created for non-planning prompt: {marker_s4}")
 
     # Regression tests for ticket T9b
@@ -1236,7 +1243,7 @@ class RecordTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as state:
             env = dict(os.environ, RUMBO_STATE_DIR=state)
             self.assertIsNotNone(self._gate({"session_id": "s1"}, env))
-            self.assertTrue(os.path.exists(os.path.join(state, "s1.blocks")))
+            self.assertTrue(os.path.exists(marker(state, "s1", ".blocks")))
             # Fixed the right way: the failing checks now pass (not deleted).
             for check in record["checks"]:
                 if check["id"] == "C1":
@@ -1245,8 +1252,8 @@ class RecordTest(unittest.TestCase):
                     check["first"], check["second"] = "03-12", "03-20"
             self._write(record)
             self.assertIsNone(self._gate({"session_id": "s1"}, env))
-            self.assertFalse(os.path.exists(os.path.join(state, "s1.blocks")))
-            self.assertFalse(os.path.exists(os.path.join(state, "s1.failed")))
+            self.assertFalse(os.path.exists(marker(state, "s1", ".blocks")))
+            self.assertFalse(os.path.exists(marker(state, "s1", ".failed")))
 
     def test_stop_gate_flags_quotes_missing_from_the_transcript(self):
         fixture = os.path.join(os.path.dirname(__file__), "fixtures", "transcript.jsonl")
@@ -1319,6 +1326,75 @@ class RecordTest(unittest.TestCase):
         code, out, err = run_record(["stop-gate", "--record", self.record_path],
                                     json.dumps({"session_id": "s9", "transcript_path": path}))
         self.assertEqual((code, out, err), (0, "", ""))
+
+    def test_stop_gate_fails_closed_when_record_cannot_be_read(self):
+        with tempfile.TemporaryDirectory() as state:
+            env = dict(os.environ, RUMBO_STATE_DIR=state)
+            os.makedirs(self.record_path + ".dir")
+            for path, sid in ((self.record_path + ".dir", "d1"), (self.record_path, "u1")):
+                if sid == "u1":
+                    with open(path, "wb") as handle:
+                        handle.write(b"\xff\xfe{")
+                code, out, err = run_record(["stop-gate", "--record", path], json.dumps({"session_id": sid}), env=env)
+                self.assertEqual((code, err), (0, ""))
+                self.assertIn("RECORD_UNREADABLE", json.loads(out)["reason"])
+
+    def test_non_utf8_transcript_does_not_crash_and_real_quotes_still_verify(self):
+        path = os.path.join(self.dir, "bytes.jsonl")
+        with open(path, "wb") as handle:
+            handle.write(b'{"type":"user","message":{"content":"budget \xff $5000"}}\n'
+                         b'{"type":"user","message":{"content":"we have $600 total"}}\n')
+        record = {"version": 1, "objective": {"text": "o", "quote": "we have $600 total"},
+                  "items": [{"id": "I1", "text": "t", "quote": "budget $5000", "status": "commitment"}], "checks": []}
+        with open(self.record_path, "w") as handle:
+            json.dump(record, handle)
+        code, out, err = run_record(["check", "--record", self.record_path, "--transcript", path])
+        self.assertEqual((code, err), (1, ""))
+        self.assertIn("items[0].quote: UNVERIFIED", out)
+        self.assertNotIn("objective.quote", out)
+
+    def test_quote_must_match_whole_tokens_and_not_be_negated(self):
+        path = os.path.join(self.dir, "t.jsonl")
+        msgs = ["Budget $9000 for the event.", "Deposit is $900.50 today.", "Do not spend $900 on catering.",
+                "We can spend $750 on tables."]
+        with open(path, "w") as handle:
+            for m in msgs:
+                handle.write(json.dumps({"type": "user", "message": {"content": m}}) + "\n")
+        quotes = ["Budget $900", "Deposit is $900", "spend $900 on catering", "spend $750 on tables"]
+        record = {"version": 1, "objective": {"text": "o", "quote": "Budget $9000 for the event"},
+                  "items": [{"id": "I%d" % i, "text": "t", "quote": q, "status": "commitment"} for i, q in enumerate(quotes)],
+                  "checks": []}
+        with open(self.record_path, "w") as handle:
+            json.dump(record, handle)
+        code, out, err = run_record(["check", "--record", self.record_path, "--transcript", path])
+        self.assertEqual(code, 1)
+        for i in (0, 1, 2):
+            self.assertIn("items[%d].quote: UNVERIFIED" % i, out)
+        self.assertNotIn("items[3].quote", out)
+        self.assertNotIn("objective.quote", out)
+
+    def test_deleted_failing_check_stays_remembered_until_limit(self):
+        record = self.workshop_record()
+        self._write(record)
+        with tempfile.TemporaryDirectory() as state:
+            env = dict(os.environ, RUMBO_STATE_DIR=state)
+            self.assertIsNotNone(self._gate({"session_id": "s1"}, env))
+            record["checks"] = [c for c in record["checks"] if c["id"] == "C3"]
+            self._write(record)
+            for _ in range(2):
+                reason = self._gate({"session_id": "s1", "stop_hook_active": True}, env)["reason"]
+                self.assertIn("C1: check was failing and has been removed from the record", reason)
+            self.assertIsNone(self._gate({"session_id": "s1", "stop_hook_active": True}, env))
+
+    def test_session_ids_that_sanitize_alike_get_distinct_markers(self):
+        prompt = {"prompt": "Please draft the schedule: 9:00 arrival."}
+        missing = os.path.join(self.dir, "none", ".rumbo", "record.json")
+        with tempfile.TemporaryDirectory() as state:
+            env = dict(os.environ, RUMBO_STATE_DIR=state)
+            for sid in ("a/b", "a?b"):
+                out = run_record(["show", "--record", missing], json.dumps(dict(prompt, session_id=sid)), env=env)[1]
+                self.assertTrue(out.startswith("rumbo: no decision record yet."), sid)
+            self.assertEqual(len(os.listdir(state)), 2)
 
     def _check(self, quote, check):
         record = {"version": 1, "objective": {"text": "Test", "quote": quote}, "items": [], "checks": [check]}

@@ -63,7 +63,7 @@ Exit codes, uniform across subcommands: `0` clean, `1` content problem (invalid 
 
 ### Transcript verification
 
-Claude Code passes every hook a `transcript_path`. The user's messages are the entries with `type` `user` that are not `isMeta`, carry no `toolUseResult`, and, when an `origin` is present, have `origin.kind` `human`; only their text blocks count (tool results, images, assistant replies and injected context do not). A quote is verified when, after collapsing whitespace, it is a substring of one such message.
+Claude Code passes every hook a `transcript_path`. The user's messages are the entries with `type` `user` that are not `isMeta`, carry no `toolUseResult`, and, when an `origin` is present, have `origin.kind` `human`; only their text blocks count (tool results, images, assistant replies and injected context do not). A quote is verified when, after collapsing whitespace, it occurs in one such message as whole tokens (not inside a longer word or number: "$900" does not match "$9000" or "$900.50") and no negation word (not, no, never, don't, can't, cannot, won't, without, avoid, ...) appears in the preceding 40 characters of the same clause. Undecodable bytes in the transcript are read as replacement characters; a record that exists but cannot be read (directory, permissions, bad bytes, bad JSON) is `RECORD_UNREADABLE` and the Stop gate treats it as a problem. Per-session marker names are the sanitized session id plus a short hash, so ids that sanitize alike do not collide.
 
 Per-session markers (`.nudged`, `.enforced`, `.blocks`, `.failed`) live in `$RUMBO_STATE_DIR` (default: the system temp directory under `rumbo/`).
 
