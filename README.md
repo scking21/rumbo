@@ -64,6 +64,10 @@ Rumbo is a memory aid against drift, not a sandbox against an agent that is tryi
 
 The record is a memory aid and never grants permission the user did not give; the agent can still ignore it outside the Stop hook; checks cover only times, dates and budgets.
 
+## Privacy
+
+Rumbo runs locally, makes no network requests and sends nothing to third parties. See [PRIVACY.md](PRIVACY.md) for what it stores and reads.
+
 ## License
 
 MIT, Copyright (c) 2026 Corby King.
