@@ -25,7 +25,7 @@ Rumbo is a Claude Code plugin that runs entirely on your machine. It makes no di
 
 ## What reaches the model
 
-When a valid record exists, the `UserPromptSubmit` hook adds a summary of its text (the objective, each decision's wording and status) and its checks to the conversation each time you send a prompt. The `quote` fields are not included, but the summary may still contain your words or other sensitive information. When there is no record, it may add a one-line planning nudge instead. The Stop hook can add a reason when it blocks, naming failing checks and record entries. That text becomes part of your Claude conversation and is handled by the Claude service you use, under the terms that already apply to it. Rumbo itself sends it nowhere else.
+When a valid record exists, the `UserPromptSubmit` hook adds a summary of its text (the objective and the wording and status of selected active decisions) and its checks to the conversation each time you send a prompt. The `quote` fields are not included, but the summary may still contain your words or other sensitive information. When there is no record, it may add a planning nudge instead: a few lines that include the path of the plugin's script and of the record it suggests creating. The Stop hook can add a reason when it blocks, naming failing checks and record entries. That text becomes part of your Claude conversation and is handled by the Claude service you use, under the terms that already apply to it. Rumbo itself sends it nowhere else.
 
 ## Removing it
 
