@@ -18,7 +18,7 @@ Prepared 2026-10-01 from repository base `1d9c5b95265fcbb8181d25bd52dfa0947a7d88
 
 ## Actual verification completed locally
 
-- New suite: **113 tests; 108 passed, 5 optional browser tests explicitly skipped**
+- New suite: **114 tests; 108 passed, 6 optional browser tests explicitly skipped**
 - Legacy Claude adapter suite: **95 passed**
 - The 24 owner tests use real local HTTP/Authlib behavior with an explicitly synthetic external provider transport; no live identity-provider call
 - Real subprocess MCP initialization/tool/resource flows; actual HTTP auth, origin/Host checks, two-principal isolation and owner/MCP authority separation
@@ -40,13 +40,13 @@ python3 scripts/package_release.py --kind local --output dist/rumbo-0.3.0-local-
 python3 scripts/package_release.py --kind source --output dist/rumbo-0.3.0-source.zip
 ```
 
-The local run used Python 3.12, Authlib 1.8.0, Requests 2.34.2, Node, and jsonschema 4.26.0. Owner dependencies were installed in a temporary test directory, not globally. Core/agent MCP uses the standard library and declares Python 3.9+ POSIX; the owner portal requires Python 3.10+. The included CI Python 3.9 job has not yet run.
+The local run used Python 3.12, Authlib 1.8.0, Requests 2.34.2, Node, and jsonschema 4.26.0. Owner dependencies were installed in a temporary test directory, not globally. Core/agent MCP uses the standard library and declares Python 3.9+ POSIX; the owner portal requires Python 3.10+. The first public CI run on commit `a279ca480b6c879ee99dc60a5f2d76f240b95476` passed its Python 3.9 job. Its full job executed all 113 then-existing tests without skips; one browser assertion failed because CSS uppercase affected `inner_text()`. The current candidate uses exact visible semantic heading text and adds a real Engine/demo → HTTP handler → browser refresh regression. Its exact-head CI result still needs verification.
 
 ## Explicitly unverified
 
-- Rendered browser layout, keyboard/screen-reader behavior and owner sign-in in a real browser: cloud CUA loopback was blocked and local Chromium could not create required process sockets. See [the exact browser limits](BOARD.md)
+- Local browser execution remains blocked by cloud CUA loopback restrictions and Chromium process-socket limits. The first CI run produced five synthetic-fixture screenshots; desktop/narrow rendering was inspected, with one casing-sensitive assertion failure as described above. The added actual-engine browser path, full keyboard/screen-reader behavior and real owner sign-in still require their respective verification. See [browser evidence and limits](BOARD.md)
 - Actual ChatGPT/Codex installation, global/thread panel behavior and live host tool-selection tests; bridge fixtures do not certify the host
-- Included GitHub Actions workflow results and screenshots: check the exact review commit after the draft PR exists
+- Final GitHub Actions outcome and actual-engine screenshots: check the exact updated review commit; the first-run screenshots do not establish the new backend-to-board regression has passed
 - Real OAuth issuer/client registration, PKCE consent round trip, production HTTPS cookies, token/account revocation policy, proxy/hosting operation and public endpoint availability
 - Public publisher/domain verification, reviewer-account provisioning, legal/support/listing URLs and accessible walkthrough video
 

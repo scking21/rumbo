@@ -295,11 +295,76 @@ class BoardBrowserTests(unittest.TestCase):
     def test_renders_evidence_provenance_and_demo(self):
         self.open_board()
         body = self.page.locator('body').inner_text()
-        for expected in ['Demo', 'Deterministic receipts', 'Reviewer assertions',
-                         'Human decision', 'Checks passed is not acceptance', 'Priya', 'Awaiting Maya Chen']:
+        for expected in ['Demo', 'Checks passed is not acceptance', 'Priya', 'Awaiting Maya Chen']:
             self.assertIn(expected, body)
+        # CSS text-transform changes inner_text() to uppercase. Verify the
+        # semantic section headings via DOM text, scoped to the selected task,
+        # while still requiring every section to be visible and correctly named.
+        headings = self.page.locator('#task-detail').get_by_role('heading', level=3)
+        self.assertEqual(headings.all_text_contents(), [
+            'Acceptance criteria', 'Artifact', 'Deterministic receipts',
+            'Reviewer assertions', 'Human decision',
+        ])
+        for heading in headings.all():
+            self.assertTrue(heading.is_visible())
         self.assertEqual(self.page.locator('#task-list button').count(), 3)
         self.assertEqual(self.page.get_by_role('button', name=re.compile(r'^(Accept|Approve|Reject|Authorize)$')).count(), 0)
+
+    def test_actual_engine_http_board_and_live_artifact_change(self):
+        from rumbo.demo import create_demo
+        from rumbo.server import create_server
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            create_demo(root)
+            server = create_server('127.0.0.1', 0, {'mode': 'demo', 'demo_root': str(root)})
+            worker = threading.Thread(target=server.serve_forever, daemon=True)
+            worker.start()
+            try:
+                self.page.goto(f'http://127.0.0.1:{server.server_port}')
+                self.page.get_by_role('heading', name='Ship a CSV export with evidence the human can inspect', exact=True).wait_for()
+                self.assertTrue(self.page.locator('#demo').is_visible())
+                self.assertEqual(self.page.locator('#accepted-count').inner_text(), '1')
+                self.assertEqual(self.page.locator('#task-list button').count(), 6)
+
+                self.page.locator('#task-list button').filter(has_text='Keep the approved dependency baseline').click()
+                detail = self.page.locator('#task-detail').inner_text()
+                self.assertIn('package.json', detail)
+                self.assertIn('Expected: {}', detail)
+                self.assertIn('fail · baseline', detail)
+                self.assertEqual(self.page.locator('#task-detail .status').get_attribute('data-status'), 'produced')
+
+                self.page.locator('#task-list button').filter(has_text='Review export semantics').click()
+                detail = self.page.locator('#task-detail').inner_text()
+                self.assertIn('Inspect quoting and row semantics', detail)
+                self.assertIn('Assertion by demo-reviewer', detail)
+                self.assertIn('Awaiting demo-owner', detail)
+                self.assertEqual(self.page.locator('#task-detail .status').get_attribute('data-status'), 'checks_passed')
+
+                self.page.locator('#task-list button').filter(has_text='Ship the CSV export').click()
+                detail = self.page.locator('#task-detail').inner_text()
+                self.assertIn('sample.csv', detail)
+                self.assertIn('Expected: name,amount', detail)
+                self.assertIn('pass · header', detail)
+                self.assertIn('accepted · demo-owner', detail)
+                self.assertEqual(self.page.locator('#task-detail .status').get_attribute('data-status'), 'accepted')
+                screenshot_dir = os.environ.get('RUMBO_SCREENSHOT_DIR')
+                if screenshot_dir:
+                    destination = Path(screenshot_dir)
+                    destination.mkdir(parents=True, exist_ok=True)
+                    self.page.screenshot(path=str(destination / 'actual-engine-board.png'), full_page=True)
+
+                # Change the real backing artifact, then use the ordinary board
+                # refresh path. No browser state or API response is mocked here.
+                (root / 'sample.csv').write_text('Artifact changed after acceptance.\n', encoding='utf-8')
+                self.page.get_by_role('button', name='Refresh', exact=True).click()
+                self.page.wait_for_function("document.querySelector('#task-detail .status')?.dataset.status === 'stale'")
+                self.assertEqual(self.page.locator('#accepted-count').inner_text(), '0')
+                self.assertIn('Artifact bytes changed', self.page.locator('#task-detail').inner_text())
+                self.assertIn('Not current acceptance', self.page.locator('#task-detail').inner_text())
+            finally:
+                server.shutdown()
+                server.server_close()
+                worker.join()
 
     def test_filter_selection_and_copy_summary(self):
         self.open_board()

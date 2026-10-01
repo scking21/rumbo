@@ -83,15 +83,14 @@ For real browser regression checks on a machine with Playwright and Chromium:
 RUMBO_BROWSER_TESTS=1 python -m unittest discover -s tests -p test_board.py -v
 ```
 
-The five optional browser tests exercise visible rendering, selection/filtering,
+The six optional browser tests exercise visible rendering, selection/filtering,
 copying, error recovery, narrow-width overflow, hostile text, and iframe bridge
 behavior using a temporary loopback fixture server. They are off by default so
 The runtime does not acquire a browser dependency. The repository CI workflow installs pinned development-only Playwright/Chromium on a standard Ubuntu runner and executes scripts/run_tests.py --strict, which fails on any skipped test. It stores only synthetic board screenshots for one day. A CI run must be checked on its exact commit; inclusion of the workflow does not claim that it has run.
 
 ### Current environment limitations (2026-10-01)
 
-Source and Node runtime checks passed. Browser visual/layout verification remains
-unverified. Two attempted routes were unavailable:
+Source and Node runtime checks passed. Local browser execution remains unavailable; independent GitHub CI evidence is described below. Two local routes were unavailable:
 
 - Cloud browser (CUA) opening `http://127.0.0.1:8767/` returned
   `Browser Use cannot open http://127.0.0.1:8767 in tab 18. Browser reported: net::ERR_BLOCKED_BY_CLIENT`
@@ -101,7 +100,12 @@ unverified. Two attempted routes were unavailable:
   with `chrome_crashpad_handler: --database is required`
 
 No approval-reviewer denial was returned. No file/data-URL alternative was used
-because the loopback block could reflect a policy restriction. No rendered
-browser screenshot is included or claimed. Responsive CSS and accessibility
-semantics are implemented, but visual layout, keyboard flow, screen-reader
-behavior, and real-host rendering still need verification in a supported browser.
+because the loopback block could reflect a policy restriction.
+
+### Independent CI evidence
+
+The first GitHub Actions run on commit `a279ca480b6c879ee99dc60a5f2d76f240b95476` ran all five then-existing Chromium cases and saved five synthetic-fixture screenshots. Four browser cases passed; the content case found a brittle assertion because rendered `inner_text()` applies CSS uppercase to headings. The updated assertion checks exact, visible level-3 heading DOM text within the selected task instead of visual casing. Desktop and narrow fixture screenshots were inspected for readable layout and literal injection text.
+
+A sixth browser case now creates the deterministic demo with the real Engine, serves it through the actual Rumbo HTTP handler, verifies real acceptance criteria, artifacts, failed receipts and reviewer assertions, then changes a real backing artifact and verifies stale acceptance through Refresh. It saves `actual-engine-board.png`; the fixture-host bridge cases remain separate simulated-host evidence. This added path must pass on the exact updated CI commit before it is claimed as verified.
+
+Neither fixture screenshots nor real local-backend CI establish actual ChatGPT host behavior, live OAuth sign-in, a full screen-reader audit or production deployment. Those remain explicit release gates.
