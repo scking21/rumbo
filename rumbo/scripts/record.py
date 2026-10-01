@@ -101,10 +101,22 @@ def fmt_num(value):
     return "%g" % value
 
 
-def _source_text(record):
-    """Return objective quote plus each item's quote, joined by newlines."""
+def _source_text(record, check):
+    """Return objective and active referenced item quotes for this check.
+
+    Missing/null refs retain the legacy fallback to all active items; an empty
+    list selects no items. Done, rejected, and replaced history never sources a
+    current check, even when explicitly referenced.
+    """
     quotes = [record["objective"]["quote"]]
-    for item in (record.get("items") or []):
+    items = record.get("items") or []
+    replaced = {ref for item in items for ref in item.get("replaces") or []}
+    refs = check.get("refs")
+    for item in items:
+        if item["status"] in ("done", "rejected") or item["id"] in replaced:
+            continue
+        if refs is not None and item["id"] not in refs:
+            continue
         quotes.append(item["quote"])
     return "\n".join(quotes)
 
@@ -212,7 +224,7 @@ def unsourced_values(record, check):
     """Return list of strings naming each unsourced value in check.
     Assumes record is valid.
     """
-    source = _source_text(record)
+    source = _source_text(record, check)
     kind = check["kind"]
     unsourced = []
 
@@ -306,7 +318,7 @@ def user_messages(transcript_path):
     try:
         with open(transcript_path, "r", encoding="utf-8", errors="replace") as handle:
             lines = handle.readlines()
-    except OSError:
+    except (OSError, ValueError):
         return None
 
     messages = []
@@ -1057,7 +1069,11 @@ def cmd_stop_gate(args):
             parts.append("%s: check was failing and has been removed from the record" % check_id)
     transcript = hook_input.get("transcript_path") if isinstance(hook_input, dict) else None
     messages = user_messages(transcript) if isinstance(transcript, str) else None
-    if messages is not None:
+    if messages is None:
+        parts.append("transcript_path: TRANSCRIPT_UNREADABLE: cannot verify the "
+                     "record's quotes; provide a readable transcript_path from "
+                     "the harness or disclose that provenance is unverified")
+    else:
         for path in unverified_quotes(record, messages):
             parts.append("%s: UNVERIFIED: quote not found in the user's messages" % path)
 

@@ -279,12 +279,12 @@ class RecordTest(unittest.TestCase):
         self.assertEqual(code, 1)  # because checks fail
         lines = out.strip().splitlines()
         self.assertEqual(
-            lines[0], "C1: FAIL fits_window session schedule: 09:45 + 170 min ends 12:35, 5 min after 12:30"
+            lines[0], "C1: FAIL fits_window session schedule: 09:45 + 170 min ends 12:35, 5 min after 12:30 (also unsourced: start 09:45)"
         )
         self.assertEqual(
-            lines[1], "C2: FAIL before printer deadline precedes workshop: 2026-03-20 is 8 days after 2026-03-12 (also unsourced: first year 2026, second year 2026)"
+            lines[1], "C2: FAIL before printer deadline precedes workshop: 2026-03-20 is 8 days after 2026-03-12 (also unsourced: first month-day 2026-03-20, first year 2026, second year 2026)"
         )
-        self.assertEqual(lines[2], "C3: PASS within_budget budget")
+        self.assertEqual(lines[2], "C3: UNSOURCED within_budget budget: amounts 200, item_cap 300 not in the user's quoted words")
         self.assertEqual(err, "")
 
     def test_check_missing_file(self):
@@ -594,10 +594,96 @@ class RecordTest(unittest.TestCase):
         }
         with open(self.record_path, "w", encoding="utf-8") as handle:
             json.dump(record, handle, indent=2)
-        code, out, err = run_record(["stop-gate", "--record", self.record_path], input_text="{}")
+        code, out, err = run_record(["stop-gate", "--record", self.record_path],
+                                    input_text=json.dumps({"transcript_path": self._transcript(record)}))
         self.assertEqual(code, 0)
         self.assertEqual(out.strip(), "")
         self.assertEqual(err, "")
+
+    def test_check_refs_limit_sources_to_named_items_and_objective(self):
+        record_data = {
+            "version": 1,
+            "objective": {"text": "Budget", "quote": "Budget cap is $500"},
+            "items": [
+                {"id": "I1", "text": "Selected cost", "quote": "Cost is $100", "status": "commitment"},
+                {"id": "I2", "text": "Other cost", "quote": "Cost is $250", "status": "commitment"},
+            ],
+            "checks": [{"id": "C1", "kind": "within_budget", "amounts": [250],
+                        "total_cap": 500, "refs": ["I1"]}],
+        }
+        for refs, amount in ((["I1"], 250), ([], 100)):
+            with self.subTest(refs=refs):
+                record_data["checks"][0].update(refs=refs, amounts=[amount])
+                self._write(record_data)
+                code, out, err = run_record(["check", "--record", self.record_path])
+                self.assertEqual((code, err), (1, ""))
+                self.assertEqual(out.strip(), "C1: UNSOURCED within_budget: amounts %s not in the user's quoted words" % amount)
+
+    def test_inactive_items_cannot_source_checks_with_or_without_refs(self):
+        for inactive in ("rejected", "done", "replaced"):
+            for refs in (None, ["I1"]):
+                with self.subTest(inactive=inactive, refs=refs):
+                    record_data = {
+                        "version": 1,
+                        "objective": {"text": "Budget", "quote": "Budget cap is $100"},
+                        "items": [
+                            {"id": "I1", "text": "Old cost", "quote": "Cost is $60",
+                             "status": "commitment" if inactive == "replaced" else inactive},
+                            {"id": "I2", "text": "Current cost", "quote": "Cost is $90", "status": "commitment",
+                             "replaces": ["I1"] if inactive == "replaced" else []},
+                        ],
+                        "checks": [{"id": "C1", "kind": "within_budget", "amounts": [60], "total_cap": 100}],
+                    }
+                    if refs is not None:
+                        record_data["checks"][0]["refs"] = refs
+                    self._write(record_data)
+                    code, out, err = run_record(["check", "--record", self.record_path])
+                    self.assertEqual((code, err), (1, ""))
+                    self.assertIn("C1: UNSOURCED within_budget: amounts 60", out)
+
+    def test_source_scope_applies_to_times_dates_and_show(self):
+        record_data = {
+            "version": 1,
+            "objective": {"text": "Plan", "quote": "Plan the event"},
+            "items": [
+                {"id": "I1", "text": "Current plan", "quote": "Use 60 minutes on March 20", "status": "commitment"},
+                {"id": "I2", "text": "Other plan", "quote": "09:00 until 12:00 on March 12", "status": "commitment"},
+            ],
+            "checks": [
+                {"id": "C1", "kind": "fits_window", "start": "09:00", "end": "12:00", "segments_min": [60], "refs": ["I1"]},
+                {"id": "C2", "kind": "before", "first": "03-12", "second": "03-20", "refs": ["I1"]},
+            ],
+        }
+        self._write(record_data)
+        code, out, err = run_record(["check", "--record", self.record_path])
+        self.assertEqual((code, err), (1, ""))
+        self.assertIn("C1: UNSOURCED fits_window: start 09:00, end 12:00", out)
+        self.assertIn("C2: UNSOURCED before: first month-day 03-12", out)
+        code, out, err = run_record(["show", "--record", self.record_path])
+        self.assertEqual((code, err), (0, ""))
+        self.assertIn("ASSUMPTION C1: start 09:00, end 12:00", out)
+        self.assertIn("ASSUMPTION C2: first month-day 03-12", out)
+        with tempfile.TemporaryDirectory() as state:
+            result = self._gate({"transcript_path": self._transcript(record_data)},
+                                dict(os.environ, RUMBO_STATE_DIR=state))
+            self.assertIn("C1: UNSOURCED fits_window: start 09:00, end 12:00", result["reason"])
+            self.assertIn("C2: UNSOURCED before: first month-day 03-12", result["reason"])
+            self.assertNotIn("TRANSCRIPT_UNREADABLE", result["reason"])
+
+    def test_active_sources_work_with_refs_and_legacy_fallback(self):
+        record_data = {
+            "version": 1,
+            "objective": {"text": "Budget", "quote": "Budget cap is $500"},
+            "items": [{"id": "I1", "text": "Cost", "quote": "Cost is $100", "status": "draft"}],
+            "checks": [{"id": "C1", "kind": "within_budget", "amounts": [100], "total_cap": 500}],
+        }
+        for refs in (None, ["I1"]):
+            with self.subTest(refs=refs):
+                if refs is not None:
+                    record_data["checks"][0]["refs"] = refs
+                self._write(record_data)
+                code, out, err = run_record(["check", "--record", self.record_path])
+                self.assertEqual((code, out.strip(), err), (0, "C1: PASS within_budget", ""))
 
     # New tests as per ticket T5c
     def test_fits_window_unsourced_segment_15(self):
@@ -698,7 +784,8 @@ class RecordTest(unittest.TestCase):
         self.assertEqual(err, "")
 
         # Test stop-gate silent
-        code, out, err = run_record(["stop-gate", "--record", self.record_path], input_text="{}")
+        code, out, err = run_record(["stop-gate", "--record", self.record_path],
+                                    input_text=json.dumps({"transcript_path": self._transcript(record)}))
         self.assertEqual(code, 0)
         self.assertEqual(out.strip(), "")
         self.assertEqual(err, "")
@@ -1225,6 +1312,48 @@ class RecordTest(unittest.TestCase):
         with open(self.record_path, "w", encoding="utf-8") as handle:
             handle.write(record_or_text if isinstance(record_or_text, str) else json.dumps(record_or_text))
 
+    def _transcript(self, record_data):
+        path = os.path.join(self.dir, "human-transcript.jsonl")
+        with open(path, "w", encoding="utf-8") as handle:
+            for entry in [record_data["objective"]] + (record_data.get("items") or []):
+                handle.write(json.dumps({"type": "user", "message": {"content": entry["quote"]}}) + "\n")
+        return path
+
+    def test_stop_gate_unavailable_transcript_is_bounded_and_recovers(self):
+        record_data = {"version": 1, "objective": {"text": "Plan", "quote": "Plan the event"},
+                       "items": [], "checks": []}
+        self._write(record_data)
+        readable = self._transcript(record_data)
+        unavailable = ({}, {"transcript_path": None}, {"transcript_path": 42},
+                       {"transcript_path": ""}, {"transcript_path": self.record_path + ".missing"},
+                       {"transcript_path": self.dir}, {"transcript_path": "bad\x00path"})
+        with tempfile.TemporaryDirectory() as state:
+            env = dict(os.environ, RUMBO_STATE_DIR=state)
+            for index, payload in enumerate(unavailable):
+                with self.subTest(payload=payload):
+                    session = "unavailable-%d" % index
+                    hook = dict(payload, session_id=session)
+                    for call in range(3):
+                        result = self._gate(dict(hook, stop_hook_active=call > 0), env)
+                        self.assertIsNotNone(result)
+                        self.assertEqual(result["decision"], "block")
+                        self.assertIn("TRANSCRIPT_UNREADABLE", result["reason"])
+                        self.assertIn("cannot verify", result["reason"])
+                    self.assertIsNone(self._gate(dict(hook, stop_hook_active=True), env))
+                    self.assertIsNone(self._gate({"session_id": session, "transcript_path": readable}, env))
+                    self.assertFalse(os.path.exists(marker(state, session, ".blocks")))
+                    self.assertIsNotNone(self._gate(hook, env))
+
+    def test_stop_gate_missing_transcript_without_session_uses_harness_guard(self):
+        self._write({"version": 1, "objective": {"text": "Plan", "quote": "Plan the event"},
+                     "items": [], "checks": []})
+        with tempfile.TemporaryDirectory() as state:
+            env = dict(os.environ, RUMBO_STATE_DIR=state)
+            result = self._gate({}, env)
+            self.assertIsNotNone(result)
+            self.assertIn("TRANSCRIPT_UNREADABLE", result["reason"])
+            self.assertIsNone(self._gate({"stop_hook_active": True}, env))
+
     def test_stop_gate_reports_a_failing_check_that_was_deleted(self):
         record = self.workshop_record()
         self._write(record)
@@ -1250,8 +1379,9 @@ class RecordTest(unittest.TestCase):
                     check["start"] = "09:00"
                 if check["id"] == "C2":
                     check["first"], check["second"] = "03-12", "03-20"
+                check["refs"] = {"C1": ["I1", "I3"], "C2": ["I4"], "C3": ["I5"]}[check["id"]]
             self._write(record)
-            self.assertIsNone(self._gate({"session_id": "s1"}, env))
+            self.assertIsNone(self._gate({"session_id": "s1", "transcript_path": self._transcript(record)}, env))
             self.assertFalse(os.path.exists(marker(state, "s1", ".blocks")))
             self.assertFalse(os.path.exists(marker(state, "s1", ".failed")))
 
@@ -1266,8 +1396,9 @@ class RecordTest(unittest.TestCase):
             reason = self._gate({"session_id": "s1", "transcript_path": fixture}, env)["reason"]
             self.assertIn("objective.quote: UNVERIFIED", reason)
             self.assertNotIn("items[0].quote", reason)
-            self.assertIsNone(self._gate({"session_id": "s2"}, env))
-            self.assertIsNone(self._gate({"session_id": "s3", "transcript_path": "/nonexistent.jsonl"}, env))
+            self.assertIn("TRANSCRIPT_UNREADABLE", self._gate({"session_id": "s2"}, env)["reason"])
+            self.assertIn("TRANSCRIPT_UNREADABLE",
+                          self._gate({"session_id": "s3", "transcript_path": "/nonexistent.jsonl"}, env)["reason"])
 
     def test_stop_gate_fails_closed_on_a_broken_record(self):
         with tempfile.TemporaryDirectory() as state:

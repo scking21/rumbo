@@ -1,0 +1,26 @@
+{
+  "name": "rumbo",
+  "version": "0.3.0",
+  "description": "Track agreed work, artifact revisions and acceptance evidence.",
+  "author": {
+    "name": "Corby King"
+  },
+  "license": "MIT",
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Rumbo",
+    "shortDescription": "Keep work on its agreed course",
+    "developerName": "Corby King",
+    "category": "Productivity",
+    "composerIcon": "./assets/icon.svg",
+    "logo": "./assets/icon.svg",
+    "longDescription": "Inspect versioned work contracts, claim bounded tasks, register exact artifact revisions, review evidence and request human decisions. This local candidate has not been submitted or approved.",
+    "defaultPrompt": [
+      "Show my project acceptance board"
+    ],
+    "capabilities": [
+      "Interactive",
+      "Write"
+    ]
+  }
+}

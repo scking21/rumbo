@@ -1,40 +1,25 @@
-# Rumbo privacy statement
+# Rumbo privacy information
 
-Rumbo is a Claude Code plugin that runs entirely on your machine. It makes no direct network requests and no telemetry submissions, and sends nothing to its author. Its hook output does enter your Claude conversation, where it is processed by the Claude service you have configured (see [What reaches the model](#what-reaches-the-model)).
+This file describes the local 0.3 review candidate. A public hosted service needs its operator's reviewed policy, legal identity, contact, retention choices and approved URL before launch. This is not a claim that such a service exists.
 
-## What it stores
+## Data stored locally
 
-- **The decision record**, `.rumbo/record.json` in your project by default (the command-line tool also accepts another path with `--record`). It holds the objective, each decision with your exact words (`quote`), and the checks the agent writes. These can include anything you typed, such as names, dates or amounts. It stays until you delete it. If you share the project, the record goes with it unless you exclude it. Adding `.rumbo/` to `.gitignore` keeps it out of future git commits only: it does not remove a record that is already tracked, and it does not apply to other ways of sharing a folder (zip files, synced drives, backups).
+The new engine stores versioned contracts, original request text, constraints, task claims, actor identifiers, timestamps, relative artifact paths, SHA-256 digests, acceptance criteria, reviewer assertions, decision questions and human decisions in the selected project's `.rumbo/state.sqlite3`. It reads registered project files to hash them and run explicitly configured checks without duplicating those files. When you explicitly upload text through `rumbo_ingest_artifact`, it stores the entire received UTF-8 content in `.rumbo/artifacts/` under a content-addressed filename. Uploads are limited to 128 KiB each and 64 MiB per project. `rumbo_read_artifact` returns up to 128 KiB of current artifact text to the authenticated connected host for review. Criteria or free-text comments may themselves contain sensitive text; do not include secrets.
 
-  `init` gives a limited warning: it reads only the `.gitignore` in the directory above the record's folder (for the default `.rumbo/record.json`, your project's top-level `.gitignore`) and looks for a line that is exactly `.rumbo` or `.rumbo/`. It does not read other ignore files or patterns, and for a record saved elsewhere with `--record` it does not tell you whether that record is excluded. Check that yourself.
-- **Per-session state files** in your system's temporary directory under `rumbo/`, or in `$RUMBO_STATE_DIR` if you set it. Each file name is built from the Claude Code session id. They hold:
-  - `.nudged` / `.enforced`: the path of the record file the planning nudge pointed to;
-  - `.blocks`: how many times in a row the Stop hook has blocked (reset when the record passes);
-  - `.failed`: the ids of checks that were failing, as written in the record by the agent. Check ids are usually short labels such as `C1`, but they can contain any text the agent chose.
+The Claude adapter separately uses `.rumbo/record.json` and reads a host-provided compatible transcript for lexical quote verification. Per-session nudge/block markers live under `RUMBO_STATE_DIR` or the system temporary directory's `rumbo` folder. Neither format silently migrates to the other.
 
-## What it reads
+## Network and recipients
 
-- The decision record, and the `.gitignore` described above (only when `init` runs).
-- Its own per-session state files, to enforce the nudge once and to limit how many times it blocks.
-- **Claude Code's own transcript of the current session**, at the path Claude Code passes to the Stop hook (`transcript_path`), to check that each quote in the record matches something you actually wrote. It is read in place and never copied or stored.
-- Hook input from Claude Code:
-  - your prompt text, only to decide whether to show the planning nudge (it is not stored);
-  - the session id, which names the per-session state files above;
-  - `stop_hook_active`, which Claude Code sets when a Stop hook has already blocked, and which Rumbo uses to avoid blocking in a loop.
-- A transcript file you name yourself, if you run `record.py check --transcript <path>` by hand.
+The deterministic local core, local CLI, demo and SQLite state have no telemetry and make no network requests. When the HTTP resource server is configured for OAuth, it sends the presented access token to its explicitly configured authorization server's HTTPS introspection endpoint, using an existing operator-supplied introspection credential. It validates the returned identity and scopes and maps them to a server-configured project. No model or analytics service is called by Rumbo.
 
-## What reaches the model
+If you connect an AI host, tool outputs, project text, criteria, summaries and UI data may be processed by that host under its own terms. The existing Claude hooks inject record summaries and Stop reasons into your Claude conversation. The remote MCP deployment operator can access its configured project roots and must supply a policy appropriate to that hosting.
 
-When a valid record exists, the `UserPromptSubmit` hook adds a summary of its text (the objective and the wording and status of selected active decisions) and its checks to the conversation each time you send a prompt. The `quote` fields are not included, but the summary may still contain your words or other sensitive information. When there is no record, it may add a planning nudge instead: a few lines that include the path of the plugin's script and of the record it suggests creating. The Stop hook can add a reason when it blocks, naming failing checks and record entries. That text becomes part of your Claude conversation and is handled by the Claude service you use, under the terms that already apply to it. Rumbo itself sends it nowhere else.
+## Owner browser login
 
-## Removing it
+The separate owner portal exchanges an authorization code and PKCE verifier with the configured issuer token endpoint, then introspects the returned access token using the configured existing owner-client credential. It sets Secure, HttpOnly, SameSite=Lax login/session cookies. Pending login state lasts at most 10 minutes; sessions last at most 30 minutes and never longer than the verified token expiry. Session/account mappings and CSRF data are held only in process memory. Access tokens, refresh tokens, authorization codes and secrets are not persisted in project state or default logs. Restart/sign-out clears the applicable session; provider-side revocation may take up to the remaining session lifetime to affect an already established owner session.
 
-- Delete `.rumbo/` from your project, and any record you created elsewhere with `--record`.
-- Delete the `rumbo/` folder in your temporary directory, or your `$RUMBO_STATE_DIR` if you set one.
-- Uninstall the plugin from the `/plugin` menu in Claude Code.
+## Retention and control
 
-Deleting these files does not remove text that already entered your Claude conversation history, or copies of the record you have already shared or committed.
+Rumbo does not automatically delete, send, publish, replicate or back up project state. Local records remain until the operator removes them. Stop the service before deleting the chosen `.rumbo` directory, and preserve any records needed first. Removing it deletes coordination history and every uploaded artifact stored inside it. Registered project files outside `.rumbo` remain unchanged. Remove legacy temporary markers separately if desired. Files copied to hosts, backups or other services follow their retention rules.
 
-## Contact
-
-Questions or problems: https://github.com/scking21/rumbo/issues
+Add `.rumbo/` to `.gitignore` before sharing a project. Do not publish live databases, server configuration containing credentials, private transcripts or reviewer account passwords. Release archives exclude live state and credentials; included demos are explicitly synthetic. No accounts, payment information, credentials or reviewer logins were created in preparing this candidate.
