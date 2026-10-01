@@ -310,6 +310,8 @@ class OwnerPortalTests(unittest.TestCase):
         duplicate = urlencode(dict(csrf=csrf, action='create_contract', arguments=json.dumps(contract()), confirm='yes')) + '&csrf=other'
         self.assertEqual(self.request('POST', '/owner/action', duplicate, cookie, {'Origin': 'https://rumbo.example.com', 'Content-Type': 'application/x-www-form-urlencoded'})[0], 400)
         self.assertEqual(self.action(cookie, csrf, 'delete_project', {})[0], 400)
+        nested = urlencode(dict(csrf=csrf, action='create_contract', arguments='['*65+'0'+']'*65, confirm='yes'))
+        self.assertEqual(self.request('POST', '/owner/action', nested, cookie, {'Origin': 'https://rumbo.example.com', 'Content-Type': 'application/x-www-form-urlencoded'})[0], 400)
 
     def test_authenticated_artifact_preview_is_exact_and_escaped(self):
         Engine(self.root, 'owner', 'human').execute('create_contract', contract())

@@ -7,6 +7,7 @@ import sys
 import tempfile
 import threading
 import unittest
+from unittest.mock import patch
 import urllib.error
 import urllib.request
 
@@ -69,6 +70,14 @@ class ProtocolTests(unittest.TestCase):
         proc=subprocess.run([sys.executable,'-m','rumbo','--root',str(self.root),'mcp'],input='\n'.join(json.dumps(v) for v in lines)+'\n',text=True,capture_output=True,timeout=5)
         self.assertEqual(proc.returncode,0,proc.stderr)
         self.assertEqual(json.loads(proc.stdout.splitlines()[-1])['id'],2)
+
+    def test_deep_json_does_not_terminate_stdio(self):
+        raw='['*65+'0'+']'*65+'\n'+json.dumps(dict(jsonrpc='2.0',id=2,method='ping'))+'\n'
+        proc=subprocess.run([sys.executable,'-m','rumbo','--root',str(self.root),'mcp'],input=raw,text=True,capture_output=True,timeout=5)
+        self.assertEqual(proc.returncode,0,proc.stderr)
+        output=[json.loads(line) for line in proc.stdout.splitlines()]
+        self.assertEqual(output[0]['error']['code'],-32700)
+        self.assertEqual(output[1]['id'],2)
 
     def test_ingest_protocol_is_bounded_and_byte_scoped(self):
         claim=self.request('tools/call',dict(name='rumbo_claim_task',arguments=dict(task_id='export',contract_revision=1,lease_seconds=60)))
@@ -254,6 +263,34 @@ class OAuthTests(unittest.TestCase):
         config=self.config();config['principals'][0]['role']='human'
         with self.assertRaises(ValueError):
             OAuthVerifier(config)
+
+
+class SafeJsonTests(unittest.TestCase):
+    def test_malformed_json_stays_rejected(self):
+        from rumbo.protocol import safe_json
+        for raw in ['[}', '][', '[', '{"x":"unterminated}', '{"x":1,}', '[1] garbage', '{"x":1,"x":2}', '[NaN]']:
+            with self.subTest(raw=raw),self.assertRaises(ValueError):safe_json(raw)
+
+    def test_depth_limit_is_explicit_not_python_recursion_limit(self):
+        from rumbo.protocol import safe_json
+        with self.assertRaisesRegex(ValueError, 'nesting'):
+            safe_json('[' * 65 + '0' + ']' * 65)
+        self.assertIsInstance(safe_json('[' * 64 + '0' + ']' * 64), list)
+
+    def test_rejects_depth_before_calling_json_decoder(self):
+        from rumbo.protocol import safe_json
+        with patch('rumbo.protocol.json.loads', side_effect=AssertionError('Decoder must not see deep data')):
+            with self.assertRaisesRegex(ValueError, 'nesting'):
+                safe_json(b'[' * 15000 + b']' * 15000)
+
+    def test_depth_scanner_respects_strings_escapes_and_byte_encodings(self):
+        from rumbo.protocol import safe_json
+        value={'text':'[' * 100 + '\\"{}' + ']' * 100, 'next':[1]}
+        raw=json.dumps(value)
+        for encoded in [raw,raw.encode(),raw.encode('utf-16'),raw.encode('utf-32')]:
+            self.assertEqual(safe_json(encoded),value)
+        for encoded in [('['*65+'0'+']'*65).encode('utf-16'),('{"x":'*65+'0'+'}'*65).encode()]:
+            with self.assertRaisesRegex(ValueError, 'nesting'):safe_json(encoded)
 
 
 if __name__=='__main__': unittest.main()

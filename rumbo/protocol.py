@@ -8,6 +8,7 @@ from .core import RumboError, fields
 UI_URI = 'ui://rumbo/project-board/v1.html'
 VERSIONS = ('2025-11-25', '2025-06-18', '2024-11-05')
 MAX_MESSAGE = 1024 * 1024
+MAX_JSON_DEPTH = 64
 
 
 def prop(kind, description, **extra):
@@ -47,6 +48,25 @@ def rpc_error(id, code, message):
 
 
 def safe_json(raw):
+    # Bound structure before the decoder allocates nested objects. CPython's
+    # recursion behavior is an implementation detail, not a protocol limit.
+    if isinstance(raw, (bytes, bytearray)):
+        raw = raw.decode(json.detect_encoding(raw), 'surrogatepass')
+    if not isinstance(raw, str):
+        raise TypeError('JSON input must be text or bytes')
+    stack=[]; quoted=False; escaped=False
+    for char in raw:
+        if quoted:
+            if escaped:escaped=False
+            elif char=='\\':escaped=True
+            elif char=='"':quoted=False
+        elif char=='"':quoted=True
+        elif char in '[{':
+            stack.append(char)
+            if len(stack)>MAX_JSON_DEPTH:raise ValueError('JSON nesting exceeds limit')
+        elif char in ']}':
+            if not stack or stack.pop()!=('[' if char==']' else '{'):
+                raise ValueError('Malformed JSON structure')
     def duplicate(pairs):
         result={}
         for key,value in pairs:

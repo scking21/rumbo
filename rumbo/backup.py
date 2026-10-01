@@ -28,6 +28,7 @@ BACKUP_TIMEOUT_SECONDS = 30
 DATABASE = '.rumbo/state.sqlite3'
 MANIFEST = 'manifest.json'
 BLOB_PREFIX = '.rumbo/artifacts/'
+SYSTEM_ALIASES = {Path('/var'): Path('/private/var'), Path('/tmp'): Path('/private/tmp')}
 DIGEST = re.compile(r'[a-f0-9]{64}\Z')
 NOTICE = ('Sensitive, unencrypted operator backup. Includes coordination history and referenced uploaded text only. '
           'External registered project files and credentials/configuration are excluded; external-file references '
@@ -39,8 +40,29 @@ def _fail(code, message):
 
 
 def _path(value):
-    """Reject symlinks in every existing component, without resolving through them."""
-    path = Path(os.path.abspath(os.fspath(value)))
+    """Canonicalize only trusted macOS system ancestors; reject other links."""
+    supplied = Path(value)
+    if '..' in supplied.parts:
+        _fail('PATH_UNSAFE', 'Parent traversal is not supported in backup paths')
+    path = Path(os.path.abspath(os.fspath(supplied)))
+    if sys.platform == 'darwin':
+        for alias, target in SYSTEM_ALIASES.items():
+            # Never grant a symlink leaf an exception, even for a system name.
+            if alias not in path.parents:
+                continue
+            try:
+                info = alias.lstat()
+                if not stat.S_ISLNK(info.st_mode):
+                    continue
+                actual = Path(os.path.abspath(os.path.join(str(alias.parent), os.readlink(alias))))
+                if info.st_uid != 0 or actual != target:
+                    _fail('PATH_UNSAFE', 'Unexpected system path alias')
+                target_info = target.lstat()
+                if target_info.st_uid != 0 or not stat.S_ISDIR(target_info.st_mode):
+                    _fail('PATH_UNSAFE', 'Untrusted system alias target')
+                path = target / path.relative_to(alias)
+            except FileNotFoundError:
+                continue
     for component in reversed((path,) + tuple(path.parents)):
         try:
             if stat.S_ISLNK(component.lstat().st_mode):

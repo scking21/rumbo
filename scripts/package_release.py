@@ -134,8 +134,11 @@ def build_source(root,target):
         for path in (root/dirname).rglob('*'):
             relative=path.relative_to(root).as_posix()
             if path.is_symlink():raise ValueError('Symlink packaging forbidden')
+            parts=path.relative_to(root).parts
+            if any(part.lower() in {'.env','credentials.json','secrets.json','.netrc','.npmrc','.pypirc','.aws','.ssh','.gnupg'} or part.lower().startswith('.env.') for part in parts):
+                raise ValueError('Potential credential input is forbidden in source packages: '+relative)
             if path.is_file() and not any(part in ('__pycache__','.rumbo','superpowers') for part in path.parts) and path.suffix.lower() not in ('.pyc','.sqlite3','.sqlite','.db','.zip','.tar','.gz','.pem','.key'):
-                if dirname=='deploy' and path.name not in {'Dockerfile','compose.yml','nginx.conf.template','render.py','entrypoint.py','healthcheck.py','server-config.template.json','ci_smoke.py','render.yaml.template'}:
+                if dirname=='deploy' and path.relative_to(root/'deploy').as_posix() not in {'Dockerfile','compose.yml','nginx.conf.template','render.py','entrypoint.py','healthcheck.py','server-config.template.json','ci_smoke.py','render.yaml.template'}:
                     raise ValueError('Unexpected deployment input; never package live configuration or credentials: '+relative)
                 files[relative]=path.read_bytes()
     return write_zip(target,files,prefix='rumbo-0.3.0-source')

@@ -139,7 +139,7 @@ leave private `.rumbo-backup-*` or `.rumbo-restore-*` staging directories beside
 the destination. Confirm no backup/restore process is using one before an operator
 removes it. Never promote an unfinished staging directory manually.
 
-Symlink paths and nonregular files are refused. This is designed for trusted,
+Symlink leaves, arbitrary symlink ancestors, parent traversal and nonregular files are refused. On macOS only, the root-owned system ancestors `/var` → `/private/var` and `/tmp` → `/private/tmp` are canonicalized when their exact target is a root-owned real directory; all remaining components are still checked without following links. This supports macOS temporary paths without accepting user-controlled aliases. This is designed for trusted,
 operator-controlled local paths, not a sandbox against a local adversary replacing
 parent directories during an operation. Keep source and destination parents
 private to the service operator.

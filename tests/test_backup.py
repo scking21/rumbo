@@ -197,6 +197,48 @@ class BackupTests(unittest.TestCase):
         outside = self.base / 'outside'; outside.write_bytes(blob.read_bytes()); blob.unlink(); blob.symlink_to(outside)
         with self.assertRaises(RumboError): self.backup()
 
+    def test_trusted_macos_system_ancestor_is_canonicalized(self):
+        api=self.api();base=self.base.resolve();alias=base/'system-alias';alias.symlink_to(base, target_is_directory=True)
+        original=Path.lstat
+        def root_owned(path):
+            result=original(path)
+            if path in (alias,base):
+                values=list(result);values[4]=0
+                return os.stat_result(values)
+            return result
+        with mock.patch.object(api.sys,'platform','darwin'), mock.patch.dict(api.SYSTEM_ALIASES,{alias:base},clear=True), mock.patch.object(Path,'lstat',root_owned):
+            api.backup_project(alias/'source',alias/'backup.zip')
+            api.restore_project(alias/'backup.zip',alias/'restored')
+            self.assertEqual(Engine(self.destination,'reader','viewer').snapshot()['project_id'],'backup-test')
+            with self.assertRaises(RumboError):api._path(alias)
+            untrusted=self.base/'user-alias';untrusted.symlink_to(self.root,target_is_directory=True)
+            with self.assertRaises(RumboError):api._path(alias/'user-alias'/'file')
+
+    def test_system_alias_requires_platform_owner_and_exact_target(self):
+        api=self.api();base=self.base.resolve();alias=base/'system-alias';alias.symlink_to(base,target_is_directory=True)
+        original=Path.lstat
+        def user_owned(path):
+            result=original(path)
+            if path==alias:
+                values=list(result);values[4]=1000
+                return os.stat_result(values)
+            return result
+        with mock.patch.dict(api.SYSTEM_ALIASES,{alias:base},clear=True):
+            with mock.patch.object(api.sys,'platform','linux'),self.assertRaises(RumboError):api._path(alias/'source')
+            with mock.patch.object(api.sys,'platform','darwin'),mock.patch.object(Path,'lstat',user_owned),self.assertRaises(RumboError):api._path(alias/'source')
+        def root_alias_untrusted_target(path):
+            result=original(path)
+            if path in (alias,base):
+                values=list(result);values[4]=0 if path==alias else 1000
+                return os.stat_result(values)
+            return result
+        with mock.patch.object(Path,'lstat',root_alias_untrusted_target),mock.patch.object(api.sys,'platform','darwin'):
+            with mock.patch.dict(api.SYSTEM_ALIASES,{alias:base/'wrong'},clear=True),self.assertRaisesRegex(RumboError,'Unexpected system path alias'):api._path(alias/'source')
+            with mock.patch.dict(api.SYSTEM_ALIASES,{alias:base},clear=True),self.assertRaisesRegex(RumboError,'Untrusted system alias target'):api._path(alias/'source')
+
+    def test_backup_paths_reject_parent_traversal_before_normalization(self):
+        with self.assertRaises(RumboError):self.api()._path(self.base/'missing'/'..'/'source')
+
     def test_restore_rejects_archive_and_destination_symlinks(self):
         self.backup()
         alias = self.base / 'alias.zip'; alias.symlink_to(self.archive)

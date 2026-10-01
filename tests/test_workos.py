@@ -119,6 +119,8 @@ class WorkOSTests(unittest.TestCase):
         for _ in range(2):
             with self.assertRaises(ValueError):verifier.verify_access(self.token())
 
+    @unittest.skipUnless(importlib.util.find_spec('authlib') and importlib.util.find_spec('requests'),
+                         'Install requirements-authkit.txt for owner HTTP integration tests')
     def test_http_owner_pkce_nonce_and_mcp_use_separate_verified_credentials(self):
         import http.client, io, re, threading
         from http.cookies import SimpleCookie

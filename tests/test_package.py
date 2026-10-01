@@ -86,6 +86,19 @@ class PackageTests(unittest.TestCase):
             (folder/'deploy/server.json').write_text('{"synthetic_private_config":true}')
             with self.assertRaises(ValueError):build_source(folder,target)
 
+    def test_source_archive_rejects_secret_names_and_nested_deployment_inputs(self):
+        from scripts.package_release import build_source
+        for name in ['docs/.env', 'docs/.env.production', 'docs/credentials.json',
+                     'rumbo/secrets.json', 'scripts/.netrc', 'scripts/.npmrc',
+                     'tests/.pypirc', 'docs/.aws/config', 'docs/.ssh/config',
+                     'deploy/live/server-config.template.json']:
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as root:
+                folder=Path(root); planted=folder/name
+                planted.parent.mkdir(parents=True);planted.write_text('synthetic private input')
+                target=folder/'source.zip'
+                with self.assertRaises(ValueError):build_source(folder,target)
+                self.assertFalse(target.exists())
+
     def test_portable_manifests_validate_against_pinned_official_schemas(self):
         try:import jsonschema
         except ImportError:self.skipTest('Optional jsonschema developer tool not installed')
