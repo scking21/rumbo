@@ -221,9 +221,10 @@ class BoardRuntimeTests(unittest.TestCase):
             self.assertNotIn('Unrecognized evidence',detail)
 
 try:
-    from playwright.sync_api import sync_playwright
+    from playwright.sync_api import expect, sync_playwright
 except ImportError:
     sync_playwright = None
+    expect = None
 
 @unittest.skipUnless(os.environ.get('RUMBO_BROWSER_TESTS') == '1',
                      'optional browser suite: set RUMBO_BROWSER_TESTS=1 with Playwright/Chromium installed')
@@ -357,7 +358,7 @@ class BoardBrowserTests(unittest.TestCase):
                 # refresh path. No browser state or API response is mocked here.
                 (root / 'sample.csv').write_text('Artifact changed after acceptance.\n', encoding='utf-8')
                 self.page.get_by_role('button', name='Refresh', exact=True).click()
-                self.page.wait_for_function("document.querySelector('#task-detail .status')?.dataset.status === 'stale'")
+                expect(self.page.locator('#task-detail .status')).to_have_attribute('data-status', 'stale')
                 self.assertEqual(self.page.locator('#accepted-count').inner_text(), '0')
                 self.assertIn('Artifact bytes changed', self.page.locator('#task-detail').inner_text())
                 self.assertIn('Not current acceptance', self.page.locator('#task-detail').inner_text())
