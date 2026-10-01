@@ -1,0 +1,73 @@
+# Template requires existing approved files/roots. It never creates credentials.
+services:
+  app:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    user: '10001:10001'
+    read_only: true
+    init: true
+    restart: unless-stopped
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    pids_limit: 96
+    mem_limit: 768m
+    cpus: 1.0
+    tmpfs: [/tmp:size=32m,mode=1777]
+    environment:
+      RUMBO_CONFIG: /etc/rumbo/server.json
+      RUMBO_INTROSPECTION_SECRET_FILE: /run/secrets/mcp_client_secret
+      RUMBO_OWNER_CLIENT_SECRET_FILE: /run/secrets/owner_client_secret
+    secrets: [mcp_client_secret, owner_client_secret]
+    volumes:
+      - type: bind
+        source: ${RUMBO_CONFIG_FILE:?Existing approved server config required}
+        target: /etc/rumbo/server.json
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: ${RUMBO_PROJECTS_DIR:?Existing persistent project directory required}
+        target: /var/lib/rumbo/projects
+        bind: {create_host_path: false}
+    networks: [backend, egress]
+  proxy:
+    image: nginx:1.28-alpine
+    user: '101:101'
+    read_only: true
+    restart: unless-stopped
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    pids_limit: 32
+    mem_limit: 128m
+    cpus: 0.5
+    tmpfs: [/tmp:size=32m,mode=1777]
+    entrypoint: [nginx, -g, 'daemon off;']
+    depends_on:
+      app: {condition: service_healthy}
+    ports: ['443:8443']
+    volumes:
+      - type: bind
+        source: ${RUMBO_NGINX_CONFIG:?Rendered approved proxy config required}
+        target: /etc/nginx/nginx.conf
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: ${RUMBO_TLS_DIR:?Existing approved certificate directory required}
+        target: /run/tls
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: ${RUMBO_CHALLENGE_DIR:?Existing domain challenge directory required}
+        target: /run/challenge
+        read_only: true
+        bind: {create_host_path: false}
+    networks: [backend, edge]
+networks:
+  backend: {internal: true}
+  egress: {}
+  edge: {}
+secrets:
+  mcp_client_secret:
+    file: ${RUMBO_MCP_SECRET_FILE:?Existing approved MCP client secret file required}
+  owner_client_secret:
+    file: ${RUMBO_OWNER_SECRET_FILE:?Existing approved owner client secret file required}

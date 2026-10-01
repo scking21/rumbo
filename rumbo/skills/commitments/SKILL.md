@@ -16,7 +16,7 @@ miss a scheduling conflict. The record is a memory aid, nothing more.
 - `validate` — print `RECORD_OK`, or one fault line per problem.
 - `check` — validate, then print `PASS`/`FAIL` per check; exit 1 if any check fails.
 - `show [--max-chars N]` — compact summary; silent when no record exists.
-- `stop-gate` — read the Stop hook input on stdin; block once when checks fail.
+- `stop-gate` — read the Stop hook input on stdin; block up to three times per session while checks or provenance remain unresolved.
 - Exit codes: 0 clean, 1 content problem, 2 tool or I/O problem.
 
 ## When to start
@@ -57,6 +57,12 @@ draft decided.
 
 A check's values must come from the user's quoted words. If you must assume a value (a year, a shortened break), leave it visible (`check` shows it as UNSOURCED) and tell the user plainly that it is your assumption. Never change a value to make a check pass.
 
+List the supporting item ids in each check's `refs`. Only those items' quotes
+and the objective quote source the check; `done`, `rejected`, and replaced items
+cannot source it. Missing or null `refs` falls back to all active items for legacy
+records, while `refs: []` means only the objective. Include every supporting item
+explicitly so unrelated numbers cannot accidentally make an assumption look sourced.
+
 Add items and checks by editing the JSON directly, then run `validate`:
 
 ```json
@@ -92,8 +98,11 @@ immediately; the user's correction always wins over the record.
 ## Stopping
 
 The Stop hook blocks, up to three times per session, while a check fails, a value
-is unsourced, a quote is not found in the user's messages, a failing check was
-deleted, or the record is unreadable. Resolve each conflict or disclose it, update
+is unsourced, a quote is not found in the user's messages, the harness transcript
+is missing or unreadable, a failing check was deleted, or the record is unreadable.
+An unavailable transcript is unverified provenance, not a clean result; disclose
+it if a readable harness transcript cannot be supplied. Never invent transcript
+evidence. Resolve each conflict or disclose it, update
 the record, then finish. Never delete or weaken a check to get past the gate, and
 copy quotes exactly from the user's messages or they will be reported as unverified.
 

@@ -3,3 +3,12 @@ __pycache__/
 *.pyc
 .DS_Store
 .rumbo/
+logs/
+dist/
+docs/superpowers/
+*.egg-info/
+build/
+.env
+.env.*
+qa-artifacts/
+.venv/
