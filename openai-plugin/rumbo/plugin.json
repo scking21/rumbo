@@ -18,7 +18,7 @@
         "capabilities": ["Interactive", "Write"],
         "composerIcon": "./assets/icon.svg",
         "logo": "./assets/icon.svg",
-        "brandColor": "#C0F46F",
+        "brandColor": "#237A4B",
         "defaultPrompt": ["Show my project's acceptance board", "What evidence is missing before acceptance?", "Which work became stale after the last change?"]
       },
       "publication": {"release_notes": "0.3.0 local review candidate: versioned contracts, expiring claims, artifact-bound evidence, human-owned decisions, MCP transports and a read-only acceptance board. Public deployment and in-host review are not yet verified."}

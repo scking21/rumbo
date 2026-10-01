@@ -1,0 +1,3 @@
+# Optional WorkOS AuthKit Connect adapter. Owner login requires Python 3.10+.
+-r requirements-owner.txt
+PyJWT[crypto]==2.15.1

@@ -4,6 +4,8 @@ Rumbo includes a separate, authenticated `/owner` browser workspace. A mapped ac
 
 This is an implemented, locally tested workflow. It is **not** proof of live OAuth-provider compatibility, public deployment, automatic signup, OpenAI submission or publication. Account creation and workspace provisioning remain operator-managed. OAuth authenticates an account; it does not prove physical-human presence. An agent using the owner's browser is still subject to the owner's confirmation policy.
 
+The instructions below describe the default generic OAuth profile. The optional [WorkOS Connect profile](WORKOS.md) adds fixed-algorithm JWT verification, body-authenticated token/introspection requests and a nonce-bound ID token with separate predefined clients. Its exact scope and claim rules differ deliberately; do not relax either profile to make a login succeed.
+
 ## Install and configure
 
 The engine, stdio transport and MCP service remain standard-library-only. The browser owner flow requires Python 3.10+ (tested 3.12) and the maintained Authlib OAuth client and Requests:

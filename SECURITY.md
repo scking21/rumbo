@@ -16,7 +16,7 @@ SQLite transactions serialize claims and mutations. Every read replays and verif
 
 ## HTTP/OAuth profile
 
-Production mode is an OAuth protected resource; the external authorization server owns login, consent, authorization-code+PKCE, client registration and token issuance. Introspection is authenticated using an operator-supplied existing credential from an environment variable; credentials are never generated. Introspection must return `active`, `iss`, `aud`, `sub`, `scope`, and `exp`; Rumbo also checks `nbf` when present. Audience must match the configured /mcp resource. Token signature checks, if applicable, belong to the trusted authorization server during introspection. Rumbo does not locally validate JWTs or accept unsigned client claims.
+Production mode is an OAuth protected resource; the external authorization server owns login, consent, authorization-code+PKCE, client registration and token issuance. Introspection is authenticated using an operator-supplied existing credential from an environment variable; credentials are never generated. In the generic profile, introspection must return `active`, `iss`, `aud`, `sub`, `scope`, and `exp`; Rumbo also checks `nbf` when present. The WorkOS profile instead obtains scope only from a signature-verified JWT and requires independently matching active introspection. Audience must match the configured /mcp resource. For the generic opaque-token profile, token signature checks, if applicable, belong to the trusted authorization server during introspection. The default generic profile does not locally validate JWTs or accept unsigned client claims. The optional WorkOS profile additionally verifies RS256 JWT signatures/claims against fixed issuer JWKS, requires matching active introspection, and verifies the owner ID-token nonce with a separate predefined client/resource. It never treats unsigned scope or default DCR scopes as Rumbo permission.
 
 Only configured HTTPS introspection URLs are used, redirects refused, response capped at 64 KiB, timeout 5 seconds. No client URL influences that request. Host and Origin are checked, duplicate security-sensitive headers rejected, request bodies capped at 1 MiB, thread concurrency at 32, socket timeout at 10 seconds. Ledger payloads are capped at 16 MiB and 10,000 events per project. Static bearer mode is loopback-only development. Anonymous standalone UI is loopback-only, synthetic-demo-only and rechecks the current demo flag before returning data. Production uses authenticated MCP Apps UI delivery.
 
@@ -31,3 +31,9 @@ The board uses DOM text rendering for all project content; no HTML injection sin
 ## Reporting
 
 Use the repository owner's established security contact or GitHub security reporting if enabled. Do not post credentials or private project records in a public issue. No new reporting endpoint or security account was configured by this release.
+
+## Operational additions
+
+The deployment kit keeps the backend unpublished, drops capabilities and runs nonroot with read-only code/config and explicit persistent project roots. Health responses expose only status. Opt-in request logs exclude raw URI/query/header/body/identity data. Proxy limits and image/runtime configuration require actual deployment validation; they are not a substitute for infrastructure isolation.
+
+Operator backups use SQLite’s online-backup API and verify historical upload digests. They are sensitive, unencrypted and not signed; checksums and hash chains cannot authenticate an archive against an attacker able to replace the entire history. Restore requires a fresh destination and bounds/validates paths, schema, entry counts and sizes. External registered files are not implicitly included.

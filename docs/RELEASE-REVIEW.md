@@ -1,6 +1,6 @@
 # Rumbo 0.3.0 review candidate
 
-Prepared 2026-10-01 from repository base `1d9c5b95265fcbb8181d25bd52dfa0947a7d88f5`.
+Deployment-readiness follow-up prepared 2026-10-01 from verified review base `cf61658517f41471f0a3617c6948cc4d2ba5a2ae` (original design base `1d9c5b95265fcbb8181d25bd52dfa0947a7d88f5`).
 
 **Status:** implemented and locally tested review candidate. No OpenAI upload, submission, approval or publication; no production deployment, new accounts, persistent credentials or external model calls. A draft code-review branch and independent CI are separate next steps.
 
@@ -18,8 +18,11 @@ Prepared 2026-10-01 from repository base `1d9c5b95265fcbb8181d25bd52dfa0947a7d88
 
 ## Actual verification completed locally
 
-- New suite: **114 tests; 108 passed, 6 optional browser tests explicitly skipped**
-- Legacy Claude adapter suite: **95 passed**
+- Current readiness follow-up local suite: **162 tests; 156 passed, 6 optional browser tests explicitly skipped**
+- Prior verified CI on `cf61658517f41471f0a3617c6948cc4d2ba5a2ae`: **114 new tests including all 6 Chromium cases, plus 95 legacy tests passed**. This does not certify later readiness changes
+- Current legacy Claude adapter suite: **95 passed**
+- WorkOS: 11 real-signature/fixture-provider tests; backup/restore: 25 tests; deployment shape/port/secret-file helpers: 5 tests; health/logging/challenge routes: 5 tests
+- Independent read-only adapter review verified the issuer-canonicalization fix, offline-access scope separation and absence of a confirmed authorization bypass
 - The 24 owner tests use real local HTTP/Authlib behavior with an explicitly synthetic external provider transport; no live identity-provider call
 - Real subprocess MCP initialization/tool/resource flows; actual HTTP auth, origin/Host checks, two-principal isolation and owner/MCP authority separation
 - Threaded claim/upload concurrency, persistence/restart, stale revisions, failed checks, malformed/deep JSON, duplicate headers, path/secret-file protection, corrupted history and partial-upload retry
@@ -40,19 +43,19 @@ python3 scripts/package_release.py --kind local --output dist/rumbo-0.3.0-local-
 python3 scripts/package_release.py --kind source --output dist/rumbo-0.3.0-source.zip
 ```
 
-The local run used Python 3.12, Authlib 1.8.0, Requests 2.34.2, Node, and jsonschema 4.26.0. Owner dependencies were installed in a temporary test directory, not globally. Core/agent MCP uses the standard library and declares Python 3.9+ POSIX; the owner portal requires Python 3.10+. The first public CI run on commit `a279ca480b6c879ee99dc60a5f2d76f240b95476` passed its Python 3.9 job. Its full job executed all 113 then-existing tests without skips; one browser assertion failed because CSS uppercase affected `inner_text()`. The current candidate uses exact visible semantic heading text and adds a real Engine/demo → HTTP handler → browser refresh regression. Its exact-head CI result still needs verification.
+The local readiness run used Python 3.12, Authlib 1.8.0, Requests 2.34.2, PyJWT 2.15.1, cryptography, Node and jsonschema. Dependencies are declared in requirements-authkit.txt. Owner dependencies were installed in a temporary test directory, not globally. Core/agent MCP uses the standard library and declares Python 3.9+ POSIX; the owner portal requires Python 3.10+. The earlier CI sequence fixed two test-only issues (CSS-transformed heading casing and a CSP-blocked string wait). The final baseline run on `cf61658517f41471f0a3617c6948cc4d2ba5a2ae` passed all 209 tests, including real Engine/demo → HTTP handler → Chromium refresh and Python 3.9 core checks. The new readiness patch must pass its own exact-head CI; the added isolated Docker/nginx smoke has not run locally because those binaries are unavailable.
 
 ## Explicitly unverified
 
-- Local browser execution remains blocked by cloud CUA loopback restrictions and Chromium process-socket limits. The first CI run produced five synthetic-fixture screenshots; desktop/narrow rendering was inspected, with one casing-sensitive assertion failure as described above. The added actual-engine browser path, full keyboard/screen-reader behavior and real owner sign-in still require their respective verification. See [browser evidence and limits](BOARD.md)
+- Local browser execution remains blocked by cloud CUA loopback restrictions and Chromium process-socket limits. Baseline CI verified the actual-engine browser path and produced inspected synthetic screenshots. New exact-head CI, a full screen-reader audit and live owner/provider browser sign-in remain distinct gates. See [browser evidence and limits](BOARD.md)
 - Actual ChatGPT/Codex installation, global/thread panel behavior and live host tool-selection tests; bridge fixtures do not certify the host
-- Final GitHub Actions outcome and actual-engine screenshots: check the exact updated review commit; the first-run screenshots do not establish the new backend-to-board regression has passed
+- Final GitHub Actions outcome for this readiness patch, including isolated image build, nonroot/read-only runtime, persisted restart, backup/restore and nginx syntax smoke
 - Real OAuth issuer/client registration, PKCE consent round trip, production HTTPS cookies, token/account revocation policy, proxy/hosting operation and public endpoint availability
 - Public publisher/domain verification, reviewer-account provisioning, legal/support/listing URLs and accessible walkthrough video
 
 ## Product/trust boundaries
 
-The service is operator-provisioned, one configured project per subject. It has no automatic signup, invitations, multi-project chooser, repository synchronization, arbitrary command runner, binary uploads, universal agent pause mechanism, external audit witness or model supervisor.
+The service is operator-provisioned, one configured project per subject. Optional WorkOS JWT+active-introspection verification, status-only health, safe logs, approval-gated Compose/Render recipes and operator backup/restore are now implemented; none provisions infrastructure or credentials. The direct Render recipe explicitly requires separate verification of managed-ingress/rate controls and storage ownership rather than claiming it inherits the Compose nginx configuration. It has no automatic signup, invitations, multi-project chooser, repository synchronization, arbitrary command runner, binary uploads, universal agent pause mechanism, external audit witness or model supervisor.
 
 A receipt proves only its stated condition against exact bytes. Uploaded bytes do not authenticate a Git commit or test execution. A reviewer assertion is attributed, not mathematically proven. OAuth identifies a configured account, not physical human presence. Same-account server administrators/local shell processes remain trusted. Hash chaining is tamper-evidence relative to preserved history/verifier, not an adversarial security boundary. Filename blocking is not a universal secret detector; use dedicated clean/upload-only roots.
 

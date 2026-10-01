@@ -1,0 +1,27 @@
+# Deliberately incomplete review template, not an auto-deployment request.
+# Fill name/region/plan/branch only after hosting/cost/data-location approval.
+# Configure the exact real URLs, user mappings and secret files in the dashboard.
+services:
+  - type: web
+    name: ''
+    runtime: docker
+    plan: ''
+    region: ''
+    branch: ''
+    dockerfilePath: ./deploy/Dockerfile
+    autoDeployTrigger: off
+    healthCheckPath: /health/ready
+    numInstances: 1
+    disk:
+      name: rumbo-project-data
+      mountPath: /var/lib/rumbo/projects/default
+      sizeGB: 1
+    envVars:
+      - key: PORT
+        value: '10000'
+      - key: RUMBO_CONFIG
+        value: /etc/secrets/rumbo-server.json
+      - key: RUMBO_INTROSPECTION_SECRET_FILE
+        value: /etc/secrets/rumbo-mcp-client-secret
+      - key: RUMBO_OWNER_CLIENT_SECRET_FILE
+        value: /etc/secrets/rumbo-owner-client-secret

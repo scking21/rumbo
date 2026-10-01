@@ -1,0 +1,17 @@
+{
+  "mode": "oauth",
+  "oauth_provider": "workos",
+  "log_requests": true,
+  "public_url": "",
+  "issuer": "",
+  "introspection_url": "",
+  "introspection_client_id": "",
+  "introspection_secret_env": "RUMBO_INTROSPECTION_SECRET",
+  "principals": [],
+  "owner_resource": "",
+  "authorization_endpoint": "",
+  "token_endpoint": "",
+  "owner_client_id": "",
+  "owner_client_secret_env": "RUMBO_OWNER_CLIENT_SECRET",
+  "owner_principals": []
+}

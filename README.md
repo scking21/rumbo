@@ -22,9 +22,11 @@ This release has **not been uploaded, submitted, approved, published or deployed
 - Agent-safe CLI, MCP stdio and authenticated stateless Streamable HTTP; no human approval tools in MCP
 - A separate OAuth/PKCE browser owner portal for mapped accounts to create/revise contracts, inspect exact bytes and decide, with secure sessions and CSRF protections
 - An inline MCP Apps acceptance board plus an anonymous **synthetic-only** local demo
+- Operator-only SQLite-consistent backup/restore with historical-upload verification
+- Optional WorkOS Connect JWT + active-introspection profile and a nonroot persistent deployment kit
 - Existing Claude Code planning adapter, with stricter provenance fixes
 
-Python 3.9+ on POSIX (Linux/macOS) is required; tested on Linux/Python 3.12. The core and server use the standard library. Windows is not supported by the current symlink-safe file-opening implementation. The optional OAuth owner portal requires Python 3.10+ and Authlib/Requests; it was tested on Python 3.12. Development-only schema and browser checks use optional tooling.
+Python 3.9+ on POSIX (Linux/macOS) is required; tested on Linux/Python 3.12. The core and server use the standard library. Windows is not supported by the current symlink-safe file-opening implementation. The optional OAuth owner portal requires Python 3.10+ and Authlib/Requests; the optional WorkOS profile also requires PyJWT/cryptography; it was tested on Python 3.12. Development-only schema and browser checks use optional tooling.
 
 ## Try the deterministic demo
 
@@ -107,6 +109,10 @@ python3 -m compileall -q rumbo scripts
 ```
 
 The new tests cover real stdio and HTTP execution, restart, concurrent claims, stale evidence, principal isolation, malformed inputs, confined files, deterministic demo reproduction and extracted ZIP execution. Board source/Node runtime checks are separate from browser checks. Browser rendering and actual ChatGPT host integration were not verified in this environment. A read-only GitHub Actions workflow is included to run all tests with Chromium and fail on any skipped test; that CI run must be checked on the exact review commit, not assumed to have passed; [exact limits](docs/BOARD.md).
+
+## Deployment and recovery
+
+[Operations](docs/OPERATIONS.md) covers the nonroot/read-only container, persistent roots, request-limiting TLS proxy, status-only health, safe logs and exact setup gates. [WorkOS](docs/WORKOS.md) documents the optional strong-verification profile while the generic OAuth provider remains supported. [Backups](docs/BACKUP.md) are explicit operator actions, not automatic retention or self-service export. No service or credentials are provisioned by these files.
 
 ## Trust and limits
 

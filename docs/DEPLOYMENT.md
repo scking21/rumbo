@@ -2,6 +2,8 @@
 
 The repository is a locally tested implementation candidate. This document is a setup plan, not evidence that a live service, provider account, domain, publisher or directory submission exists. No deployment, credentials, paid service, upload or publication was performed while preparing the release.
 
+The repository now includes an optional [WorkOS Connect adapter](WORKOS.md), [deployment kit and operational checks](OPERATIONS.md), a separate [Render recipe](RENDER.md), and [SQLite-consistent backup/restore](BACKUP.md). Those locally testable components do not substitute for real deployment/provider approval and verification.
+
 ## Supported product shape
 
 Rumbo supports **operator-provisioned workspaces**. The service operator assigns an existing OAuth subject to one project root, worker/reviewer role and actor. A separate owner mapping assigns an authenticated owner account to that root. Mapped owners can create/revise their contract, inspect exact artifact bytes and record exact-revision decisions through the separate browser owner portal. Automatic signup, organizations, invitations, workspace billing and multi-project selection are not implemented.

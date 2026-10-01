@@ -12,6 +12,7 @@ import ipaddress
 import json
 import math
 import os
+import sys
 from pathlib import Path
 import threading
 import time
@@ -70,6 +71,12 @@ class OAuthVerifier:
         validate_principals(config.get('principals'),'oauth')
         self.principals={p['subject']:p for p in config['principals']}
         self.clock=clock or time.time
+        provider=config.get('oauth_provider','generic')
+        if provider not in ('generic','workos'):raise ValueError('Unknown OAuth provider profile')
+        self.workos=None
+        if provider=='workos':
+            from .workos import WorkOSConnectVerifier
+            self.workos=WorkOSConnectVerifier(config,'mcp',clock=self.clock)
         self.introspect=introspect or self._introspect
 
     def _introspect(self,token):
@@ -88,7 +95,7 @@ class OAuthVerifier:
         if not isinstance(token,str) or not 1<=len(token)<=8192 or any(c.isspace() for c in token):
             return None
         try:
-            claims=self.introspect(token)
+            claims=self.workos.verify_access(token) if self.workos else self.introspect(token)
             if not isinstance(claims,dict) or claims.get('active') is not True or claims.get('iss')!=self.issuer:
                 return None
             audience=claims.get('aud')
@@ -135,6 +142,8 @@ class BoundedServer(ThreadingHTTPServer):
 
 def create_server(host,port,config):
     mode=config.get('mode')
+    log_requests=config.get('log_requests',False)
+    if type(log_requests) is not bool:raise ValueError('log_requests must be boolean')
     if mode not in ('development','oauth','demo'):
         raise ValueError('Explicit development, demo or oauth mode is required')
     if mode in ('development','demo') and host not in ('127.0.0.1','localhost','::1'):
@@ -146,14 +155,20 @@ def create_server(host,port,config):
     portal=OwnerPortal(config) if mode=='oauth' else None
     if public and public.path!='/mcp':
         raise ValueError('public_url must name the /mcp endpoint')
+    health_engines={}
     for p in config.get('principals',[]):
-        Engine(p['root'],p['actor'],p['role']) # validate trusted configuration once at startup
+        engine=Engine(p['root'],p['actor'],p['role']) # validate trusted configuration once at startup
+        health_engines[str(engine.root)]=engine
+    if portal and portal.enabled:
+        for p in portal.principals.values():
+            engine=Engine(p['root'],p['actor'],'human');health_engines[str(engine.root)]=engine
     demo_root=config.get('demo_root')
     demo_engine=None
     if demo_root:
         if mode not in ('development','demo'):
             raise ValueError('Standalone demo UI is local only')
         demo_engine=Engine(demo_root,'demo-viewer','viewer')
+        health_engines[str(demo_engine.root)]=demo_engine
         if not demo_engine.snapshot()['demo']:
             raise ValueError('Anonymous local UI is restricted to synthetic demo projects')
 
@@ -161,6 +176,7 @@ def create_server(host,port,config):
         server_version='Rumbo/0.3'
         def setup(self):
             super().setup();self.connection.settimeout(10)
+            self.started=time.monotonic();self.logged=False
         def log_message(self,*args):
             pass # no request bodies, tokens or source text in default logs
         def send(self,status,value=None,headers=None,content_type='application/json'):
@@ -177,6 +193,12 @@ def create_server(host,port,config):
             self.end_headers()
             if raw:
                 self.wfile.write(raw)
+            if log_requests and not self.logged:
+                self.logged=True
+                path=self.path.partition('?')[0]
+                route='mcp' if path=='/mcp' else ('owner' if path=='/owner' or path.startswith('/owner/') else ('health' if path.startswith('/health/') else ('metadata' if path.startswith('/.well-known/') else 'other')))
+                method=self.command if self.command in ('GET','POST','DELETE','HEAD','OPTIONS') else 'OTHER'
+                print(json.dumps(dict(event='http_request',method=method,route=route,status=status,duration_ms=max(0,int((time.monotonic()-self.started)*1000))),separators=(',',':')),file=sys.stderr,flush=True)
         def safe_host(self):
             for header in ('Host','Authorization','Content-Length','Content-Type','Origin','MCP-Protocol-Version'):
                 if len(self.headers.get_all(header,[]))>1:
@@ -208,9 +230,34 @@ def create_server(host,port,config):
             self.send(401,{'error':'Authentication required'}, {'WWW-Authenticate':'Bearer realm="rumbo"'+suffix})
         def do_GET(self):
             if not self.safe_host():return
+            if self.path in ('/health/live','/health/ready'):
+                healthy=True
+                if self.path=='/health/ready':
+                    try:
+                        if verifier and not os.environ.get(verifier.secret_env):healthy=False
+                        if portal and portal.enabled and not portal._available():healthy=False
+                        for engine in health_engines.values():
+                            with engine._db() as database:engine._replay(database)
+                    except (RumboError,OSError,ValueError):healthy=False
+                return self.send(200 if healthy else 503,{'status':'ok' if healthy else 'unavailable'})
             if portal and portal.handle(self):return
+            if self.path=='/.well-known/openai-apps-challenge' and config.get('public_challenge_file'):
+                try:
+                    import stat
+                    path=Path(config['public_challenge_file'])
+                    if not path.is_absolute():raise ValueError('Public challenge file must be explicitly absolute')
+                    for name in (config.get('introspection_secret_env'),config.get('owner_client_secret_env')):
+                        secret_file=os.environ.get(name+'_FILE') if name else None
+                        if secret_file and path.resolve()==Path(secret_file).resolve():raise ValueError('A credential file cannot be a public challenge')
+                    fd=os.open(str(path),os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK)
+                    with os.fdopen(fd,'rb') as handle:
+                        if not stat.S_ISREG(os.fstat(handle.fileno()).st_mode):raise ValueError('Regular file required')
+                        value=handle.read(4097)
+                    if not 1<=len(value)<=4096 or any(byte not in (10,13) and not 32<=byte<127 for byte in value):raise ValueError('Opaque plain-text token required')
+                    return self.send(200,value,content_type='text/plain; charset=utf-8')
+                except (OSError,ValueError,TypeError):return self.send(404,{'error':'Not found'})
             if self.path in ('/.well-known/oauth-protected-resource','/.well-known/oauth-protected-resource/mcp') and verifier:
-                return self.send(200,dict(resource=verifier.resource,authorization_servers=[verifier.issuer],scopes_supported=['rumbo:read','rumbo:write'],bearer_methods_supported=['header']))
+                return self.send(200,dict(resource=verifier.resource,authorization_servers=[verifier.issuer],scopes_supported=['rumbo:read','rumbo:write']+(['offline_access'] if verifier.workos else []),bearer_methods_supported=['header']))
             if demo_engine and self.path=='/':
                 raw=(Path(__file__).parent/'web/board.html').read_bytes()
                 return self.send(200,raw,{'Content-Security-Policy':"default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; img-src data:; base-uri 'none'; frame-ancestors 'none'; form-action 'none'"},'text/html; charset=utf-8')

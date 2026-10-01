@@ -63,6 +63,29 @@ class PackageTests(unittest.TestCase):
                     build_local(root,root/'out.zip')
                 planted.unlink()
 
+    def test_brand_color_meets_light_and_dark_listing_contrast(self):
+        manifest=json.loads((ROOT/'openai-plugin/rumbo/plugin.json').read_text())
+        color=manifest['extensions']['com.openai']['interface'].get('brandColor')
+        if color is None:return # Optional metadata may be omitted instead.
+        def luminance(hexvalue):
+            values=[int(hexvalue[i:i+2],16)/255 for i in (1,3,5)]
+            linear=[v/12.92 if v<=0.04045 else ((v+0.055)/1.055)**2.4 for v in values]
+            return sum(v*w for v,w in zip(linear,[0.2126,0.7152,0.0722]))
+        foreground=luminance(color)
+        for background in ['#ffffff','#212121']:
+            light,dark=sorted([foreground,luminance(background)],reverse=True)
+            self.assertGreaterEqual((light+0.05)/(dark+0.05),2.0)
+
+    def test_source_archive_excludes_backups_and_rejects_live_deployment_config(self):
+        from scripts.package_release import build_source
+        with tempfile.TemporaryDirectory() as root:
+            folder=Path(root);(folder/'docs').mkdir();(folder/'deploy').mkdir()
+            (folder/'docs/operator-backup.zip').write_bytes(b'synthetic private backup')
+            target=folder/'source.zip';build_source(folder,target)
+            with zipfile.ZipFile(target) as archive:self.assertFalse(any(name.endswith('.zip') for name in archive.namelist()))
+            (folder/'deploy/server.json').write_text('{"synthetic_private_config":true}')
+            with self.assertRaises(ValueError):build_source(folder,target)
+
     def test_portable_manifests_validate_against_pinned_official_schemas(self):
         try:import jsonschema
         except ImportError:self.skipTest('Optional jsonschema developer tool not installed')

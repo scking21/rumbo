@@ -111,6 +111,10 @@ class OwnerPortal:
         self.logins = {}
         self.sessions = {}
         self.enabled = False
+        self.workos = None
+        provider = config.get('oauth_provider', 'generic')
+        if provider not in ('generic', 'workos'):
+            raise ValueError('Unknown OAuth provider profile')
         required = ('owner_resource', 'issuer', 'authorization_endpoint', 'token_endpoint',
                     'introspection_url', 'owner_client_id', 'owner_client_secret_env', 'owner_principals')
         # Disabled owner routes never weaken the independent MCP service.
@@ -148,6 +152,9 @@ class OwnerPortal:
                 raise ValueError('Owner root must be a configured path')
             engine = Engine(principal['root'], principal['actor'], 'human')
             self.principals[subject] = dict(subject=subject, actor=engine.actor, root=str(engine.root))
+        if provider == 'workos':
+            from .workos import WorkOSConnectVerifier
+            self.workos = WorkOSConnectVerifier(config, 'owner', clock=self.clock)
         self.enabled = True
 
     def _available(self):
@@ -158,9 +165,9 @@ class OwnerPortal:
         secret = os.environ.get(self.secret_env)
         if not secret:
             raise ValueError('Owner authentication is not configured')
-        client = OAuth2Session(self.client_id, secret, scope='rumbo:owner',
+        client = OAuth2Session(self.client_id, secret, scope='openid rumbo:owner' if self.workos else 'rumbo:owner',
             redirect_uri=self.callback, state=state, code_challenge_method='S256',
-            token_endpoint_auth_method='client_secret_basic')
+            token_endpoint_auth_method='client_secret_post' if self.workos else 'client_secret_basic')
         # Ignore ambient proxy/netrc settings; issuer routing is operator-controlled.
         client.trust_env = False
         return client
@@ -280,15 +287,17 @@ class OwnerPortal:
             state = secrets.token_urlsafe(32)
             binding = secrets.token_urlsafe(32)
             verifier = secrets.token_urlsafe(48)
+            nonce = secrets.token_urlsafe(32) if self.workos else None
             try:
                 with self._client(state) as client:
-                    url, returned_state = client.create_authorization_url(self.authorization_endpoint,
-                        state=state, code_verifier=verifier, resource=self.resource)
+                    params = dict(state=state, code_verifier=verifier, resource=self.resource)
+                    if nonce is not None:params['nonce'] = nonce
+                    url, returned_state = client.create_authorization_url(self.authorization_endpoint, **params)
                 if returned_state != state:
                     raise ValueError('Invalid OAuth state')
             except Exception:
                 self._send(handler, 503, 'Owner sign-in is unavailable'); return
-            self.logins[state] = dict(binding=binding, verifier=verifier, expires=self.clock() + LOGIN_SECONDS)
+            self.logins[state] = dict(binding=binding, verifier=verifier, nonce=nonce, expires=self.clock() + LOGIN_SECONDS)
         self._send(handler, 303, headers={'Location': url, 'Set-Cookie': _cookie(LOGIN_COOKIE, binding, LOGIN_SECONDS)})
 
     def _verified(self, claims):
@@ -340,9 +349,12 @@ class OwnerPortal:
                 access = token.get('access_token')
                 if not isinstance(access, str) or not 1 <= len(access) <= 8192 or any(c.isspace() for c in access) or str(token.get('token_type', '')).lower() != 'bearer':
                     raise ValueError('Invalid access token')
-                response = client.introspect_token(self.introspection_url, token=access,
-                    token_type_hint='access_token', **options)
-                claims = safe_json(response.content)
+                if self.workos:
+                    claims = self.workos.verify_owner(access, token.get('id_token'), login['nonce'])
+                else:
+                    response = client.introspect_token(self.introspection_url, token=access,
+                        token_type_hint='access_token', **options)
+                    claims = safe_json(response.content)
                 session = self._verified(claims)
             if session is None:
                 raise ValueError('Unrecognized owner credential')
