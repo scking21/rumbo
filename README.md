@@ -4,7 +4,7 @@ Keep coding agents on the course you actually agreed to.
 
 *Rumbo* is Spanish for a ship's course or heading.
 
-## 0.3.0 local review candidate
+## Engine 0.3.0 and OpenAI adapter 0.3.1 local review candidates
 
 Rumbo now has a working provider-neutral contract/evidence engine, CLI, MCP transports, a read-only acceptance board and OpenAI plugin packaging. It records **agreed goal → bounded task → exact artifact → evidence → human decision**.
 
@@ -71,18 +71,18 @@ A remote MCP server can register files already in its mapped root, or receive ex
 ## OpenAI plugin packages
 
 ```sh
-python3 scripts/package_release.py --kind local --output dist/rumbo-0.3.0-local-plugin.zip
+python3 scripts/package_release.py --kind local --output dist/rumbo-openai-0.3.1-local-plugin.zip
 python3 scripts/package_release.py --kind source --output dist/rumbo-0.3.0-source.zip
 ```
 
-The local archive includes portable root `plugin.json` and `mcp.json`, a compatibility manifest, workflow skills and a real stdio launcher. The host must set `RUMBO_PROJECT_ROOT` to the approved project before launch; it fails rather than guessing. No marketplace entry or installation is performed by packaging.
+The local archive includes portable root `plugin.json` and `mcp.json`, a compatibility manifest, workflow skills and a real stdio launcher. The installed server starts unbound. Its owner provisions approved aliases in `PLUGIN_DATA/projects.json`; the agent selects one alias once per process with a unique worker identity. Legacy `RUMBO_PROJECT_ROOT`, `RUMBO_ROLE` and `RUMBO_ACTOR` cannot configure this launcher. See [installed setup and lease limits](docs/INSTALLED-PLUGIN.md). No marketplace entry or installation is performed by packaging.
 
 For the public archive, supply verified real production values using the documented gates:
 
 ```sh
 python3 scripts/package_release.py --kind submission \
   --production-config /path/to/verified-production.json \
-  --output dist/rumbo-0.3.0-public-review.zip
+  --output dist/rumbo-openai-0.3.1-public-review.zip
 ```
 
 The script never uploads. Local packaging does not establish public eligibility. The public archive excludes Claude lifecycle hooks, app references and local execution. [Current official requirements and links](docs/SUBMISSION-REQUIREMENTS.md).

@@ -1,12 +1,19 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "rumbo",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Keep agreed work connected to its artifacts, evidence and human decisions.",
-  "author": {"name": "Corby King"},
+  "author": {
+    "name": "Corby King"
+  },
   "repository": "https://github.com/scking21/rumbo",
   "license": "MIT",
-  "keywords": ["coordination", "acceptance", "evidence", "coding-agents"],
+  "keywords": [
+    "coordination",
+    "acceptance",
+    "evidence",
+    "coding-agents"
+  ],
   "extensions": {
     "com.openai": {
       "interface": {
@@ -15,13 +22,22 @@
         "longDescription": "Inspect the agreed goal and constraints, claim bounded tasks, register exact artifact revisions, run deterministic acceptance checks and request human decisions. The project board separates work claims, narrow check receipts, reviewer assertions and human acceptance. Rumbo does not grant authority, run arbitrary commands, or prove that every requirement is correct.",
         "developerName": "Corby King",
         "category": "Productivity",
-        "capabilities": ["Interactive", "Write"],
+        "capabilities": [
+          "Interactive",
+          "Write"
+        ],
         "composerIcon": "./assets/icon.svg",
         "logo": "./assets/icon.svg",
         "brandColor": "#237A4B",
-        "defaultPrompt": ["Show my project's acceptance board", "What evidence is missing before acceptance?", "Which work became stale after the last change?"]
+        "defaultPrompt": [
+          "Show my project's acceptance board",
+          "What evidence is missing before acceptance?",
+          "Which work became stale after the last change?"
+        ]
       },
-      "publication": {"release_notes": "0.3.0 local review candidate: versioned contracts, expiring claims, artifact-bound evidence, human-owned decisions, MCP transports and a read-only acceptance board. Public deployment and in-host review are not yet verified."}
+      "publication": {
+        "release_notes": "0.3.1 local review candidate: owner-provisioned project aliases, unbound installed startup, fixed worker authority, unique per-process lease identities and snapshot-derived artifact status. Shared engine remains version 0.3.0; actual host installation and reviewer connection are not verified."
+      }
     }
   }
 }

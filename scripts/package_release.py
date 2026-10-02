@@ -119,7 +119,7 @@ def build_submission(root,target,config):
     ext=manifest['extensions']['com.openai']
     ext['interface'].update(websiteURL=config['website_url'],supportURL=config['support_url'],privacyPolicyURL=config['privacy_url'],termsOfServiceURL=config['terms_url'])
     ext['review']['demo_recording_url']=config['video_url']
-    ext['publication']['release_notes']='0.3.0: versioned contracts, expiring task claims, artifact-bound checks and reviewer assertions, human-owned acceptance and an interactive read-only project board.'
+    ext['publication']['release_notes']=manifest['version']+': versioned contracts, expiring task claims, artifact-bound checks and reviewer assertions, human-owned acceptance and an interactive read-only project board.'
     files['plugin.json']=pretty(manifest)
     files['mcp.json']=pretty({'$schema':'https://agent-plugins.org/schemas/1.0.0/mcp.schema.json','mcpServers':{'rumbo':{'type':'streamable-http','url':config['mcp_url']}}})
     files['README.md']=b'# Rumbo\n\nRemote project coordination and acceptance evidence. This archive has not been uploaded or submitted by its packaging script.\n'
