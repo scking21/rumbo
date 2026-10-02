@@ -1351,6 +1351,46 @@ class RecordTest(unittest.TestCase):
             reason = self._gate({"session_id": "s3", "transcript_path": current}, env)["reason"]
             self.assertIn("objective.quote: UNVERIFIED", reason)
 
+    def _two_sessions(self, projects, earlier_text, current_text):
+        earlier = os.path.join(projects, "session-1.jsonl")
+        current = os.path.join(projects, "session-2.jsonl")
+        with open(earlier, "w", encoding="utf-8") as handle:
+            handle.write(json.dumps({"type": "user", "message": {"content": earlier_text}}) + "\n")
+        with open(current, "w", encoding="utf-8") as handle:
+            handle.write(json.dumps({"type": "user", "message": {"content": current_text}}) + "\n")
+        return current
+
+    def test_earlier_approval_does_not_stand_after_the_user_cancels_it(self):
+        with tempfile.TemporaryDirectory() as projects, tempfile.TemporaryDirectory() as state:
+            env = dict(os.environ, RUMBO_STATE_DIR=state)
+            current = self._two_sessions(projects, "Approve the sapphire option",
+                                         "Cancel that previous approval; choose ruby instead.")
+            record = {"version": 1, "objective": {"text": "Pick", "quote": "Approve the sapphire option"},
+                      "items": [{"id": "I1", "text": "Sapphire", "quote": "Approve the sapphire option",
+                                 "status": "commitment"}], "checks": []}
+            self._write(record)
+            run_record(["show", "--record", self.record_path],
+                       json.dumps({"session_id": "s2", "prompt": "Cancel that previous approval"}), env=env)
+            reason = self._gate({"session_id": "s2", "transcript_path": current}, env)["reason"]
+            self.assertIn("items[0].quote: EARLIER_APPROVAL", reason)
+            self.assertIn("Cancel that previous approval", reason)
+            # Updating the record (ruby replaces sapphire) clears it.
+            record["items"].append({"id": "I2", "text": "Ruby", "quote": "choose ruby instead",
+                                    "status": "commitment", "replaces": ["I1"]})
+            self._write(record)
+            self.assertIsNone(self._gate({"session_id": "s2", "transcript_path": current}, env))
+
+    def test_earlier_approval_carries_over_when_nothing_takes_it_back(self):
+        with tempfile.TemporaryDirectory() as projects, tempfile.TemporaryDirectory() as state:
+            env = dict(os.environ, RUMBO_STATE_DIR=state)
+            current = self._two_sessions(projects, "Approve the sapphire option", "Now draft the invitation.")
+            self._write({"version": 1, "objective": {"text": "Pick", "quote": "Approve the sapphire option"},
+                         "items": [{"id": "I1", "text": "Sapphire", "quote": "Approve the sapphire option",
+                                    "status": "commitment"}], "checks": []})
+            run_record(["show", "--record", self.record_path],
+                       json.dumps({"session_id": "s2", "prompt": "Now draft the invitation."}), env=env)
+            self.assertIsNone(self._gate({"session_id": "s2", "transcript_path": current}, env))
+
     def _gate(self, hook, env):
         code, out, err = run_record(["stop-gate", "--record", self.record_path], json.dumps(hook), env=env)
         self.assertEqual((code, err), (0, ""))

@@ -460,6 +460,36 @@ def unverified_quotes(record, messages):
 MAX_PROJECT_TRANSCRIPTS = 50
 
 
+RETRACTION = re.compile(
+    r"\b(?:cancel(?:led|ling)?|revoke[sd]?|withdraw(?:n)?|undo|scrap|scratch that|never ?mind|"
+    r"instead|change[sd]? my mind|no longer|not anymore|take (?:it|that) back|reverse)\b",
+    re.IGNORECASE)
+
+
+def _retraction(messages):
+    """The first of this session's user messages that takes something back, shortened."""
+    for message in messages:
+        if RETRACTION.search(message):
+            text = " ".join(message.split())
+            return text if len(text) <= 120 else text[:117] + "..."
+    return None
+
+
+def _earlier_approvals(record, paths):
+    """Of these quote paths, the active commitment/authorized items."""
+    items = record.get("items") or []
+    replaced = {ref for item in items for ref in item.get("replaces") or []}
+    found = []
+    for path in paths:
+        match = re.fullmatch(r"items\[(\d+)\]\.quote", path)
+        if not match:
+            continue
+        item = items[int(match.group(1))]
+        if item.get("status") in ("commitment", "authorized") and item.get("id") not in replaced:
+            found.append(path)
+    return found
+
+
 def _quote_at(record, path):
     """The quote named by an unverified_quotes path."""
     if path == "objective.quote":
@@ -1234,11 +1264,22 @@ def _stop_gate(args, hook_input):
     else:
         unverified = unverified_quotes(record, messages)
         carried = _read_carried(session_id) if unverified else set()
+        earlier_only = []
         if carried:
             still = set(unverified_quotes(record, messages + project_messages(transcript)))
-            unverified = [p for p in unverified if p in still or _quote_at(record, p) not in carried]
+            earlier_only = [p for p in unverified if p not in still and _quote_at(record, p) in carried]
+            unverified = [p for p in unverified if p not in earlier_only]
         for path in unverified:
             parts.append("%s: UNVERIFIED: quote not found in the user's messages" % path)
+        # A quote found only in an earlier conversation shows the words were said,
+        # not that the approval still stands. If the user took something back this
+        # session, every earlier-only approval must be rechecked against it.
+        retraction = _retraction(messages) if earlier_only else None
+        if retraction:
+            for path in _earlier_approvals(record, earlier_only):
+                parts.append('%s: EARLIER_APPROVAL: approved in an earlier session, but this '
+                             'session the user said "%s"; check it still stands, and replace '
+                             'or reject it in the record if it changed' % (path, retraction))
 
     if not parts:
         for suffix in (".blocks", ".failed", ".lastreason"):

@@ -104,7 +104,13 @@ is unsourced, a quote is not found in the user's messages, the harness transcrip
 is missing or unreadable, a failing check was deleted, or the record is unreadable.
 An unavailable transcript is unverified provenance, not a clean result; disclose
 it if a readable harness transcript cannot be supplied. Never invent transcript
-evidence. If a repeat block lists problems you already told the user about, add
+evidence. An `EARLIER_APPROVAL` line means the user approved something in an earlier
+session and has said something this session that may take it back. Check with
+them. If it changed, add the new item with `replaces`, or set the old one to
+`rejected`. If it still stands, record their confirmation from this session as
+a new item that replaces the old one.
+
+If a repeat block lists problems you already told the user about, add
 one line naming what is still open rather than repeating the explanation.
 Resolve each conflict or disclose it, update
 the record, then finish. Never delete or weaken a check to get past the gate, and
