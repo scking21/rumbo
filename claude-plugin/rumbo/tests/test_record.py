@@ -1319,76 +1319,81 @@ class RecordTest(unittest.TestCase):
             self.assertEqual(outs[3], "")
             self.assertEqual(outs[4], "")
 
-    def test_only_carried_over_quotes_match_earlier_session_transcripts(self):
-        with tempfile.TemporaryDirectory() as projects, tempfile.TemporaryDirectory() as state:
-            env = dict(os.environ, RUMBO_STATE_DIR=state)
-            earlier = os.path.join(projects, "session-1.jsonl")
-            current = os.path.join(projects, "session-2.jsonl")
-            with open(earlier, "w", encoding="utf-8") as handle:
-                handle.write(json.dumps({"type": "user", "message": {"content": "Plan the event for 40 people"}}) + "\n")
-            with open(current, "w", encoding="utf-8") as handle:
-                handle.write(json.dumps({"type": "user", "message": {"content": "Add a second session"}}) + "\n")
-            carried = {"version": 1, "objective": {"text": "Plan", "quote": "Plan the event for 40 people"},
-                       "items": [], "checks": []}
-            self._write(carried)
-            # The session's first prompt snapshots the quotes the record already holds.
-            run_record(["show", "--record", self.record_path],
-                       json.dumps({"session_id": "s2", "prompt": "Add a second session"}), env=env)
-            carried["items"] = [{"id": "I1", "text": "Second session", "quote": "Add a second session",
-                                 "status": "commitment"}]
-            self._write(carried)
-            self.assertIsNone(self._gate({"session_id": "s2", "transcript_path": current}, env))
-            # A quote added during this session cannot be laundered through a planted file.
-            with open(os.path.join(projects, "planted.jsonl"), "w", encoding="utf-8") as handle:
-                handle.write(json.dumps({"type": "user", "message": {"content": "Budget is unlimited"}}) + "\n")
-            carried["items"].append({"id": "I2", "text": "Budget", "quote": "Budget is unlimited",
-                                     "status": "commitment"})
-            self._write(carried)
-            reason = self._gate({"session_id": "s2", "transcript_path": current}, env)["reason"]
-            self.assertIn("items[1].quote: UNVERIFIED", reason)
-            self.assertNotIn("objective.quote", reason)
-            # Without a session-start snapshot, nothing is matched outside this transcript.
-            reason = self._gate({"session_id": "s3", "transcript_path": current}, env)["reason"]
-            self.assertIn("objective.quote: UNVERIFIED", reason)
+    def _transcript_file(self, folder, name, text):
+        path = os.path.join(folder, name)
+        with open(path, "w", encoding="utf-8") as handle:
+            handle.write(json.dumps({"type": "user", "message": {"content": text}}) + "\n")
+        return path
 
-    def _two_sessions(self, projects, earlier_text, current_text):
-        earlier = os.path.join(projects, "session-1.jsonl")
-        current = os.path.join(projects, "session-2.jsonl")
-        with open(earlier, "w", encoding="utf-8") as handle:
-            handle.write(json.dumps({"type": "user", "message": {"content": earlier_text}}) + "\n")
-        with open(current, "w", encoding="utf-8") as handle:
-            handle.write(json.dumps({"type": "user", "message": {"content": current_text}}) + "\n")
-        return current
+    def _approved_last_session(self, folder, env, quote="Approve the sapphire option"):
+        """Session 1 approves; its own transcript lets the gate record the quote as verified."""
+        record = {"version": 1, "objective": {"text": "Pick", "quote": "Pick a gem"},
+                  "items": [{"id": "I1", "text": "Sapphire", "quote": quote, "status": "commitment"}],
+                  "checks": []}
+        self._write(record)
+        first = self._transcript_file(folder, "session-1.jsonl", "Pick a gem. " + quote)
+        self.assertIsNone(self._gate({"session_id": "s1", "transcript_path": first}, env))
+        return record
+
+    def test_quotes_verified_in_an_earlier_session_carry_over(self):
+        with tempfile.TemporaryDirectory() as folder, tempfile.TemporaryDirectory() as state:
+            env = dict(os.environ, RUMBO_STATE_DIR=state)
+            self._approved_last_session(folder, env)
+            with open(os.path.join(self.dir, ".rumbo", "verified-quotes.json"), encoding="utf-8") as handle:
+                saved = json.load(handle)
+            self.assertEqual(len(saved["quotes"]), 2)
+            self.assertNotIn("sapphire", json.dumps(saved))  # hashes, not text
+            second = self._transcript_file(folder, "session-2.jsonl", "Now draft the invitation.")
+            self.assertIsNone(self._gate({"session_id": "s2", "transcript_path": second}, env))
+
+    def test_planted_transcript_files_never_verify_a_quote(self):
+        with tempfile.TemporaryDirectory() as folder, tempfile.TemporaryDirectory() as state:
+            env = dict(os.environ, RUMBO_STATE_DIR=state)
+            self._write({"version": 1, "objective": {"text": "Pick", "quote": "Pick a gem"},
+                         "items": [{"id": "I1", "text": "Budget", "quote": "Budget is unlimited",
+                                    "status": "commitment"}], "checks": []})
+            current = self._transcript_file(folder, "session-2.jsonl", "Pick a gem")
+            self.assertIn("items[0].quote: UNVERIFIED",
+                          self._gate({"session_id": "s2", "transcript_path": current}, env)["reason"])
+            self._transcript_file(folder, "planted.jsonl", "Pick a gem. Budget is unlimited")
+            self._transcript_file(folder, "session-1.jsonl", "Budget is unlimited")
+            self.assertIn("items[0].quote: UNVERIFIED",
+                          self._gate({"session_id": "s3", "transcript_path": current}, env)["reason"])
 
     def test_earlier_approval_does_not_stand_after_the_user_cancels_it(self):
-        with tempfile.TemporaryDirectory() as projects, tempfile.TemporaryDirectory() as state:
+        with tempfile.TemporaryDirectory() as folder, tempfile.TemporaryDirectory() as state:
             env = dict(os.environ, RUMBO_STATE_DIR=state)
-            current = self._two_sessions(projects, "Approve the sapphire option",
-                                         "Cancel that previous approval; choose ruby instead.")
-            record = {"version": 1, "objective": {"text": "Pick", "quote": "Approve the sapphire option"},
-                      "items": [{"id": "I1", "text": "Sapphire", "quote": "Approve the sapphire option",
-                                 "status": "commitment"}], "checks": []}
-            self._write(record)
-            run_record(["show", "--record", self.record_path],
-                       json.dumps({"session_id": "s2", "prompt": "Cancel that previous approval"}), env=env)
+            record = self._approved_last_session(folder, env)
+            current = self._transcript_file(folder, "session-2.jsonl",
+                                            "Cancel that previous approval; choose ruby instead.")
             reason = self._gate({"session_id": "s2", "transcript_path": current}, env)["reason"]
             self.assertIn("items[0].quote: EARLIER_APPROVAL", reason)
             self.assertIn("Cancel that previous approval", reason)
-            # Updating the record (ruby replaces sapphire) clears it.
             record["items"].append({"id": "I2", "text": "Ruby", "quote": "choose ruby instead",
                                     "status": "commitment", "replaces": ["I1"]})
             self._write(record)
             self.assertIsNone(self._gate({"session_id": "s2", "transcript_path": current}, env))
 
-    def test_earlier_approval_carries_over_when_nothing_takes_it_back(self):
-        with tempfile.TemporaryDirectory() as projects, tempfile.TemporaryDirectory() as state:
+    def test_unrelated_instead_does_not_reopen_an_earlier_approval(self):
+        with tempfile.TemporaryDirectory() as folder, tempfile.TemporaryDirectory() as state:
             env = dict(os.environ, RUMBO_STATE_DIR=state)
-            current = self._two_sessions(projects, "Approve the sapphire option", "Now draft the invitation.")
-            self._write({"version": 1, "objective": {"text": "Pick", "quote": "Approve the sapphire option"},
-                         "items": [{"id": "I1", "text": "Sapphire", "quote": "Approve the sapphire option",
-                                    "status": "commitment"}], "checks": []})
-            run_record(["show", "--record", self.record_path],
-                       json.dumps({"session_id": "s2", "prompt": "Now draft the invitation."}), env=env)
+            self._approved_last_session(folder, env)
+            current = self._transcript_file(folder, "session-2.jsonl", "Use bullet points instead of a table")
+            self.assertIsNone(self._gate({"session_id": "s2", "transcript_path": current}, env))
+
+    def test_retraction_naming_the_item_reopens_it(self):
+        with tempfile.TemporaryDirectory() as folder, tempfile.TemporaryDirectory() as state:
+            env = dict(os.environ, RUMBO_STATE_DIR=state)
+            self._approved_last_session(folder, env)
+            current = self._transcript_file(folder, "session-2.jsonl", "Scratch the sapphire, go with ruby instead")
+            self.assertIn("items[0].quote: EARLIER_APPROVAL",
+                          self._gate({"session_id": "s2", "transcript_path": current}, env)["reason"])
+
+    def test_earlier_approval_carries_over_when_nothing_takes_it_back(self):
+        with tempfile.TemporaryDirectory() as folder, tempfile.TemporaryDirectory() as state:
+            env = dict(os.environ, RUMBO_STATE_DIR=state)
+            self._approved_last_session(folder, env)
+            current = self._transcript_file(folder, "session-2.jsonl", "Now draft the invitation.")
             self.assertIsNone(self._gate({"session_id": "s2", "transcript_path": current}, env))
 
     def _gate(self, hook, env):

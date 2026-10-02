@@ -457,74 +457,73 @@ def unverified_quotes(record, messages):
     return unverified
 
 
-MAX_PROJECT_TRANSCRIPTS = 50
-
-
 RETRACTION = re.compile(
     r"\b(?:cancel(?:led|ling)?|revoke[sd]?|withdraw(?:n)?|undo|scrap|scratch that|never ?mind|"
     r"instead|change[sd]? my mind|no longer|not anymore|take (?:it|that) back|reverse)\b",
     re.IGNORECASE)
+# Words that point back at an earlier decision rather than at the current task.
+EARLIER_DECISION = re.compile(
+    r"\b(?:previous(?:ly)?|earlier|before|approv\w*|decision|decided|agreed|choice|chose|"
+    r"picked|what i said|last time)\b", re.IGNORECASE)
+STOPWORDS = {"that", "this", "with", "from", "have", "will", "would", "should", "could", "there",
+             "their", "about", "into", "then", "than", "them", "they", "your", "what", "when",
+             "which", "instead", "option", "please", "just", "also", "make", "need"}
 
 
-def _retraction(messages):
-    """The first of this session's user messages that takes something back, shortened."""
+def _words(text):
+    return {w for w in re.findall(r"[a-z0-9']+", text.lower()) if len(w) >= 4 and w not in STOPWORDS}
+
+
+def _retraction_for(item, messages):
+    """A message from this session that takes this item back, shortened, or None.
+
+    It must contain a retraction word and either point back at an earlier
+    decision or share a word with the item, so "use bullets instead of a
+    table" does not reopen an unrelated approval.
+    """
+    item_words = _words(item.get("text", "") + " " + item.get("quote", ""))
     for message in messages:
-        if RETRACTION.search(message):
+        if RETRACTION.search(message) and (EARLIER_DECISION.search(message) or item_words & _words(message)):
             text = " ".join(message.split())
             return text if len(text) <= 120 else text[:117] + "..."
     return None
 
 
-def _earlier_approvals(record, paths):
-    """Of these quote paths, the active commitment/authorized items."""
-    items = record.get("items") or []
-    replaced = {ref for item in items for ref in item.get("replaces") or []}
-    found = []
-    for path in paths:
-        match = re.fullmatch(r"items\[(\d+)\]\.quote", path)
-        if not match:
-            continue
-        item = items[int(match.group(1))]
-        if item.get("status") in ("commitment", "authorized") and item.get("id") not in replaced:
-            found.append(path)
-    return found
+def _ledger_path(record_path):
+    return os.path.join(os.path.dirname(os.path.abspath(record_path)), "verified-quotes.json")
 
 
-def _quote_at(record, path):
-    """The quote named by an unverified_quotes path."""
-    if path == "objective.quote":
-        return record["objective"].get("quote")
-    match = re.fullmatch(r"items\[(\d+)\]\.quote", path)
-    return record["items"][int(match.group(1))].get("quote") if match else None
+def _quote_hash(quote):
+    return hashlib.sha256(_normalize(quote).encode("utf-8")).hexdigest()
 
 
-def project_messages(transcript_path):
-    """User messages from this project's other Claude Code session transcripts.
-
-    Claude Code keeps one transcript per session in the same directory, so a
-    record started in an earlier session quotes messages that only exist there.
-    Reads at most the MAX_PROJECT_TRANSCRIPTS most recently modified ones.
-    """
-    current = os.path.abspath(transcript_path)
-    folder = os.path.dirname(current)
+def _read_ledger(record_path):
+    """Hashes of quotes the Stop gate found in an earlier session's own transcript."""
     try:
-        names = os.listdir(folder)
+        with open(_ledger_path(record_path), encoding="utf-8") as handle:
+            ledger = _loads(handle.read())
+    except (OSError, ValueError):
+        return {}
+    quotes = ledger.get("quotes") if isinstance(ledger, dict) else None
+    return quotes if isinstance(quotes, dict) else {}
+
+
+def _write_ledger(record_path, ledger):
+    path = _ledger_path(record_path)
+    try:
+        fd, temp = tempfile.mkstemp(dir=os.path.dirname(path), prefix=".verified-")
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump({"version": 1, "quotes": ledger}, handle, indent=1, sort_keys=True)
+        os.replace(temp, path)
     except OSError:
-        return []
+        pass
 
-    def modified(path):
-        try:
-            return os.path.getmtime(path)
-        except OSError:
-            return 0
 
-    others = [os.path.join(folder, name) for name in names if name.endswith(".jsonl")]
-    others = [p for p in others if p != current and os.path.isfile(p) and not os.path.islink(p)]
-    others.sort(key=modified, reverse=True)
-    messages = []
-    for path in others[:MAX_PROJECT_TRANSCRIPTS]:
-        messages.extend(user_messages(path) or [])
-    return messages
+def _quote_paths(record):
+    """(path, quote) for the objective and every item."""
+    paths = [("objective.quote", record["objective"].get("quote"))]
+    paths += [("items[%d].quote" % i, item.get("quote")) for i, item in enumerate(record.get("items") or [])]
+    return [(p, q) for p, q in paths if isinstance(q, str)]
 
 
 # ------------------------------------------------------------ validation
@@ -995,49 +994,6 @@ def _hook_payload():
     return payload if isinstance(payload, dict) else None
 
 
-def _quotes(record):
-    """The objective quote and every item quote, as a set."""
-    quotes = set()
-    if isinstance(record, dict):
-        objective = record.get("objective")
-        if isinstance(objective, dict) and isinstance(objective.get("quote"), str):
-            quotes.add(objective["quote"])
-        for item in record.get("items") or []:
-            if isinstance(item, dict) and isinstance(item.get("quote"), str):
-                quotes.add(item["quote"])
-    return quotes
-
-
-def _snapshot_carried(session_id, record):
-    """At a session's first prompt, remember which quotes the record already held.
-
-    Only these carried-over quotes may be matched in the project's earlier
-    session transcripts; anything added during this session must appear in
-    this session's own transcript.
-    """
-    path = _marker_path(session_id, ".carried")
-    if not path or os.path.exists(path):
-        return
-    try:
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        with open(path, "w", encoding="utf-8") as handle:
-            json.dump(sorted(_quotes(record)), handle)
-    except OSError:
-        pass
-
-
-def _read_carried(session_id):
-    path = _marker_path(session_id, ".carried")
-    try:
-        if not path:
-            return set()
-        with open(path, encoding="utf-8") as handle:
-            quotes = _loads(handle.read())
-    except (OSError, ValueError):
-        return set()
-    return {q for q in quotes if isinstance(q, str)} if isinstance(quotes, list) else set()
-
-
 def maybe_nudge(args, payload):
     """Print the no-record nudge when the hook payload carries planning-looking work.
 
@@ -1071,17 +1027,14 @@ def maybe_nudge(args, payload):
 
 def cmd_show(args):
     payload = _hook_payload()
-    session_id = payload.get("session_id") if payload else None
     try:
         record = load_record(args.record)
     except LoadError as error:
-        _snapshot_carried(session_id, None)
         if error.code == "RECORD_NOT_FOUND":
             maybe_nudge(args, payload)
             return 0
         print("rumbo: record invalid, run record.py validate")
         return 0
-    _snapshot_carried(session_id, record)
     if validate_record(record):
         print("rumbo: record invalid, run record.py validate")
         return 0
@@ -1262,24 +1215,33 @@ def _stop_gate(args, hook_input):
                      "record's quotes; provide a readable transcript_path from "
                      "the harness or disclose that provenance is unverified")
     else:
-        unverified = unverified_quotes(record, messages)
-        carried = _read_carried(session_id) if unverified else set()
-        earlier_only = []
-        if carried:
-            still = set(unverified_quotes(record, messages + project_messages(transcript)))
-            earlier_only = [p for p in unverified if p not in still and _quote_at(record, p) in carried]
-            unverified = [p for p in unverified if p not in earlier_only]
-        for path in unverified:
-            parts.append("%s: UNVERIFIED: quote not found in the user's messages" % path)
-        # A quote found only in an earlier conversation shows the words were said,
-        # not that the approval still stands. If the user took something back this
-        # session, every earlier-only approval must be rechecked against it.
-        retraction = _retraction(messages) if earlier_only else None
-        if retraction:
-            for path in _earlier_approvals(record, earlier_only):
-                parts.append('%s: EARLIER_APPROVAL: approved in an earlier session, but this '
-                             'session the user said "%s"; check it still stands, and replace '
-                             'or reject it in the record if it changed' % (path, retraction))
+        unverified = set(unverified_quotes(record, messages))
+        ledger = _read_ledger(args.record)
+        changed = False
+        items = record.get("items") or []
+        replaced = {ref for item in items for ref in item.get("replaces") or []}
+        for path, quote in _quote_paths(record):
+            digest = _quote_hash(quote)
+            if path not in unverified:
+                if digest not in ledger:
+                    ledger[digest] = {"session": session_id or "", "seen": datetime.date.today().isoformat()}
+                    changed = True
+                continue
+            if digest not in ledger:
+                parts.append("%s: UNVERIFIED: quote not found in the user's messages" % path)
+                continue
+            # Verified in an earlier session. That shows the words were said, not
+            # that an approval still stands after this session's messages.
+            match = re.fullmatch(r"items\[(\d+)\]\.quote", path)
+            item = items[int(match.group(1))] if match else None
+            if item and item.get("status") in ("commitment", "authorized") and item.get("id") not in replaced:
+                said = _retraction_for(item, messages)
+                if said:
+                    parts.append('%s: EARLIER_APPROVAL: approved in an earlier session, but this '
+                                 'session the user said "%s"; check it still stands, and replace '
+                                 'or reject it in the record if it changed' % (path, said))
+        if changed:
+            _write_ledger(args.record, ledger)
 
     if not parts:
         for suffix in (".blocks", ".failed", ".lastreason"):

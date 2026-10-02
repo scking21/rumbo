@@ -105,7 +105,8 @@ is missing or unreadable, a failing check was deleted, or the record is unreadab
 An unavailable transcript is unverified provenance, not a clean result; disclose
 it if a readable harness transcript cannot be supplied. Never invent transcript
 evidence. An `EARLIER_APPROVAL` line means the user approved something in an earlier
-session and has said something this session that may take it back. Check with
+session and has said something this session that may take it back (it names
+the item or an earlier decision and uses a word like cancel or instead). Check with
 them. If it changed, add the new item with `replaces`, or set the old one to
 `rejected`. If it still stands, record their confirmation from this session as
 a new item that replaces the old one.
