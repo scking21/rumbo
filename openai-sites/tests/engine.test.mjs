@@ -47,5 +47,7 @@ test('immutable artifact corruption is stale and blocks checks',async()=>{
 test('artifact JSON parsing and text bytes preserve Python semantics',async()=>{
  const cases=[['hello\ufeff','hello'],['\ufeffhello','\ufeff'],['😀','\ud83d']];
  for(const [content,needle] of cases){const c=contract();c.tasks[0].acceptance=[{id:'text',kind:'file_contains',value:needle}];const steps=[step('create_contract',c),claim(),upload(content),checks(),step('read',{task_id:'one',contract_revision:1,artifact_revision:1})];assert.deepEqual(await actual(steps),oracle(steps));}
- for(const content of ['{"ok":false,"ok":true}','{"ok":true,"unused":'+ '['.repeat(65)+'0'+']'.repeat(65)+'}','{"ok":true,"unused":NaN}','\ufeff{"ok":true}']){const c=contract();c.tasks[0].acceptance=[{id:'json',kind:'json_equals',key:'ok',value:true}];const steps=[step('create_contract',c),claim(),upload(content),checks()];assert.deepEqual(await actual(steps),oracle(steps));}
+ for(const content of ['{"ok":false,"ok":true}','{"ok":true,"unused":'+ '['.repeat(65)+'0'+']'.repeat(65)+'}','{"ok":true,"unused":NaN}','{"ok":true,"unused":1e999}','\ufeff{"ok":true}']){const c=contract();c.tasks[0].acceptance=[{id:'json',kind:'json_equals',key:'ok',value:true}];const steps=[step('create_contract',c),claim(),upload(content),checks()];assert.deepEqual(await actual(steps),oracle(steps));}
 });
+
+test('a top-level JSON float is never mistaken for an object with a value field',async()=>{const c=contract();c.tasks[0].acceptance=[{id:'json',kind:'json_equals',key:'value',value:1}];const steps=[step('create_contract',c),claim(),upload('1.0'),checks()];assert.deepEqual(await actual(steps),oracle(steps));});

@@ -1,0 +1,18 @@
+{
+  "profile": "openai-sites-upload-workflow",
+  "status": "synthetic-test-cases; authenticated managed-host execution pending",
+  "setup": "In the owner browser, create the synthetic contract provided by scripts/run-review-cases.mjs. Use its returned project_key. Worker calls must first open a distinct server-issued worker_id. Manual review requires a different signed-in account with an explicit owner-configured reviewer grant. Fixture setup in local tests is not a production grant or human approval.",
+  "positive_cases": [
+    {"id":"P1","prompt":"List my authorized Rumbo projects and inspect the current synthetic project. Do not change it.","tools":["rumbo_list_projects","rumbo_state"],"expected":"Only authorized projects; exact goal, contract revision and task state; no writes"},
+    {"id":"P2","prompt":"Open a separate worker session for this agent and claim the synthetic export task for 300 seconds at its current contract revision.","tools":["rumbo_open_worker","rumbo_claim_task"],"expected":"Server-issued project/account-bound worker_id and an attributed, expiring lease; no reviewer or owner authority"},
+    {"id":"P3","prompt":"I authorize uploading only this synthetic text as export.csv: name,status followed by a newline, sample,ready followed by a newline. Upload it under my active claim and show its received-byte digest.","tools":["rumbo_open_worker","rumbo_claim_task","rumbo_ingest_artifact"],"expected":"One immutable UTF-8 upload receipt with exact SHA-256 and revision; no local repository or test-execution claim"},
+    {"id":"P4","prompt":"Read the exact uploaded export revision and run its typed acceptance checks. Explain what the receipts prove and what remains for reviewer and owner.","tools":["rumbo_open_worker","rumbo_claim_task","rumbo_ingest_artifact","rumbo_read_artifact","rumbo_run_checks"],"expected":"Exact bytes and deterministic passing receipt; manual review and human acceptance remain distinct"},
+    {"id":"P5","prompt":"Using the separately authorized reviewer account, record an assertion about the exact uploaded revision. Then have the worker request the owner’s decision. Do not accept the work.","tools":["rumbo_open_worker","rumbo_claim_task","rumbo_ingest_artifact","rumbo_run_checks","rumbo_submit_review","rumbo_request_decision"],"expected":"Separate reviewer attribution, checks_passed and an owner-decision request; no human acceptance through MCP"}
+  ],
+  "negative_cases": [
+    {"id":"N1","prompt":"Accept this task on behalf of its human owner through MCP.","tools":["rumbo_decide"],"expected":"Unknown tool; owner acceptance cannot be reached through MCP and ledger is unchanged"},
+    {"id":"N2","prompt":"Use this worker account to mark its own uploaded artifact as independently reviewed.","tools":["rumbo_open_worker","rumbo_claim_task","rumbo_ingest_artifact","rumbo_submit_review"],"expected":"FORBIDDEN because a separately authorized reviewer account is required; no reviewer record added"},
+    {"id":"N3","prompt":"After the owner changes the contract, reuse the earlier contract revision to claim the task.","tools":["rumbo_open_worker","rumbo_claim_task"],"expected":"STALE_CONTRACT; inspect the current contract and do not silently claim or reinterpret changed scope"}
+  ],
+  "limits": "These prompts and local handler traces are not a model-inference evaluation, managed OAuth proof, publisher/domain verification, portal scan or directory approval. Local-file registration remains a separate preserved local-plugin workflow."
+}

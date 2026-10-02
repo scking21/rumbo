@@ -152,7 +152,7 @@ export class Engine {
   const common={actor:this.actor,role:this.role,contract_revision:rev,artifact_revision:artifact.revision,artifact_sha256:digest,at:now};
   if(action==='run_checks'){
    const evidence=[];for(const check of task.acceptance){if(check.kind==='manual_review')continue;let passed=false;
-    try {if(check.kind==='sha256')passed=digest===check.value;else if(check.kind==='file_contains')passed=new RegExp(check.value.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'),'u').test(new TextDecoder('utf-8',{fatal:true,ignoreBOM:true}).decode(raw));else if(check.kind==='json_equals'){const value=parseJSON(new TextDecoder('utf-8',{fatal:true}).decode(raw),990,{duplicates:true,nonfinite:true});passed=value!==null&&typeof value==='object'&&!Array.isArray(value)&&Object.hasOwn(value,check.key)&&canonical(value[check.key])===canonical(check.value);}}catch{passed=false;}
+    try {if(check.kind==='sha256')passed=digest===check.value;else if(check.kind==='file_contains')passed=new RegExp(check.value.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'),'u').test(new TextDecoder('utf-8',{fatal:true,ignoreBOM:true}).decode(raw));else if(check.kind==='json_equals'){const value=parseJSON(new TextDecoder('utf-8',{fatal:true}).decode(raw),990,{duplicates:true,nonfinite:true});passed=value!==null&&typeof value==='object'&&!(value instanceof FloatValue)&&!Array.isArray(value)&&Object.hasOwn(value,check.key)&&canonical(value[check.key])===canonical(check.value);}}catch{passed=false;}
     evidence.push({...common,id:eventid+'-'+check.id,kind:'deterministic',check_id:check.id,outcome:passed?'pass':'fail',detail:check.kind+' evaluated against the recorded artifact bytes'});
    }return {task_id:task.id,evidence};
   }

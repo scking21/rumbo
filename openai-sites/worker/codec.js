@@ -67,7 +67,7 @@ export function parseJSON(raw, maxDepth=64, options={}) {
     const match=raw.slice(i).match(/^-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?/);
     if(!match)throw new Error('Invalid JSON');
     const token=match[0];i+=token.length;
-    if(/[.eE]/.test(token)){const v=Number(token);if(!Number.isFinite(v))throw new Error('Nonfinite JSON');return new FloatValue(v);}
+    if(/[.eE]/.test(token)){const v=Number(token);if(!Number.isFinite(v)&&!options.nonfinite)throw new Error('Nonfinite JSON');return new FloatValue(v);}
     const big=BigInt(token);return big>=BigInt(Number.MIN_SAFE_INTEGER)&&big<=BigInt(Number.MAX_SAFE_INTEGER)?Number(big):big;
   }
   const result=value(0);space();if(i!==raw.length)throw new Error('Trailing JSON input');return result;
