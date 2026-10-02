@@ -2,7 +2,7 @@
 
 ## Runtime and authority
 
-Production build: `dist/server/index.js`, a bundled ESM Worker with no runtime npm dependencies, Node-only imports, local filesystem, subprocesses, model API calls, or paid external services. Logical bindings are D1 `DB` and R2 `ARTIFACTS`. Drizzle generates the immutable schema migrations. Sites manages OAuth and trusted identity headers. A direct Worker deployment outside that trusted boundary is not supported.
+Deployment build: `dist/server/index.js`, a bundled ESM Worker with no runtime npm dependencies, Node-only imports, local filesystem, subprocesses, model API calls, or paid external services. Logical bindings are D1 `DB` and R2 `ARTIFACTS`. Drizzle generates the immutable schema migrations. Sites manages OAuth and trusted identity headers. A direct Worker deployment outside that trusted boundary is not supported.
 
 Every project key is derived from the Site user ID plus the owner-chosen alias. All event, worker and artifact queries are project-scoped. D1 batches atomically append an event only at its expected head and then update that exact head. A competing caller replays/revalidates the new state before retrying. Content quota reservation happens before R2 upload; failed upload reservations remain bounded and can be retried under the same digest. R2 keys are project-scoped and content-addressed; existing bytes are verified and never intentionally overwritten.
 
@@ -17,7 +17,7 @@ The parent repository's original Python/Claude tests and CI remain applicable an
 ## Release gates
 
 - Resolve any remaining behavior-parity gaps before presenting the hosted runtime as equivalent for its supported upload workflow
-- Complete actual Chromium interaction/visual inspection, managed HTTPS/OAuth read-only connection and two separate authenticated reviewer/worker account checks
+- Synthetic Chromium workflows passed and their screenshots were visually inspected for runtime source `60a9f9f8e5bc595a3322a38c435592374937a823`. Keep that evidence bound to unchanged runtime inputs. Managed HTTPS/OAuth read-only connection, deployed persistence readback and two separate authenticated reviewer/worker account checks remain unverified
 - Complete independent review; a partially interrupted review is not clearance
 - Establish publisher-approved policy/legal URLs, retention/deletion and recovery procedures, reviewer access, final listing/ZIP and the user's final review
 - Preserve the local distribution for project-file registration, local file staleness and local backup/restore

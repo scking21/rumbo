@@ -1,6 +1,6 @@
 # OpenAI Sites runtime candidate
 
-This experimental hosted runtime is isolated from Rumbo's canonical Python engine and its unchanged Claude/local distributions. It has not been submitted, deployed or approved.
+This experimental hosted runtime is isolated from Rumbo's canonical Python engine and its unchanged Claude/local distributions. An owner-only private deployment exists. It has not been submitted to or approved for the public directory. Authenticated managed use remains unverified.
 
 ## Approved implementation boundary
 

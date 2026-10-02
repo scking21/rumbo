@@ -18,7 +18,7 @@ Owner create/revise/decision and role-grant actions use a separate same-origin s
 
 ## Retention and export
 
-No automatic retention or deletion schedule is implemented. Contract, event and artifact history persists until the operator removes the Site's stored data through supported platform administration. Browser session tokens expire after one hour; worker sessions expire after 24 hours, but historical attribution records remain. Expiration does not itself delete database rows.
+No automatic retention or deletion schedule is implemented. The application retains contract, event and artifact history; an operator deletion procedure, including provider-held copies, has not yet been established or tested. Browser session tokens expire after one hour; worker sessions expire after 24 hours, but historical attribution records remain. Expiration does not itself delete database rows.
 
 The owner can download an NDJSON export containing the verified ledger and all retained uploaded artifact bytes. `scripts/verify-export.py` checks completeness, event hashes and artifact digests. Hosted restore and self-service deletion are not implemented in this review candidate; the existing local distribution keeps its separately verified backup/restore workflow. A production retention/deletion and recovery procedure remains a release gate.
 
@@ -26,4 +26,4 @@ The owner can download an NDJSON export containing the verified ledger and all r
 
 Hosting and the connected AI client process requests under their own terms and platform policies. This repository cannot independently verify their infrastructure retention. Error logs contain an error category, not request bodies, artifact contents or credentials. Hash chaining is tamper-evident relative to a trusted checkpoint, not cryptographic witnessing against a database administrator.
 
-Never upload passwords, keys, tokens, health or financial information, children's information, or other sensitive material without appropriate user permission and destination approval. All verification data in this candidate is synthetic.
+Use only synthetic, non-sensitive material in this experimental review candidate. Never upload payment-card data covered by PCI DSS, protected health information, government identifiers, passwords, API keys, one-time codes or other authentication secrets. User permission does not make these restricted categories acceptable plugin inputs. All verification data in this candidate is synthetic. See the [OpenAI plugin data-collection requirements](https://developers.openai.com/plugins/plugin-guidelines#data-collection).
