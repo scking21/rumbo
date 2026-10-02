@@ -12,7 +12,7 @@ The packaged OpenAI launcher is a worker-only adapter to the canonical Rumbo eng
 python3 -m rumbo.registry --plugin-data /absolute/plugin/data add export-project --root /absolute/project
 ```
 
-Registration validates an already initialized ledger read-only and records the alias, expected project ID, and directory device/inode in `projects.json`. Owner registrations are serialized with a private `.projects.lock` so simultaneous setup commands cannot silently lose an alias. Runtime connections never create that lock or rewrite the registry. Provisioning is an owner-run local command, never an agent MCP tool. File access protections are local safeguards, not proof of a human identity; an unrestricted process under the same OS account is outside this boundary.
+Registration validates an already initialized ledger read-only and records the alias, expected project ID, and directory device/inode in `projects.json`. Owner registrations are serialized with a private `.projects.lock` so simultaneous setup commands cannot silently lose an alias. Runtime connections never create that lock or rewrite the registry. Provisioning is an owner-run local command, never an agent MCP tool. File access protections are local safeguards, not proof of a human identity; an unrestricted process under the same OS account is outside this boundary. The standard launcher runs as its own process. Embedding it concurrently with direct core `Engine` or raw SQLite connections in that same process is unsupported; use the separate trusted CLI/server process for those workflows. Installed connections coordinate their own SQLite operations and identity-handle cleanup.
 
 ## Agent connection
 

@@ -244,6 +244,141 @@ class InstalledTests(unittest.TestCase):
         path.write_bytes(original)
         self.assertToolError(self.call(protocol, 'rumbo_state'), 'PROJECT_CHANGED')
 
+    def project_descriptors(self, identities=None):
+        identities = identities or {(p.stat().st_dev, p.stat().st_ino) for p in
+                                   (self.project, self.project / '.rumbo', self.project / '.rumbo/state.sqlite3')}
+        found = {}
+        for name in os.listdir('/dev/fd'):
+            try:
+                fd = int(name)
+                info = os.fstat(fd)
+            except (OSError, ValueError):
+                continue
+            identity = (info.st_dev, info.st_ino)
+            if identity in identities:
+                found.setdefault(identity, set()).add(fd)
+        return found
+
+    def test_bound_connection_holds_readonly_identity_pins_until_close(self):
+        import fcntl
+        self.register()
+        protocol = self.protocol()
+        self.bind(protocol)
+        descriptors = self.project_descriptors()
+        self.assertEqual(len(descriptors), 3, 'The root, state directory, and database need live OS descriptors to prevent freed inode reuse')
+        for fd in set().union(*descriptors.values()):
+            self.assertEqual(fcntl.fcntl(fd, fcntl.F_GETFL) & os.O_ACCMODE, os.O_RDONLY)
+            self.assertFalse(os.get_inheritable(fd))
+        protocol.engine.close()
+        protocol.engine.close()
+        for fd in set().union(*descriptors.values()):
+            with self.assertRaises(OSError):
+                os.fstat(fd)
+        self.assertToolError(self.call(protocol, 'rumbo_state'), 'PROJECT_CHANGED')
+
+    def test_unlinked_database_pin_stays_live_and_replacement_is_rejected(self):
+        self.register()
+        protocol = self.protocol()
+        self.bind(protocol)
+        path = self.project / '.rumbo/state.sqlite3'
+        identity = (path.stat().st_dev, path.stat().st_ino)
+        descriptors = self.project_descriptors({identity})
+        self.assertTrue(descriptors, 'Database inode must stay pinned after validation')
+        path.unlink()
+        for fd in descriptors[identity]:
+            self.assertEqual(os.fstat(fd).st_nlink, 0)
+        # No intervening request reports the deletion. A valid replacement with
+        # the same project ID must still be rejected, before any ledger writes.
+        Engine(self.project, 'owner', 'human').execute('create_contract', contract())
+        before = path.read_bytes()
+        self.assertNotEqual((path.stat().st_dev, path.stat().st_ino), identity)
+        self.assertToolError(self.call(protocol, 'rumbo_state'), 'PROJECT_CHANGED')
+        self.assertToolError(self.call(protocol, 'rumbo_claim_task', dict(task_id='export', contract_revision=1, lease_seconds=60)), 'PROJECT_CHANGED')
+        self.assertEqual(path.read_bytes(), before)
+
+    def test_identity_descriptors_are_released_when_connection_is_collected(self):
+        import gc
+        import weakref
+        registry, _ = self.modules()
+        engine = registry.ExistingProjectEngine(self.project, 'test-worker')
+        descriptors = self.project_descriptors()
+        self.assertEqual(len(descriptors), 3)
+        reference = weakref.ref(engine)
+        del engine
+        gc.collect()
+        self.assertIsNone(reference())
+        for fd in set().union(*descriptors.values()):
+            with self.assertRaises(OSError):
+                os.fstat(fd)
+
+    def test_failed_binding_and_owner_registration_do_not_leak_identity_descriptors(self):
+        registry, _ = self.modules()
+        before = self.project_descriptors()
+        self.register()
+        self.assertEqual(self.project_descriptors(), before)
+        protocol = self.protocol()
+        path = self.project / '.rumbo/state.sqlite3'
+        with sqlite3.connect(path) as db:
+            db.execute('DELETE FROM events')
+        db.close()
+        for _ in range(10):
+            self.assertToolError(self.call(protocol, 'rumbo_connect_project', dict(alias='sample')), 'PROJECT_UNINITIALIZED')
+            self.assertEqual(self.project_descriptors(), before)
+
+    def test_identity_pins_accept_concurrent_workers_and_normal_ledger_mutations(self):
+        import concurrent.futures
+        self.register()
+        workers = [self.protocol() for _ in range(6)]
+        connections = [self.bind(worker) for worker in workers]
+        args = dict(task_id='export', contract_revision=1, lease_seconds=60)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=6) as pool:
+            claims = list(pool.map(lambda worker: self.call(worker, 'rumbo_claim_task', args), workers))
+        self.assertEqual(sum(not result['isError'] for result in claims), 1)
+        winner = next(i for i, result in enumerate(claims) if not result['isError'])
+        for index, result in enumerate(claims):
+            if index != winner:
+                self.assertToolError(result, 'LEASE_CONFLICT')
+        self.assertFalse(self.call(workers[winner], 'rumbo_submit_artifact', dict(task_id='export', contract_revision=1, path='export.csv'))['isError'])
+        self.assertFalse(self.call(workers[winner], 'rumbo_run_checks', dict(task_id='export', contract_revision=1, artifact_revision=1))['isError'])
+        for worker in workers:
+            result = self.call(worker, 'rumbo_state')
+            self.assertFalse(result['isError'])
+            state = result['structuredContent']
+            self.assertEqual(state['events_count'], 4)
+            self.assertEqual(state['tasks'][0]['lease']['actor'], connections[winner]['actor'])
+            self.assertEqual(state['tasks'][0]['status'], 'checks_passed')
+
+    def test_sibling_cleanup_and_failed_initialization_preserve_sqlite_lock(self):
+        registry, _ = self.modules()
+        holder = registry.ExistingProjectEngine(self.project, 'holder')
+        sibling = registry.ExistingProjectEngine(self.project, 'sibling')
+        self.assertTrue(callable(getattr(sibling, 'close', None)), 'Pins need explicit safe cleanup')
+        self.addCleanup(holder.close)
+        probe = """import sqlite3, sys
+connection = sqlite3.connect(sys.argv[1], timeout=0)
+try:
+    connection.execute('BEGIN IMMEDIATE')
+except sqlite3.OperationalError as error:
+    print('locked' if 'locked' in str(error) else str(error))
+else:
+    print('unlocked')
+finally:
+    connection.close()
+"""
+        def lock_state():
+            result = subprocess.run([sys.executable, '-c', probe, str(self.project / '.rumbo/state.sqlite3')], text=True, capture_output=True, check=True)
+            return result.stdout.strip()
+        with holder._db() as db:
+            db.execute('BEGIN IMMEDIATE')
+            self.assertEqual(lock_state(), 'locked')
+            sibling.close()
+            self.assertEqual(lock_state(), 'locked', 'Closing a sibling raw pin must not release this process SQLite transaction lock')
+            expected = dict(device=self.project.stat().st_dev, inode=self.project.stat().st_ino, project_id='wrong-id')
+            with self.assertRaisesRegex(RumboError, 'PROJECT_ID_MISMATCH'):
+                registry.ExistingProjectEngine(self.project, 'failed-validator', expected=expected)
+            self.assertEqual(lock_state(), 'locked', 'Failed construction cleanup must not release sibling transaction locks')
+        self.assertEqual(lock_state(), 'unlocked')
+
     def test_process_actors_are_unique_and_lease_collision_expires_without_resume(self):
         self.register()
         first, second = self.protocol(), self.protocol()

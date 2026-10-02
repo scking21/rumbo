@@ -374,7 +374,10 @@ class BoardBrowserTests(unittest.TestCase):
         self.page.locator('#task-list button').click()
         self.assertIn('Contract changed after prior review', self.page.locator('#task-detail').inner_text())
         self.page.get_by_role('button', name='Copy handoff').click()
-        self.assertRegex(self.page.locator('#message').inner_text(), 'Copied|copy')
+        # click waits for dispatch, not the async clipboard promise. Assert the
+        # same visible success/fallback result once that operation completes.
+        from playwright.sync_api import expect
+        expect(self.page.locator('#message')).to_have_text(re.compile('.*(?:Copied|copy).*'))
 
     def test_injection_is_literal_and_narrow_layout_does_not_overflow(self):
         hostile = '<img src=x onerror="window.PWNED=true">'

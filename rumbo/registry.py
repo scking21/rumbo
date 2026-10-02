@@ -5,7 +5,7 @@ sandbox. Its owner must protect the executable, registry, and project together.
 Registration validates existing storage read-only; it never initializes a ledger.
 """
 import argparse
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 import copy
 import fcntl
 import hashlib
@@ -17,6 +17,8 @@ import stat
 import sys
 import tempfile
 import time
+import threading
+import weakref
 
 from .core import (ACTION_FIELDS, Engine, MAX_EVENTS, MAX_LEDGER_BYTES, RumboError,
                    fail, fields, identifier, integer, validate_contract)
@@ -28,6 +30,34 @@ MAX_PROJECTS = 100
 REGISTRY_GUIDANCE = ('Unsupported or invalid projects.json. The owner must preserve the old file, '
                      'review/migrate its aliases, and re-register initialized projects with '
                      'python -m rumbo.registry; no configuration was overwritten.')
+
+
+# Installed engines share a process-local SQLite coordination boundary. Closing
+# an ordinary descriptor for a SQLite inode can release this process's POSIX
+# locks, including a sibling connection's locks. Serialize installed database
+# contexts and defer pin closure until every active context has closed SQLite.
+# The trusted core CLI runs in a separate process; concurrent direct Engine or
+# raw sqlite3 use in the installed launcher's process is unsupported.
+_PIN_LOCK = threading.RLock()
+_ACTIVE_DATABASES = 0
+_PENDING_PIN_CLOSES = []
+
+
+def _drain_pin_closes():
+    if not _ACTIVE_DATABASES:
+        while _PENDING_PIN_CLOSES:
+            descriptor = _PENDING_PIN_CLOSES.pop()
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
+
+
+def _release_pins(descriptors):
+    with _PIN_LOCK:
+        _PENDING_PIN_CLOSES.extend(descriptors)
+        descriptors.clear()
+        _drain_pin_closes()
 
 
 def _identity(info):
@@ -152,33 +182,55 @@ class ExistingProjectEngine(Engine):
     protection from a hostile same-user process racing filesystem operations.
     """
     def __init__(self, root, actor, expected=None, guard=None, clock=None):
-        self.root = _absolute_directory(root, 'PROJECT_CHANGED')
-        self.actor = identifier(actor, 'host actor')
-        self.role = 'worker'
-        self.clock = clock or time.time
-        self.guard = guard
-        self.db_path = self.root / '.rumbo' / 'state.sqlite3'
-        self._readonly = True
-        self._pins = self._identities('PROJECT_UNINITIALIZED')
-        if expected and self._pins[0] != (expected['device'], expected['inode']):
-            fail('PROJECT_CHANGED', 'Registered project directory was replaced; owner re-registration is required')
-        with self._db() as db:
-            self._validate_schema(db)
-            state = self._replay(db)
-            if not state.get('project_id') or not state.get('contract_revision'):
-                fail('PROJECT_UNINITIALIZED', 'The owner must initialize and approve a contract with the trusted operator CLI first')
-            try:
-                contract = {key: state[key] for key in ACTION_FIELDS['create_contract'][0]}
-                contract['tasks'] = [{key: task[key] for key in ('id', 'title', 'dependencies', 'acceptance')} for task in state['tasks']]
-                validate_contract(contract, state['decision_owner'])
-                integer(state['contract_revision'], 'contract_revision')
-            except (RumboError, KeyError, TypeError, ValueError):
-                fail('LEDGER_CORRUPT', 'Existing ledger does not contain a valid initialized contract')
-            if expected and state['project_id'] != expected['project_id']:
-                fail('PROJECT_ID_MISMATCH', 'Ledger project identity differs from its owner-registered alias')
-            self.project_id = state['project_id']
-            self.contract_revision = state['contract_revision']
-        self._readonly = False
+        self._pin_fds = []
+        self._pin_finalizer = weakref.finalize(self, _release_pins, self._pin_fds)
+        try:
+            with _PIN_LOCK:
+                self.root = _absolute_directory(root, 'PROJECT_CHANGED')
+                self.actor = identifier(actor, 'host actor')
+                self.role = 'worker'
+                self.clock = clock or time.time
+                self.guard = guard
+                self.db_path = self.root / '.rumbo' / 'state.sqlite3'
+                self._readonly = True
+                self._pins = self._identities('PROJECT_UNINITIALIZED')
+                self._acquire_pins()
+                if expected and self._pins[0] != (expected['device'], expected['inode']):
+                    fail('PROJECT_CHANGED', 'Registered project directory was replaced; owner re-registration is required')
+                with self._db() as db:
+                    self._validate_schema(db)
+                    state = self._replay(db)
+                    if not state.get('project_id') or not state.get('contract_revision'):
+                        fail('PROJECT_UNINITIALIZED', 'The owner must initialize and approve a contract with the trusted operator CLI first')
+                    try:
+                        contract = {key: state[key] for key in ACTION_FIELDS['create_contract'][0]}
+                        contract['tasks'] = [{key: task[key] for key in ('id', 'title', 'dependencies', 'acceptance')} for task in state['tasks']]
+                        validate_contract(contract, state['decision_owner'])
+                        integer(state['contract_revision'], 'contract_revision')
+                    except (RumboError, KeyError, TypeError, ValueError):
+                        fail('LEDGER_CORRUPT', 'Existing ledger does not contain a valid initialized contract')
+                    if expected and state['project_id'] != expected['project_id']:
+                        fail('PROJECT_ID_MISMATCH', 'Ledger project identity differs from its owner-registered alias')
+                    self.project_id = state['project_id']
+                    self.contract_revision = state['contract_revision']
+                self._readonly = False
+        except BaseException:
+            self.close()
+            raise
+
+    def _acquire_pins(self):
+        flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
+        try:
+            self._pin_fds.append(os.open(str(self.root), flags | os.O_DIRECTORY))
+            self._pin_fds.append(os.open('.rumbo', flags | os.O_DIRECTORY, dir_fd=self._pin_fds[0]))
+            self._pin_fds.append(os.open('state.sqlite3', flags, dir_fd=self._pin_fds[1]))
+            self.verify()
+        except OSError:
+            fail('PROJECT_CHANGED', 'Project or ledger changed while acquiring read-only identity pins')
+
+    def close(self):
+        """Invalidate this engine; release pins safely after active SQLite work."""
+        self._pin_finalizer()
 
     def _identities(self, code='PROJECT_CHANGED'):
         root = _safe_directory(self.root, code)
@@ -192,9 +244,17 @@ class ExistingProjectEngine(Engine):
         return _identity(root), _identity(state), _identity(database)
 
     def verify(self):
+        if not self._pin_finalizer.alive:
+            fail('PROJECT_CHANGED', 'This project connection is closed; start a new installed connection')
         if self.guard:
             self.guard()
-        if self._identities() != self._pins:
+        try:
+            pinned = tuple(os.fstat(fd) for fd in self._pin_fds)
+        except OSError:
+            fail('PROJECT_CHANGED', 'A project identity pin is no longer valid')
+        if (len(pinned) != 3 or tuple(_identity(info) for info in pinned) != self._pins
+                or any(info.st_nlink < 1 for info in pinned[:2]) or pinned[2].st_nlink != 1
+                or self._identities() != self._pins):
             fail('PROJECT_CHANGED', 'Project or ledger was replaced; restart after owner inspection and re-registration')
 
     @staticmethod
@@ -225,39 +285,45 @@ class ExistingProjectEngine(Engine):
             except FileNotFoundError:
                 continue
             fail('LEDGER_STORAGE_UNSUPPORTED', 'Read-only validation requires a quiescent rollback-journal ledger; ask the owner to finish active writes and inspect journal storage')
-        fd = os.open(str(self.db_path), os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
-        with os.fdopen(fd, 'rb') as handle:
-            if _identity(os.fstat(handle.fileno())) != self._pins[2]:
-                fail('PROJECT_CHANGED', 'Ledger changed during read-only validation')
-            header = handle.read(20)
+        # Read through the retained pin. Opening and closing a temporary DB
+        # descriptor here could discard a sibling SQLite transaction's locks.
+        self.verify()
+        header = os.pread(self._pin_fds[2], 20, 0)
         if header[:16] == b'SQLite format 3\x00' and header[18:20] != b'\x01\x01':
             fail('LEDGER_STORAGE_UNSUPPORTED', 'Read-only validation does not support WAL storage; the owner must checkpoint and switch the ledger to DELETE journal mode before registering or connecting')
 
     @contextmanager
     def _db(self):
-        self.verify()
-        if self._readonly:
-            self._validate_readonly_storage()
-        db = None
-        try:
-            # mode=rw never creates missing databases; validation uses mode=ro.
-            mode = 'ro' if self._readonly else 'rw'
-            db = sqlite3.connect(self.db_path.as_uri() + '?mode=' + mode, uri=True, timeout=15)
-            db.execute('PRAGMA busy_timeout=15000')
-            db.execute('PRAGMA trusted_schema=OFF')
-            if self._readonly:
-                db.execute('PRAGMA query_only=ON')
+        global _ACTIVE_DATABASES
+        with _PIN_LOCK:
             self.verify()
-            with db:
-                yield db
+            if self._readonly:
+                self._validate_readonly_storage()
+            db = None
+            _ACTIVE_DATABASES += 1
+            try:
+                # mode=rw never creates missing databases; validation uses ro.
+                mode = 'ro' if self._readonly else 'rw'
+                db = sqlite3.connect(self.db_path.as_uri() + '?mode=' + mode, uri=True, timeout=15)
+                db.execute('PRAGMA busy_timeout=15000')
+                db.execute('PRAGMA trusted_schema=OFF')
+                if self._readonly:
+                    db.execute('PRAGMA query_only=ON')
                 self.verify()
-        except sqlite3.DatabaseError:
-            fail('LEDGER_UNREADABLE', 'Existing ledger could not be read safely; ask its owner to inspect storage')
-        except (KeyError, TypeError, ValueError, IndexError, StopIteration, RecursionError):
-            fail('LEDGER_CORRUPT', 'Existing ledger contains an invalid event')
-        finally:
-            if db is not None:
-                db.close()
+                with db:
+                    yield db
+                    self.verify()
+            except sqlite3.DatabaseError:
+                fail('LEDGER_UNREADABLE', 'Existing ledger could not be read safely; ask its owner to inspect storage')
+            except (KeyError, TypeError, ValueError, IndexError, StopIteration, RecursionError):
+                fail('LEDGER_CORRUPT', 'Existing ledger contains an invalid event')
+            finally:
+                try:
+                    if db is not None:
+                        db.close()
+                finally:
+                    _ACTIVE_DATABASES -= 1
+                    _drain_pin_closes()
 
     def _artifact_bytes(self, relative):
         self.verify()
@@ -306,35 +372,35 @@ def _register_project_locked(plugin_data, alias, root):
         fail('ALIAS_EXISTS', 'Alias already exists; owner must review existing configuration rather than silently replace it')
     if len(registry.document['projects']) >= MAX_PROJECTS:
         fail('REGISTRY_LIMIT', 'At most 100 projects can be registered')
-    engine = ExistingProjectEngine(root, 'registry-validator')
-    info = engine.root.stat()
-    entry = dict(root=str(engine.root), project_id=engine.project_id, device=info.st_dev, inode=info.st_ino)
-    document = copy.deepcopy(registry.document)
-    document['projects'][alias] = entry
-    raw = (json.dumps(document, indent=2, sort_keys=True) + '\n').encode('utf-8')
-    if len(raw) > MAX_REGISTRY_BYTES:
-        fail('REGISTRY_LIMIT', 'Registry exceeds 128 KiB')
-    temporary = None
-    try:
-        fd, temporary = tempfile.mkstemp(prefix='.projects-', suffix='.tmp', dir=registry.directory)
-        with os.fdopen(fd, 'wb') as handle:
-            os.fchmod(handle.fileno(), 0o600)
-            handle.write(raw)
-            handle.flush()
-            os.fsync(handle.fileno())
-        registry.verify()
-        engine.verify()
-        os.replace(temporary, registry.path)
+    with closing(ExistingProjectEngine(root, 'registry-validator')) as engine:
+        info = engine.root.stat()
+        entry = dict(root=str(engine.root), project_id=engine.project_id, device=info.st_dev, inode=info.st_ino)
+        document = copy.deepcopy(registry.document)
+        document['projects'][alias] = entry
+        raw = (json.dumps(document, indent=2, sort_keys=True) + '\n').encode('utf-8')
+        if len(raw) > MAX_REGISTRY_BYTES:
+            fail('REGISTRY_LIMIT', 'Registry exceeds 128 KiB')
         temporary = None
-        directory_fd = os.open(str(registry.directory), os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
         try:
-            os.fsync(directory_fd)
+            fd, temporary = tempfile.mkstemp(prefix='.projects-', suffix='.tmp', dir=registry.directory)
+            with os.fdopen(fd, 'wb') as handle:
+                os.fchmod(handle.fileno(), 0o600)
+                handle.write(raw)
+                handle.flush()
+                os.fsync(handle.fileno())
+            registry.verify()
+            engine.verify()
+            os.replace(temporary, registry.path)
+            temporary = None
+            directory_fd = os.open(str(registry.directory), os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+            try:
+                os.fsync(directory_fd)
+            finally:
+                os.close(directory_fd)
         finally:
-            os.close(directory_fd)
-    finally:
-        if temporary is not None:
-            os.unlink(temporary)
-    return dict(alias=alias, project_id=engine.project_id, registry=str(registry.path))
+            if temporary is not None:
+                os.unlink(temporary)
+        return dict(alias=alias, project_id=engine.project_id, registry=str(registry.path))
 
 
 def main(argv=None):

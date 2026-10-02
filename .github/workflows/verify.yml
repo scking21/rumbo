@@ -60,6 +60,7 @@ jobs:
           python -m unittest discover -s tests -p test_protocol.py -v
           python -m unittest discover -s tests -p test_demo.py -v
           python -m unittest discover -s tests -p test_backup.py -v
+          python -m unittest discover -s tests -p test_installed.py -v
       - name: Verify legacy adapter floor
         working-directory: claude-plugin/rumbo
         run: python -m unittest discover -s tests -v
@@ -93,4 +94,5 @@ jobs:
       - name: Verify backup paths and explicit JSON depth boundaries
         run: |
           python -m unittest discover -s tests -p test_backup.py -v
+          python -m unittest discover -s tests -p test_installed.py -v
           python -m unittest discover -s tests -p test_protocol.py -v
