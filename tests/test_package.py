@@ -82,7 +82,9 @@ class PackageTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             root=Path(temp)
             shutil.copytree(ROOT/'openai-plugin',root/'openai-plugin')
-            (root/'docs').mkdir();shutil.copy(ROOT/'docs/reviewer-cases.json',root/'docs/reviewer-cases.json')
+            (root/'docs').mkdir()
+            for path in (ROOT/'docs').glob('reviewer-cases-*.json'):
+                shutil.copy(path,root/'docs'/path.name)
             shutil.copy(ROOT/'LICENSE',root/'LICENSE')
             for name in ['.env','hooks.json','.app.json']:
                 planted=root/'openai-plugin/rumbo'/name;planted.write_text('synthetic unsafe package input')
