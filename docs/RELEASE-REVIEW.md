@@ -40,8 +40,8 @@ Commands:
 ```sh
 # Python 3.10+ environment with requirements-authkit.txt installed
 python3 scripts/run_tests.py
-(cd rumbo && python3 -m unittest discover -s tests -v)
-python3 -m compileall -q rumbo scripts
+(cd claude-plugin/rumbo && python3 -m unittest discover -s tests -v)
+python3 -m compileall -q rumbo scripts claude-plugin
 python3 -m pip wheel --no-deps --no-build-isolation --wheel-dir /tmp/rumbo-wheel .
 python3 scripts/package_release.py --kind local --output dist/rumbo-0.3.0-local-plugin.zip
 python3 scripts/package_release.py --kind source --output dist/rumbo-0.3.0-source.zip

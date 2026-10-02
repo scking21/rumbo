@@ -1775,5 +1775,58 @@ class RecordTest(unittest.TestCase):
         self.assertIn("C1: FAIL within_budget", out)
         self.assertEqual(err, "")
 
+    def test_deeply_nested_record_is_unreadable_not_a_crash(self):
+        self._write("[" * 200000 + "]" * 200000)
+        code, out, err = run_record(["validate", "--record", self.record_path])
+        self.assertEqual(code, 2)
+        self.assertEqual(err.strip(), "RECORD_UNREADABLE")
+
+    def test_stop_gate_fails_closed_on_a_deeply_nested_record(self):
+        with tempfile.TemporaryDirectory() as state:
+            env = dict(os.environ, RUMBO_STATE_DIR=state)
+            self._write("[" * 200000 + "]" * 200000)
+            code, out, err = run_record(["stop-gate", "--record", self.record_path],
+                                        input_text=json.dumps({"session_id": "deep"}), env=env)
+            self.assertEqual(code, 0)
+            self.assertEqual(err, "")
+            decision = json.loads(out)
+            self.assertEqual(decision["decision"], "block")
+            self.assertIn("RECORD_UNREADABLE", decision["reason"])
+
+    def test_stop_gate_deeply_nested_hook_input_is_silent_garbage(self):
+        code, out, err = run_record(["stop-gate", "--record", self.record_path],
+                                    input_text="[" * 200000 + "]" * 200000)
+        self.assertEqual(code, 0)
+        self.assertEqual(out.strip(), "")
+        self.assertEqual(err, "")
+
+    def test_deeply_nested_transcript_line_is_skipped(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "t.jsonl")
+            good = {"type": "user", "message": {"role": "user", "content": "budget is $600"}}
+            with open(path, "w", encoding="utf-8") as handle:
+                handle.write("[" * 200000 + "]" * 200000 + "\n" + json.dumps(good) + "\n")
+            self.assertEqual(record.user_messages(path), ["budget is $600"])
+
+    def test_stop_gate_internal_error_blocks_instead_of_exiting_nonzero(self):
+        import contextlib, io
+        from unittest import mock
+        args = record.build_parser().parse_args(["stop-gate", "--record", self.record_path])
+        for hook, blocks in (({"session_id": "boom"}, True), ({"stop_hook_active": True}, False)):
+            out = io.StringIO()
+            with tempfile.TemporaryDirectory() as state, \
+                    mock.patch.dict(os.environ, {"RUMBO_STATE_DIR": state}), \
+                    mock.patch.object(record, "load_record", side_effect=RuntimeError("boom")), \
+                    mock.patch.object(sys, "stdin", io.StringIO(json.dumps(hook))), \
+                    contextlib.redirect_stdout(out):
+                code = record.cmd_stop_gate(args)
+            self.assertEqual(code, 0)
+            if blocks:
+                decision = json.loads(out.getvalue())
+                self.assertEqual(decision["decision"], "block")
+                self.assertIn("GATE_ERROR", decision["reason"])
+            else:
+                self.assertEqual(out.getvalue(), "")
+
 if __name__ == "__main__":
     unittest.main()

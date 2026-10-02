@@ -130,7 +130,7 @@ def build_source(root,target):
     root=Path(root);files={}
     for name in ['README.md','LICENSE','PRIVACY.md','SECURITY.md','pyproject.toml','requirements-owner.txt','requirements-authkit.txt','.gitignore','.dockerignore']:
         if (root/name).is_file():files[name]=(root/name).read_bytes()
-    for dirname in ['rumbo','tests','scripts','schemas','openai-plugin','docs','deploy','.github','.claude-plugin']:
+    for dirname in ['rumbo','claude-plugin','tests','scripts','schemas','openai-plugin','docs','deploy','.github','.claude-plugin']:
         for path in (root/dirname).rglob('*'):
             relative=path.relative_to(root).as_posix()
             if path.is_symlink():raise ValueError('Symlink packaging forbidden')
