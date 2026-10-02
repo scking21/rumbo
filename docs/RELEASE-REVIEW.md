@@ -68,4 +68,4 @@ The board cannot approve work. The owner portal is a separate authenticated surf
 
 ## Before public submission
 
-Complete [deployment gates](DEPLOYMENT.md), verify the [five positive and three negative cases](reviewer-cases.json) in the live host, inspect the final production ZIP and obtain the owner's review before any upload/submission. The packager rejects absent/unverified production configuration and never uploads. A local ZIP, source review or CI pass does not equal directory approval.
+Complete [deployment gates](DEPLOYMENT.md), verify the [distribution-specific reviewer cases](REVIEW-CASES.md) in the live host, inspect the final production ZIP and obtain the owner's review before any upload/submission. The packager rejects absent/unverified production configuration and never uploads. A local ZIP, source review or CI pass does not equal directory approval.

@@ -45,7 +45,7 @@ def validate_public_config(config):
         raise ValueError('Public package blocked: every documented external verification gate must be completed, not assumed')
 
 
-def read_plugin(root):
+def read_plugin(root, review_profile):
     base=root/'openai-plugin/rumbo'
     files={}
     allowed={'plugin.json','mcp.json','README.md','.codex-plugin/plugin.json','assets/icon.svg','scripts/run_mcp.py','skills/coordinate-work/SKILL.md','skills/review-evidence/SKILL.md'}
@@ -68,7 +68,10 @@ def read_plugin(root):
         elif isinstance(value,list):
             for item in value:inspect_keys(item)
     inspect_keys(manifest);inspect_keys(json.loads(files['mcp.json']))
-    manifest['extensions']['com.openai']['review']={'test_cases':json.loads((root/'docs/reviewer-cases.json').read_text())}
+    case_files={'local':'reviewer-cases-local.json','hosted':'reviewer-cases-hosted.json'}
+    if review_profile not in case_files:
+        raise ValueError('Unknown reviewer-case distribution profile')
+    manifest['extensions']['com.openai']['review']={'test_cases':json.loads((root/'docs'/case_files[review_profile]).read_text())}
     files['plugin.json']=pretty(manifest)
     files['LICENSE']=(root/'LICENSE').read_bytes()
     return files
@@ -102,7 +105,7 @@ def write_zip(target,files,prefix='rumbo'):
 
 
 def build_local(root,target):
-    root=Path(root);files=read_plugin(root)
+    root=Path(root);files=read_plugin(root, review_profile='local')
     for path in (root/'rumbo').glob('*.py'):
         files['rumbo/'+path.name]=path.read_bytes()
     files['rumbo/web/board.html']=(root/'rumbo/web/board.html').read_bytes()
@@ -112,7 +115,7 @@ def build_local(root,target):
 
 def build_submission(root,target,config):
     validate_public_config(config)
-    files=read_plugin(Path(root))
+    files=read_plugin(Path(root), review_profile='hosted')
     # Public package is skills + remote MCP + presentation, not local execution.
     files={k:v for k,v in files.items() if not k.startswith(('scripts/','.codex-plugin/'))}
     manifest=json.loads(files['plugin.json'])
