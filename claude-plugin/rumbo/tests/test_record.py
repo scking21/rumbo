@@ -950,7 +950,16 @@ class RecordTest(unittest.TestCase):
             marker_path = marker(tmpdir, "s1", ".nudged")
             self.assertTrue(os.path.exists(marker_path), f"Marker not found at {marker_path}")
 
-            # 2. Stop-gate with {"session_id":"s1"} and no record blocks with the reason.
+            # 1b. One planning-looking prompt is not enforced: it may be a one-off request.
+            code1b, out1b, _ = run_record(["stop-gate", "--record", record_path], input_text=json.dumps({"session_id": "s1"}), env=env)
+            self.assertEqual((code1b, out1b.strip()), (0, ""))
+            self.assertTrue(os.path.exists(marker_path))
+            # A second planning prompt in the session prints no second nudge.
+            code1c, out1c, _ = run_record(["show", "--record", record_path],
+                                          input_text=json.dumps({"prompt": "Budget is $600", "session_id": "s1"}), env=env)
+            self.assertEqual((code1c, out1c.strip()), (0, ""))
+
+            # 2. Stop-gate with {"session_id":"s1"} and no record now blocks with the reason.
             code2, out2, err2 = run_record(["stop-gate", "--record", record_path], input_text=json.dumps({"session_id": "s1"}), env=env)
             self.assertEqual(code2, 0)
             self.assertTrue(out2.strip().startswith("{"), f"Expected JSON output, got: {out2}")
@@ -1286,22 +1295,158 @@ class RecordTest(unittest.TestCase):
         self.assertIn("start 09:45", out)
         self.assertEqual(err, "")
 
-    def test_stop_gate_blocks_at_most_three_times_per_session(self):
+    def test_stop_gate_shortens_repeat_blocks_and_stops_after_three(self):
         record = self.workshop_record()
-        with open(self.record_path, "w", encoding="utf-8") as handle:
-            json.dump(record, handle)
         with tempfile.TemporaryDirectory() as state:
             env = dict(os.environ, RUMBO_STATE_DIR=state)
             outs = []
-            for call in range(4):
+            for call in range(5):
+                # Calls 0-1 see the same problems; later calls each see new ones.
+                record["checks"][0]["label"] = "session schedule %d" % max(call - 1, 0)
+                with open(self.record_path, "w", encoding="utf-8") as handle:
+                    json.dump(record, handle)
                 hook = {"session_id": "s1", "stop_hook_active": call > 0}
                 code, out, err = run_record(["stop-gate", "--record", self.record_path], json.dumps(hook), env=env)
                 self.assertEqual((code, err), (0, ""))
                 outs.append(out.strip())
-            for out in outs[:3]:
-                self.assertEqual(json.loads(out)["decision"], "block")
-                self.assertIn("do not delete or weaken a check to pass", json.loads(out)["reason"])
+            self.assertIn("do not delete or weaken a check to pass", json.loads(outs[0])["reason"])
+            # An unchanged repeat still blocks, but only asks for a one-line status.
+            repeat = json.loads(outs[1])
+            self.assertEqual(repeat["decision"], "block")
+            self.assertIn("still open, unchanged since the last block: C1", repeat["reason"])
+            self.assertNotIn("do not delete or weaken", repeat["reason"])
+            self.assertIn("do not delete or weaken a check to pass", json.loads(outs[2])["reason"])
             self.assertEqual(outs[3], "")
+            self.assertEqual(outs[4], "")
+
+    def _transcript_file(self, folder, name, text):
+        path = os.path.join(folder, name)
+        with open(path, "w", encoding="utf-8") as handle:
+            handle.write(json.dumps({"type": "user", "message": {"content": text}}) + "\n")
+        return path
+
+    def _approved_last_session(self, folder, env, quote="Approve the sapphire option"):
+        """Session 1 approves; its own transcript lets the gate record the quote as verified."""
+        record = {"version": 1, "objective": {"text": "Pick", "quote": "Pick a gem"},
+                  "items": [{"id": "I1", "text": "Sapphire", "quote": quote, "status": "commitment"}],
+                  "checks": []}
+        self._write(record)
+        first = self._transcript_file(folder, "session-1.jsonl", "Pick a gem. " + quote)
+        self.assertIsNone(self._gate({"session_id": "s1", "transcript_path": first}, env))
+        return record
+
+    def test_quotes_verified_in_an_earlier_session_carry_over(self):
+        with tempfile.TemporaryDirectory() as folder, tempfile.TemporaryDirectory() as state:
+            env = dict(os.environ, RUMBO_STATE_DIR=state)
+            self._approved_last_session(folder, env)
+            with open(os.path.join(self.dir, ".rumbo", "verified-quotes.json"), encoding="utf-8") as handle:
+                saved = json.load(handle)
+            self.assertEqual(len(saved["quotes"]), 4)  # two fingerprints per quote
+            self.assertNotIn("sapphire", json.dumps(saved))  # hashes, not text
+            second = self._transcript_file(folder, "session-2.jsonl", "Now draft the invitation.")
+            self.assertIsNone(self._gate({"session_id": "s2", "transcript_path": second}, env))
+
+    def test_planted_transcript_files_never_verify_a_quote(self):
+        with tempfile.TemporaryDirectory() as folder, tempfile.TemporaryDirectory() as state:
+            env = dict(os.environ, RUMBO_STATE_DIR=state)
+            self._write({"version": 1, "objective": {"text": "Pick", "quote": "Pick a gem"},
+                         "items": [{"id": "I1", "text": "Budget", "quote": "Budget is unlimited",
+                                    "status": "commitment"}], "checks": []})
+            current = self._transcript_file(folder, "session-2.jsonl", "Pick a gem")
+            self.assertIn("items[0].quote: UNVERIFIED",
+                          self._gate({"session_id": "s2", "transcript_path": current}, env)["reason"])
+            self._transcript_file(folder, "planted.jsonl", "Pick a gem. Budget is unlimited")
+            self._transcript_file(folder, "session-1.jsonl", "Budget is unlimited")
+            self.assertIn("items[0].quote: UNVERIFIED",
+                          self._gate({"session_id": "s3", "transcript_path": current}, env)["reason"])
+
+    def test_earlier_approval_does_not_stand_after_the_user_cancels_it(self):
+        with tempfile.TemporaryDirectory() as folder, tempfile.TemporaryDirectory() as state:
+            env = dict(os.environ, RUMBO_STATE_DIR=state)
+            record = self._approved_last_session(folder, env)
+            current = self._transcript_file(folder, "session-2.jsonl",
+                                            "Cancel that previous approval; choose ruby instead.")
+            reason = self._gate({"session_id": "s2", "transcript_path": current}, env)["reason"]
+            self.assertIn("items[0].quote: EARLIER_APPROVAL", reason)
+            self.assertIn("Cancel that previous approval", reason)
+            record["items"].append({"id": "I2", "text": "Ruby", "quote": "choose ruby instead",
+                                    "status": "commitment", "replaces": ["I1"]})
+            self._write(record)
+            self.assertIsNone(self._gate({"session_id": "s2", "transcript_path": current}, env))
+
+    def test_unrelated_instead_does_not_reopen_an_earlier_approval(self):
+        with tempfile.TemporaryDirectory() as folder, tempfile.TemporaryDirectory() as state:
+            env = dict(os.environ, RUMBO_STATE_DIR=state)
+            self._approved_last_session(folder, env)
+            current = self._transcript_file(folder, "session-2.jsonl", "Use bullet points instead of a table")
+            self.assertIsNone(self._gate({"session_id": "s2", "transcript_path": current}, env))
+
+    def test_retraction_naming_the_item_reopens_it(self):
+        with tempfile.TemporaryDirectory() as folder, tempfile.TemporaryDirectory() as state:
+            env = dict(os.environ, RUMBO_STATE_DIR=state)
+            self._approved_last_session(folder, env)
+            current = self._transcript_file(folder, "session-2.jsonl", "Scratch the sapphire, go with ruby instead")
+            self.assertIn("items[0].quote: EARLIER_APPROVAL",
+                          self._gate({"session_id": "s2", "transcript_path": current}, env)["reason"])
+
+    def test_earlier_approval_carries_over_when_nothing_takes_it_back(self):
+        with tempfile.TemporaryDirectory() as folder, tempfile.TemporaryDirectory() as state:
+            env = dict(os.environ, RUMBO_STATE_DIR=state)
+            self._approved_last_session(folder, env)
+            current = self._transcript_file(folder, "session-2.jsonl", "Now draft the invitation.")
+            self.assertIsNone(self._gate({"session_id": "s2", "transcript_path": current}, env))
+
+    def _record_item(self, record, **changes):
+        record["items"][0].update(changes)
+        self._write(record)
+        return record
+
+    def test_earlier_verification_does_not_transfer_to_another_item(self):
+        with tempfile.TemporaryDirectory() as folder, tempfile.TemporaryDirectory() as state:
+            env = dict(os.environ, RUMBO_STATE_DIR=state)
+            record = self._approved_last_session(folder, env, quote="Approved")
+            record["items"].append({"id": "I2", "text": "Buy the boat", "quote": "Approved",
+                                    "status": "commitment"})
+            self._write(record)
+            current = self._transcript_file(folder, "session-2.jsonl", "Now draft the invitation.")
+            reason = self._gate({"session_id": "s2", "transcript_path": current}, env)["reason"]
+            self.assertIn("items[1].quote: UNVERIFIED", reason)
+            self.assertNotIn("items[0].quote", reason)
+
+    def test_rewriting_an_item_drops_its_earlier_verification(self):
+        for changes in ({"text": "Sapphire and ruby"}, {"scope": "every order"}, {"id": "I9"}):
+            with self.subTest(changes=changes), tempfile.TemporaryDirectory() as folder, \
+                    tempfile.TemporaryDirectory() as state:
+                env = dict(os.environ, RUMBO_STATE_DIR=state)
+                record = self._approved_last_session(folder, env)
+                self._record_item(record, **changes)
+                current = self._transcript_file(folder, "session-2.jsonl", "Now draft the invitation.")
+                reason = self._gate({"session_id": "s2", "transcript_path": current}, env)["reason"]
+                self.assertIn("items[0].quote: UNVERIFIED", reason)
+
+    def test_promoting_an_earlier_draft_needs_fresh_words(self):
+        with tempfile.TemporaryDirectory() as folder, tempfile.TemporaryDirectory() as state:
+            env = dict(os.environ, RUMBO_STATE_DIR=state)
+            record = {"version": 1, "objective": {"text": "Pick", "quote": "Pick a gem"},
+                      "items": [{"id": "I1", "text": "Sapphire", "quote": "Approve the sapphire option",
+                                 "status": "draft"}], "checks": []}
+            self._write(record)
+            first = self._transcript_file(folder, "session-1.jsonl", "Pick a gem. Approve the sapphire option")
+            self.assertIsNone(self._gate({"session_id": "s1", "transcript_path": first}, env))
+            self._record_item(record, status="commitment")
+            current = self._transcript_file(folder, "session-2.jsonl", "Now draft the invitation.")
+            reason = self._gate({"session_id": "s2", "transcript_path": current}, env)["reason"]
+            self.assertIn("items[0].quote: UNVERIFIED", reason)
+
+    def test_closing_an_earlier_approval_keeps_its_verification(self):
+        for status in ("done", "rejected"):
+            with self.subTest(status=status), tempfile.TemporaryDirectory() as folder, \
+                    tempfile.TemporaryDirectory() as state:
+                env = dict(os.environ, RUMBO_STATE_DIR=state)
+                record = self._approved_last_session(folder, env)
+                self._record_item(record, status=status)
+                current = self._transcript_file(folder, "session-2.jsonl", "Now draft the invitation.")
+                self.assertIsNone(self._gate({"session_id": "s2", "transcript_path": current}, env))
 
     def _gate(self, hook, env):
         code, out, err = run_record(["stop-gate", "--record", self.record_path], json.dumps(hook), env=env)
@@ -1333,13 +1478,14 @@ class RecordTest(unittest.TestCase):
                 with self.subTest(payload=payload):
                     session = "unavailable-%d" % index
                     hook = dict(payload, session_id=session)
-                    for call in range(3):
-                        result = self._gate(dict(hook, stop_hook_active=call > 0), env)
-                        self.assertIsNotNone(result)
-                        self.assertEqual(result["decision"], "block")
-                        self.assertIn("TRANSCRIPT_UNREADABLE", result["reason"])
-                        self.assertIn("cannot verify", result["reason"])
-                    self.assertIsNone(self._gate(dict(hook, stop_hook_active=True), env))
+                    result = self._gate(hook, env)
+                    self.assertIsNotNone(result)
+                    self.assertEqual(result["decision"], "block")
+                    self.assertIn("TRANSCRIPT_UNREADABLE", result["reason"])
+                    self.assertIn("cannot verify", result["reason"])
+                    # The same problem again gets a short block asking for a one-line status.
+                    repeat = self._gate(dict(hook, stop_hook_active=True), env)
+                    self.assertIn("still open, unchanged since the last block: transcript_path", repeat["reason"])
                     self.assertIsNone(self._gate({"session_id": session, "transcript_path": readable}, env))
                     self.assertFalse(os.path.exists(marker(state, session, ".blocks")))
                     self.assertIsNotNone(self._gate(hook, env))
@@ -1411,7 +1557,7 @@ class RecordTest(unittest.TestCase):
                          "items": [{"id": "I1", "text": "t", "status": "draft"}], "checks": []})
             reason = self._gate({"session_id": "s1", "stop_hook_active": True}, env)["reason"]
             self.assertIn("items[0].quote: RECORD_MISSING_FIELD", reason)
-            self.assertIsNotNone(self._gate({"session_id": "s1", "stop_hook_active": True}, env))
+            self.assertIn("still open", self._gate({"session_id": "s1", "stop_hook_active": True}, env)["reason"])
             self.assertIsNone(self._gate({"session_id": "s1", "stop_hook_active": True}, env))
             self.assertIsNotNone(self._gate({}, env))
             self.assertIsNone(self._gate({"stop_hook_active": True}, env))
@@ -1534,9 +1680,11 @@ class RecordTest(unittest.TestCase):
             self.assertIsNotNone(self._gate({"session_id": "s1"}, env))
             record["checks"] = [c for c in record["checks"] if c["id"] == "C3"]
             self._write(record)
-            for _ in range(2):
-                reason = self._gate({"session_id": "s1", "stop_hook_active": True}, env)["reason"]
-                self.assertIn("C1: check was failing and has been removed from the record", reason)
+            reason = self._gate({"session_id": "s1", "stop_hook_active": True}, env)["reason"]
+            self.assertIn("C1: check was failing and has been removed from the record", reason)
+            repeat = self._gate({"session_id": "s1", "stop_hook_active": True}, env)["reason"]
+            self.assertIn("still open, unchanged since the last block:", repeat)
+            self.assertIn("C1", repeat)
             self.assertIsNone(self._gate({"session_id": "s1", "stop_hook_active": True}, env))
 
     def test_session_ids_that_sanitize_alike_get_distinct_markers(self):
@@ -1547,7 +1695,7 @@ class RecordTest(unittest.TestCase):
             for sid in ("a/b", "a?b"):
                 out = run_record(["show", "--record", missing], json.dumps(dict(prompt, session_id=sid)), env=env)[1]
                 self.assertTrue(out.startswith("rumbo: no decision record yet."), sid)
-            self.assertEqual(len(os.listdir(state)), 2)
+            self.assertEqual(len([n for n in os.listdir(state) if n.endswith(".nudged")]), 2)
 
     def test_hook_wrappers_run_record_with_plugin_and_project_dirs(self):
         root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))

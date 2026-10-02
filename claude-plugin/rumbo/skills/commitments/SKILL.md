@@ -16,7 +16,7 @@ miss a scheduling conflict. The record is a memory aid, nothing more.
 - `validate` — print `RECORD_OK`, or one fault line per problem.
 - `check` — validate, then print `PASS`/`FAIL` per check; exit 1 if any check fails.
 - `show [--max-chars N]` — compact summary; silent when no record exists.
-- `stop-gate` — read the Stop hook input on stdin; block up to three times per session while checks or provenance remain unresolved.
+- `stop-gate` — read the Stop hook input on stdin; block up to three times per session while checks or provenance remain unresolved; an unchanged repeat asks only for a one-line status.
 - Exit codes: 0 clean, 1 content problem, 2 tool or I/O problem.
 
 ## When to start
@@ -42,6 +42,7 @@ that affects later work. Do not atomize every sentence into an item.
 | "I like X" | `preference` |
 | "let's try X", "compare these" | `authorized` — for that experiment only, not adoption |
 | Clear assent to a concrete proposal | `commitment` — within its stated scope |
+| "I think we should go with X", "let's go with X", "we'll take it" | `commitment` — the user chose it; hedging words do not reopen it |
 | "not yet", "wait on X" | `deferred` |
 | An explicit no | `rejected` |
 | Anything ambiguous | `uncertain` |
@@ -51,7 +52,8 @@ workshop only` — do not widen it or treat other questions as closed.
 
 A status becomes `commitment` only when the item's `quote` is the user adopting
 it; confirming one piece (for example a start time) does not make the rest of a
-draft decided.
+draft decided. Once the user has chosen, do not list the choice as still open or
+ask them to decide it again.
 
 ## Sourced values
 
@@ -102,7 +104,16 @@ is unsourced, a quote is not found in the user's messages, the harness transcrip
 is missing or unreadable, a failing check was deleted, or the record is unreadable.
 An unavailable transcript is unverified provenance, not a clean result; disclose
 it if a readable harness transcript cannot be supplied. Never invent transcript
-evidence. Resolve each conflict or disclose it, update
+evidence. An `EARLIER_APPROVAL` line means the user approved something in an earlier
+session and has said something this session that may take it back (it names
+the item or an earlier decision and uses a word like cancel or instead). Check with
+them. If it changed, add the new item with `replaces`, or set the old one to
+`rejected`. If it still stands, record their confirmation from this session as
+a new item that replaces the old one.
+
+If a repeat block lists problems you already told the user about, add
+one line naming what is still open rather than repeating the explanation.
+Resolve each conflict or disclose it, update
 the record, then finish. Never delete or weaken a check to get past the gate, and
 copy quotes exactly from the user's messages or they will be reported as unverified.
 

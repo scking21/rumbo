@@ -457,6 +457,94 @@ def unverified_quotes(record, messages):
     return unverified
 
 
+RETRACTION = re.compile(
+    r"\b(?:cancel(?:led|ling)?|revoke[sd]?|withdraw(?:n)?|undo|scrap|scratch that|never ?mind|"
+    r"instead|change[sd]? my mind|no longer|not anymore|take (?:it|that) back|reverse)\b",
+    re.IGNORECASE)
+# Words that point back at an earlier decision rather than at the current task.
+EARLIER_DECISION = re.compile(
+    r"\b(?:previous(?:ly)?|earlier|before|approv\w*|decision|decided|agreed|choice|chose|"
+    r"picked|what i said|last time)\b", re.IGNORECASE)
+STOPWORDS = {"that", "this", "with", "from", "have", "will", "would", "should", "could", "there",
+             "their", "about", "into", "then", "than", "them", "they", "your", "what", "when",
+             "which", "instead", "option", "please", "just", "also", "make", "need"}
+
+
+def _words(text):
+    return {w for w in re.findall(r"[a-z0-9']+", text.lower()) if len(w) >= 4 and w not in STOPWORDS}
+
+
+def _retraction_for(item, messages):
+    """A message from this session that takes this item back, shortened, or None.
+
+    It must contain a retraction word and either point back at an earlier
+    decision or share a word with the item, so "use bullets instead of a
+    table" does not reopen an unrelated approval.
+    """
+    item_words = _words(item.get("text", "") + " " + item.get("quote", ""))
+    for message in messages:
+        if RETRACTION.search(message) and (EARLIER_DECISION.search(message) or item_words & _words(message)):
+            text = " ".join(message.split())
+            return text if len(text) <= 120 else text[:117] + "..."
+    return None
+
+
+def _ledger_path(record_path):
+    return os.path.join(os.path.dirname(os.path.abspath(record_path)), "verified-quotes.json")
+
+
+def _fingerprints(record, path):
+    """Ledger keys for the quote at path: (full, core).
+
+    Both bind the quote to what it was recorded for (an item's id, text and
+    scope, or the objective's text), so the same words cannot verify a
+    different or rewritten item. The full key also binds an approval's status,
+    so an earlier draft or preference promoted to a commitment needs fresh
+    words; the core key lets an approval closed as done or rejected keep its
+    verification.
+    """
+    match = re.fullmatch(r"items\[(\d+)\]\.quote", path)
+    source = record["items"][int(match.group(1))] if match else record["objective"]
+    core = {"path": "item" if match else "objective", "quote": _normalize(source.get("quote", ""))}
+    for field in ("id", "text", "scope"):
+        core[field] = source.get(field)
+    full = dict(core, status=source.get("status"))
+
+    def digest(value):
+        return hashlib.sha256(json.dumps(value, sort_keys=True).encode("utf-8")).hexdigest()
+
+    return digest(full), digest(core)
+
+
+def _read_ledger(record_path):
+    """Hashes of quotes the Stop gate found in an earlier session's own transcript."""
+    try:
+        with open(_ledger_path(record_path), encoding="utf-8") as handle:
+            ledger = _loads(handle.read())
+    except (OSError, ValueError):
+        return {}
+    quotes = ledger.get("quotes") if isinstance(ledger, dict) else None
+    return quotes if isinstance(quotes, dict) else {}
+
+
+def _write_ledger(record_path, ledger):
+    path = _ledger_path(record_path)
+    try:
+        fd, temp = tempfile.mkstemp(dir=os.path.dirname(path), prefix=".verified-")
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump({"version": 1, "quotes": ledger}, handle, indent=1, sort_keys=True)
+        os.replace(temp, path)
+    except OSError:
+        pass
+
+
+def _quote_paths(record):
+    """(path, quote) for the objective and every item."""
+    paths = [("objective.quote", record["objective"].get("quote"))]
+    paths += [("items[%d].quote" % i, item.get("quote")) for i, item in enumerate(record.get("items") or [])]
+    return [(p, q) for p, q in paths if isinstance(q, str)]
+
+
 # ------------------------------------------------------------ validation
 
 
@@ -892,24 +980,46 @@ def _marker_path(session_id, suffix):
     return os.path.join(state_dir, "%s-%s%s" % (safe, digest, suffix))
 
 
-def maybe_nudge(args):
-    """Print the no-record nudge when stdin carries planning-looking work.
+def _planning_prompts(session_id):
+    path = _marker_path(session_id, ".prompts")
+    try:
+        with open(path, encoding="utf-8") as handle:
+            return int(handle.read().strip() or "0")
+    except (OSError, TypeError, ValueError):
+        return 0
 
-    Silent unless stdin is non-TTY, parses as a JSON object with a string
-    "prompt", and that prompt matches PLANNING_PATTERN.
-    If the nudge is printed and there is a session_id, write a marker file.
-    """
+
+def _count_planning_prompt(session_id):
+    path = _marker_path(session_id, ".prompts")
+    if not path:
+        return
+    count = _planning_prompts(session_id) + 1
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as handle:
+            handle.write(str(count))
+    except OSError:
+        pass
+
+
+def _hook_payload():
+    """The prompt hook's JSON object from stdin, or None."""
     try:
         if sys.stdin.isatty():
-            return
-        raw = sys.stdin.read()
+            return None
+        payload = _loads(sys.stdin.read())
     except Exception:
-        return
-    try:
-        payload = _loads(raw)
-    except ValueError:
-        return
-    if not isinstance(payload, dict):
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def maybe_nudge(args, payload):
+    """Print the no-record nudge when the hook payload carries planning-looking work.
+
+    Silent unless the payload has a string "prompt" that matches PLANNING_PATTERN.
+    If the nudge is printed and there is a session_id, write a marker file.
+    """
+    if payload is None:
         return
     prompt = payload.get("prompt")
     if not isinstance(prompt, str):
@@ -917,6 +1027,7 @@ def maybe_nudge(args):
     if not PLANNING_PATTERN.search(prompt):
         return
     session_id = payload.get("session_id")
+    _count_planning_prompt(session_id)
     if session_id:
         for suffix in (".nudged", ".enforced"):
             existing = _marker_path(session_id, suffix)
@@ -934,11 +1045,12 @@ def maybe_nudge(args):
 
 
 def cmd_show(args):
+    payload = _hook_payload()
     try:
         record = load_record(args.record)
     except LoadError as error:
         if error.code == "RECORD_NOT_FOUND":
-            maybe_nudge(args)
+            maybe_nudge(args, payload)
             return 0
         print("rumbo: record invalid, run record.py validate")
         return 0
@@ -1085,6 +1197,10 @@ def _stop_gate(args, hook_input):
         enforced_path = _marker_path(session_id, ".enforced")
         if not marker_path:
             return 0
+        # A single planning-looking request is often one-off; the prompt-time
+        # nudge is enough. Enforce once the session keeps planning.
+        if _planning_prompts(session_id) < 2:
+            return 0
         try:
             if os.path.exists(enforced_path):
                 return 0
@@ -1118,11 +1234,38 @@ def _stop_gate(args, hook_input):
                      "record's quotes; provide a readable transcript_path from "
                      "the harness or disclose that provenance is unverified")
     else:
-        for path in unverified_quotes(record, messages):
-            parts.append("%s: UNVERIFIED: quote not found in the user's messages" % path)
+        unverified = set(unverified_quotes(record, messages))
+        ledger = _read_ledger(args.record)
+        changed = False
+        items = record.get("items") or []
+        replaced = {ref for item in items for ref in item.get("replaces") or []}
+        for path, quote in _quote_paths(record):
+            full, core = _fingerprints(record, path)
+            match = re.fullmatch(r"items\[(\d+)\]\.quote", path)
+            item = items[int(match.group(1))] if match else None
+            if path not in unverified:
+                for key in (full, core):
+                    if key not in ledger:
+                        ledger[key] = {"session": session_id or "", "seen": datetime.date.today().isoformat()}
+                        changed = True
+                continue
+            approval = item is not None and item.get("status") in ("commitment", "authorized")
+            if (full if approval else core) not in ledger:
+                parts.append("%s: UNVERIFIED: quote not found in the user's messages" % path)
+                continue
+            # Verified in an earlier session. That shows the words were said, not
+            # that an approval still stands after this session's messages.
+            if item and item.get("status") in ("commitment", "authorized") and item.get("id") not in replaced:
+                said = _retraction_for(item, messages)
+                if said:
+                    parts.append('%s: EARLIER_APPROVAL: approved in an earlier session, but this '
+                                 'session the user said "%s"; check it still stands, and replace '
+                                 'or reject it in the record if it changed' % (path, said))
+        if changed:
+            _write_ledger(args.record, ledger)
 
     if not parts:
-        for suffix in (".blocks", ".failed"):
+        for suffix in (".blocks", ".failed", ".lastreason"):
             path = _marker_path(session_id, suffix)
             if path:
                 try:
@@ -1137,6 +1280,9 @@ def _stop_gate(args, hook_input):
 
 BROKEN_RECORD = "rumbo: the decision record is unreadable or invalid"
 GATE_ERROR = "rumbo: GATE_ERROR: the stop gate hit an internal error and could not check the decision record"
+REPEAT_REASON = ("rumbo: still open, unchanged since the last block: %s. Fix them, or if "
+                 "your previous reply already told the user, add one line naming what is "
+                 "still open. Do not repeat the full explanation.")
 GATE_ERROR_TAIL = "Tell the user plainly that the decision record could not be checked this turn."
 BROKEN_TAIL = ("Fix the record with record.py validate before finishing; "
                "do not delete it to get past this check.")
@@ -1183,8 +1329,18 @@ def _read_failed_ids(session_id):
 
 def _block_bounded(session_id, parts, tail, problem_ids=None):
     """Print a Stop-hook block, at most MAX_BLOCKS times per session; always exit 0."""
+    reason = "\n".join(parts) + "\n" + tail
     blocks_path = _marker_path(session_id, ".blocks")
     if blocks_path:
+        # Same problems as the last block: ask for a one-line status instead of
+        # the full explanation again. Nothing passes without a reply.
+        last_path = _marker_path(session_id, ".lastreason")
+        repeat = False
+        try:
+            with open(last_path, encoding="utf-8") as handle:
+                repeat = handle.read() == reason
+        except OSError:
+            pass
         try:
             with open(blocks_path, encoding="utf-8") as handle:
                 count = int(handle.read().strip() or "0")
@@ -1196,12 +1352,18 @@ def _block_bounded(session_id, parts, tail, problem_ids=None):
             os.makedirs(os.path.dirname(blocks_path), exist_ok=True)
             with open(blocks_path, "w", encoding="utf-8") as handle:
                 handle.write(str(count + 1))
+            with open(last_path, "w", encoding="utf-8") as handle:
+                handle.write(reason)
             if problem_ids is not None:
                 with open(_marker_path(session_id, ".failed"), "w", encoding="utf-8") as handle:
                     json.dump(problem_ids, handle)
         except OSError:
             pass
-    print(json.dumps({"decision": "block", "reason": "\n".join(parts) + "\n" + tail}))
+        if repeat:
+            names = ", ".join(part.split(":")[0] for part in parts
+                              if not part.startswith("rumbo")) or "the decision record"
+            reason = REPEAT_REASON % names
+    print(json.dumps({"decision": "block", "reason": reason}))
     return 0
 
 # ------------------------------------------------------------------ main

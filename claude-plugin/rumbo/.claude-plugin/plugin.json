@@ -1,6 +1,6 @@
 {
   "name": "rumbo",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "description": "Keeps a record of what the user has actually decided, drafted, or is still exploring, and checks times, dates and budgets.",
   "license": "MIT",
   "author": {
