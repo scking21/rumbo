@@ -4,11 +4,13 @@ Keep coding agents on the course you actually agreed to.
 
 *Rumbo* is Spanish for a ship's course or heading.
 
-## Engine 0.3.0 and OpenAI adapter 0.3.1 local review candidates
+## Engine 0.3.0, OpenAI adapter 0.3.1 and private Sites candidate
 
 Rumbo now has a working provider-neutral contract/evidence engine, CLI, MCP transports, a read-only acceptance board and OpenAI plugin packaging. It records **agreed goal → bounded task → exact artifact → evidence → human decision**.
 
-This release has **not been uploaded, submitted, approved, published or deployed**. The local plugin ZIP is reviewable and testable. Public-directory submission still needs a real HTTPS/OAuth service, approved listing/legal URLs, publisher/domain verification, reviewer access, a walkthrough video and live host QA. The public-package generator refuses absent production configuration; see [deployment gates](docs/DEPLOYMENT.md) and [verification report](docs/RELEASE-REVIEW.md).
+The separate [OpenAI Sites runtime](openai-sites/README.md) has an **owner-private deployment**. It is an experimental hosted upload workflow, not the Python executable engine; managed authentication and reviewer access remain unverified. No public-directory upload, submission, approval or publication is claimed. The local Python plugin remains a separate reviewable distribution.
+
+A Sites review-draft ZIP can be prepared before portal verification, with unresolved fields omitted and a separate honest readiness report. Final submission still needs verified access, required review materials and owner review. See [draft packaging and submission sequence](docs/DRAFT-PACKAGING.md); historical local-only verification is in [the earlier release report](docs/RELEASE-REVIEW.md).
 
 ### What works
 
@@ -77,7 +79,17 @@ python3 scripts/package_release.py --kind source --output dist/rumbo-0.3.0-sourc
 
 The local archive includes portable root `plugin.json` and `mcp.json`, a compatibility manifest, workflow skills and a real stdio launcher. The installed server starts unbound. Its owner provisions approved aliases in `PLUGIN_DATA/projects.json`; the agent selects one alias once per process with a unique worker identity. Legacy `RUMBO_PROJECT_ROOT`, `RUMBO_ROLE` and `RUMBO_ACTOR` cannot configure this launcher. See [installed setup and lease limits](docs/INSTALLED-PLUGIN.md). No marketplace entry or installation is performed by packaging.
 
-For the public archive, supply verified real production values using the documented gates:
+For the current Sites candidate, prepare a draft without inventing completed portal checks:
+
+```sh
+python3 scripts/package_release.py --kind review-draft \
+  --mcp-url https://rumbo-review-candidate.aggie-king21.chatgpt.site/mcp \
+  --output dist/rumbo-sites-review-draft.zip
+```
+
+This writes the ZIP and `dist/rumbo-sites-review-draft.readiness.json`. The draft uses Sites-specific skills, project keys, server-issued worker sessions and its actual review cases. It omits unresolved publisher identity, legal/support URLs and video. Its endpoint is currently owner-private; creating this archive proves no managed login, portal access or submission readiness. Node.js 24+ and the `jsonschema` developer dependency are needed for source-catalog and pinned-schema validation. See [the full packaging contract](docs/DRAFT-PACKAGING.md).
+
+The legacy final-gated archive below is for the **Python remote profile**, not a way to promote the Sites draft. It retains the complete external-attestation requirements:
 
 ```sh
 python3 scripts/package_release.py --kind submission \
@@ -96,7 +108,7 @@ The Claude adapter lives in `claude-plugin/rumbo/` with its existing hook layout
 /plugin install rumbo@rumbo
 ```
 
-Those commands access whatever revision is actually on the remote; this unpushed local candidate is not available there. New engine state lives in `.rumbo/state.sqlite3`; legacy planning records remain `.rumbo/record.json`. Nothing is silently converted or deleted.
+Those commands access the revision actually on the remote; verify its branch/version before relying on candidate behavior. New engine state lives in `.rumbo/state.sqlite3`; legacy planning records remain `.rumbo/record.json`. Nothing is silently converted or deleted.
 
 In 0.3, missing or unreadable transcripts now trigger the existing bounded Stop provenance warning/block behavior rather than silently skipping verification. Source checks respect `refs` and exclude done/rejected/replaced items. Missing/null refs use active items plus the objective; explicit `[]` uses only the objective. Historical records may need corrected refs. Read [migration details](docs/MIGRATION.md) and the [legacy specification](claude-plugin/rumbo/SPEC.md).
 
@@ -108,7 +120,7 @@ python3 -m unittest discover -s tests -v
 python3 -m compileall -q rumbo scripts claude-plugin
 ```
 
-The new tests cover real stdio and HTTP execution, restart, concurrent claims, stale evidence, principal isolation, malformed inputs, confined files, deterministic demo reproduction and extracted ZIP execution. Board source/Node runtime checks are separate from browser checks. Browser rendering and actual ChatGPT host integration were not verified in this environment. A read-only GitHub Actions workflow is included to run all tests with Chromium and fail on any skipped test; that CI run must be checked on the exact review commit, not assumed to have passed; [exact limits](docs/BOARD.md).
+The new tests cover real stdio and HTTP execution, restart, concurrent claims, stale evidence, principal isolation, malformed inputs, confined files, deterministic demo reproduction and extracted ZIP execution. Board source/Node runtime checks are separate from browser checks. Browser coverage and actual ChatGPT host integration are separate claims. The Sites candidate has its own synthetic Chromium suite and exact-commit CI; managed host authentication remains unverified. A read-only GitHub Actions workflow is included to run all tests with Chromium and fail on any skipped test; that CI run must be checked on the exact review commit, not assumed to have passed; [exact limits](docs/BOARD.md).
 
 ## Deployment and recovery
 

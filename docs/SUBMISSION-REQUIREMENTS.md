@@ -1,18 +1,18 @@
 # Rumbo public-plugin readiness checklist
 
-Verified 2026-10-01 against current OpenAI plugin documentation after DevDay, not the retired 2023 plugins model. This is an implementation/review checklist, not a claim of deployment, platform validation, submission, approval, or publication.
+Initial requirements checked 2026-10-01; upload-versus-submission sequencing corrected against the current reference on 2026-10-02. This is a preparation/review checklist. A separate owner-private Sites deployment exists; managed authentication, platform validation, submission, approval and publication remain unverified.
 
 ## 1. Release gates and ownership
 
-**Local development can finish without accounts or deployment. Public review cannot.** Keep separate milestones:
+**Local draft packaging can finish before portal-only checks.** Keep separate milestones:
 
-1. **Local review candidate:** implemented engine, transports, native UI resource, skills, fixtures, reproducible tests, deployment instructions, and an honest readiness report.
-2. **Production preparation, after authorization:** stable public HTTPS service; real authentication and storage; approved public legal/support pages; account/domain setup; safe reviewer account; real host QA and accessible video.
-3. **Upload/scan:** uploads information to OpenAI and creates a draft. This is an external action, distinct from local packaging.
-4. **Submit for review:** selected draft plus policy attestations enters review. Hold for the user's final review/approval.
+1. **Local review draft:** package the actual distribution's manifest, skills and remote endpoint; validate source/case/tool consistency and record missing fields/checks separately. The [Sites draft builder](DRAFT-PACKAGING.md) does this without claiming final readiness.
+2. **Upload to create a draft, after authorization:** select the verified developer identity and upload the ZIP. Account identity is required here, not for local archive creation.
+3. **Portal setup and review preparation:** complete actual HTTPS/authentication/domain verification, scan the MCP tools, inspect findings, finalize legal/support URLs, prepare reviewer access, run the managed-host cases and provide accessible video. These checks must not be marked complete merely to produce a ZIP.
+4. **Submit for review:** selected draft plus required review information and policy attestations enters review. Hold for the user's final review/approval.
 5. **Publish:** separate action after OpenAI approval makes the listing discoverable. Approval alone does not publish it.
 
-Do not relabel localhost, a development tunnel, bearer-token fixtures, example domains, unrun test prompts, or a private Site as production readiness. A release packager should fail closed until real required values are supplied. Build local/demo packages separately from the submission ZIP.
+Do not relabel localhost, fixtures, example domains, unrun test prompts or an owner-private Site as production readiness. The draft builder permits unresolved optional-at-upload metadata to remain absent. Final release validation remains strict. See the [official upload/submission sequence](https://developers.openai.com/plugins/deploy/submission).
 
 ## 2. Package contract
 
