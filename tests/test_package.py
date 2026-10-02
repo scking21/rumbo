@@ -54,6 +54,20 @@ class PackageTests(unittest.TestCase):
             with self.assertRaises(ValueError):build_submission(ROOT,target,{})
             self.assertFalse(target.exists())
 
+    def test_submission_release_notes_follow_independent_adapter_version(self):
+        from scripts.package_release import GATES
+        config={k:'https://rumbo.company.dev/'+k for k in ['website_url','support_url','privacy_url','terms_url','video_url']}
+        config.update(mcp_url='https://rumbo.company.dev/mcp',attestations={k:True for k in GATES})
+        # Structural test fixture only: no endpoint or real verification claim.
+        with tempfile.TemporaryDirectory() as d:
+            target=Path(d)/'submission.zip'
+            build_submission(ROOT,target,config)
+            with zipfile.ZipFile(target) as archive:
+                manifest=json.loads(archive.read('rumbo/plugin.json'))
+            expected=json.loads((ROOT/'openai-plugin/rumbo/plugin.json').read_text())['version']
+            self.assertEqual(manifest['version'],expected)
+            self.assertTrue(manifest['extensions']['com.openai']['publication']['release_notes'].startswith(expected+': '))
+
     def test_submission_rejects_private_ips_and_reserved_subdomains(self):
         from scripts.package_release import GATES
         config={k:'https://rumbo.company.dev/'+k for k in ['website_url','support_url','privacy_url','terms_url','video_url']}
