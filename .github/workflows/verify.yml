@@ -29,11 +29,11 @@ jobs:
           RUMBO_SCREENSHOT_DIR: qa-artifacts
         run: python scripts/run_tests.py --strict
       - name: Run preserved Claude adapter tests
-        working-directory: rumbo
+        working-directory: claude-plugin/rumbo
         run: python -m unittest discover -s tests -v
       - name: Compile and verify clean whitespace
         run: |
-          python -m compileall -q rumbo scripts
+          python -m compileall -q rumbo scripts claude-plugin
           git diff --check
       - name: Save synthetic browser screenshots
         if: always()
@@ -61,7 +61,7 @@ jobs:
           python -m unittest discover -s tests -p test_demo.py -v
           python -m unittest discover -s tests -p test_backup.py -v
       - name: Verify legacy adapter floor
-        working-directory: rumbo
+        working-directory: claude-plugin/rumbo
         run: python -m unittest discover -s tests -v
   deployment-smoke:
     runs-on: ubuntu-24.04

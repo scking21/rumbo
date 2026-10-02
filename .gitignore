@@ -12,3 +12,5 @@ build/
 .env.*
 qa-artifacts/
 .venv/
+claude-plugin/rumbo/evals/results/
+claude-plugin/rumbo/evals/*.log

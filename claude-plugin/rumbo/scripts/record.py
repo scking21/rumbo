@@ -70,6 +70,39 @@ class LoadError(Exception):
         self.code = code  # "RECORD_NOT_FOUND" or "RECORD_UNREADABLE"
 
 
+MAX_JSON_DEPTH = 64
+
+
+def _loads(raw):
+    """json.loads with an explicit nesting bound; deeper input raises ValueError.
+
+    The decoder's own depth limit is a CPython detail (3.14 raises
+    RecursionError, not ValueError), so depth is checked before decoding.
+    """
+    depth = 0
+    quoted = escaped = False
+    for char in raw:
+        if quoted:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                quoted = False
+        elif char == '"':
+            quoted = True
+        elif char in "[{":
+            depth += 1
+            if depth > MAX_JSON_DEPTH:
+                raise ValueError("JSON nesting exceeds limit")
+        elif char in "]}":
+            depth -= 1
+    try:
+        return json.loads(raw)
+    except RecursionError:
+        raise ValueError("JSON nesting exceeds limit") from None
+
+
 def load_record(path):
     try:
         with open(path, "r", encoding="utf-8") as handle:
@@ -79,7 +112,7 @@ def load_record(path):
     except (OSError, UnicodeDecodeError):
         raise LoadError("RECORD_UNREADABLE")
     try:
-        return json.loads(raw)
+        return _loads(raw)
     except ValueError:
         raise LoadError("RECORD_UNREADABLE")
 
@@ -327,7 +360,7 @@ def user_messages(transcript_path):
         if not line:
             continue
         try:
-            entry = json.loads(line)
+            entry = _loads(line)
         except ValueError:
             # Skip invalid JSON lines
             continue
@@ -873,7 +906,7 @@ def maybe_nudge(args):
     except Exception:
         return
     try:
-        payload = json.loads(raw)
+        payload = _loads(raw)
     except ValueError:
         return
     if not isinstance(payload, dict):
@@ -1020,9 +1053,20 @@ def cmd_stop_gate(args):
     hook_input = None
     if raw and raw.strip():
         try:
-            hook_input = json.loads(raw)
+            hook_input = _loads(raw)
         except ValueError:
             hook_input = None
+    try:
+        return _stop_gate(args, hook_input)
+    except Exception:
+        # Fail closed: a non-zero exit without block JSON would let the stop through.
+        session_id = hook_input.get("session_id") if isinstance(hook_input, dict) else None
+        if isinstance(hook_input, dict) and hook_input.get("stop_hook_active") is True and not session_id:
+            return 0
+        return _block_bounded(session_id, [GATE_ERROR], GATE_ERROR_TAIL)
+
+
+def _stop_gate(args, hook_input):
     session_id = hook_input.get("session_id") if isinstance(hook_input, dict) else None
     # Without a session the harness flag is the only loop guard; with one, the
     # per-session block counter bounds the loop instead.
@@ -1092,6 +1136,8 @@ def cmd_stop_gate(args):
 
 
 BROKEN_RECORD = "rumbo: the decision record is unreadable or invalid"
+GATE_ERROR = "rumbo: GATE_ERROR: the stop gate hit an internal error and could not check the decision record"
+GATE_ERROR_TAIL = "Tell the user plainly that the decision record could not be checked this turn."
 BROKEN_TAIL = ("Fix the record with record.py validate before finishing; "
                "do not delete it to get past this check.")
 CONFLICT_TAIL = ("Before finishing, resolve each conflict in your answer or state it "
@@ -1129,7 +1175,7 @@ def _read_failed_ids(session_id):
         if not path:
             return []
         with open(path, encoding="utf-8") as handle:
-            ids = json.loads(handle.read())
+            ids = _loads(handle.read())
     except (OSError, ValueError):
         return []
     return [i for i in ids if isinstance(i, str)] if isinstance(ids, list) else []
