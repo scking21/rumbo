@@ -16,7 +16,7 @@ miss a scheduling conflict. The record is a memory aid, nothing more.
 - `validate` — print `RECORD_OK`, or one fault line per problem.
 - `check` — validate, then print `PASS`/`FAIL` per check; exit 1 if any check fails.
 - `show [--max-chars N]` — compact summary; silent when no record exists.
-- `stop-gate` — read the Stop hook input on stdin; block once per distinct set of unresolved checks or provenance problems, at most three times per session.
+- `stop-gate` — read the Stop hook input on stdin; block up to three times per session while checks or provenance remain unresolved; an unchanged repeat asks only for a one-line status.
 - Exit codes: 0 clean, 1 content problem, 2 tool or I/O problem.
 
 ## When to start
@@ -99,13 +99,14 @@ immediately; the user's correction always wins over the record.
 
 ## Stopping
 
-The Stop hook blocks once for each new set of problems (at most three times per
-session) while a check fails, a value
+The Stop hook blocks, up to three times per session, while a check fails, a value
 is unsourced, a quote is not found in the user's messages, the harness transcript
 is missing or unreadable, a failing check was deleted, or the record is unreadable.
 An unavailable transcript is unverified provenance, not a clean result; disclose
 it if a readable harness transcript cannot be supplied. Never invent transcript
-evidence. Resolve each conflict or disclose it, update
+evidence. If a repeat block lists problems you already told the user about, add
+one line naming what is still open rather than repeating the explanation.
+Resolve each conflict or disclose it, update
 the record, then finish. Never delete or weaken a check to get past the gate, and
 copy quotes exactly from the user's messages or they will be reported as unverified.
 

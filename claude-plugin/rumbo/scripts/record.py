@@ -460,6 +460,14 @@ def unverified_quotes(record, messages):
 MAX_PROJECT_TRANSCRIPTS = 50
 
 
+def _quote_at(record, path):
+    """The quote named by an unverified_quotes path."""
+    if path == "objective.quote":
+        return record["objective"].get("quote")
+    match = re.fullmatch(r"items\[(\d+)\]\.quote", path)
+    return record["items"][int(match.group(1))].get("quote") if match else None
+
+
 def project_messages(transcript_path):
     """User messages from this project's other Claude Code session transcripts.
 
@@ -946,24 +954,67 @@ def _count_planning_prompt(session_id):
         pass
 
 
-def maybe_nudge(args):
-    """Print the no-record nudge when stdin carries planning-looking work.
-
-    Silent unless stdin is non-TTY, parses as a JSON object with a string
-    "prompt", and that prompt matches PLANNING_PATTERN.
-    If the nudge is printed and there is a session_id, write a marker file.
-    """
+def _hook_payload():
+    """The prompt hook's JSON object from stdin, or None."""
     try:
         if sys.stdin.isatty():
-            return
-        raw = sys.stdin.read()
+            return None
+        payload = _loads(sys.stdin.read())
     except Exception:
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def _quotes(record):
+    """The objective quote and every item quote, as a set."""
+    quotes = set()
+    if isinstance(record, dict):
+        objective = record.get("objective")
+        if isinstance(objective, dict) and isinstance(objective.get("quote"), str):
+            quotes.add(objective["quote"])
+        for item in record.get("items") or []:
+            if isinstance(item, dict) and isinstance(item.get("quote"), str):
+                quotes.add(item["quote"])
+    return quotes
+
+
+def _snapshot_carried(session_id, record):
+    """At a session's first prompt, remember which quotes the record already held.
+
+    Only these carried-over quotes may be matched in the project's earlier
+    session transcripts; anything added during this session must appear in
+    this session's own transcript.
+    """
+    path = _marker_path(session_id, ".carried")
+    if not path or os.path.exists(path):
         return
     try:
-        payload = _loads(raw)
-    except ValueError:
-        return
-    if not isinstance(payload, dict):
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as handle:
+            json.dump(sorted(_quotes(record)), handle)
+    except OSError:
+        pass
+
+
+def _read_carried(session_id):
+    path = _marker_path(session_id, ".carried")
+    try:
+        if not path:
+            return set()
+        with open(path, encoding="utf-8") as handle:
+            quotes = _loads(handle.read())
+    except (OSError, ValueError):
+        return set()
+    return {q for q in quotes if isinstance(q, str)} if isinstance(quotes, list) else set()
+
+
+def maybe_nudge(args, payload):
+    """Print the no-record nudge when the hook payload carries planning-looking work.
+
+    Silent unless the payload has a string "prompt" that matches PLANNING_PATTERN.
+    If the nudge is printed and there is a session_id, write a marker file.
+    """
+    if payload is None:
         return
     prompt = payload.get("prompt")
     if not isinstance(prompt, str):
@@ -989,14 +1040,18 @@ def maybe_nudge(args):
 
 
 def cmd_show(args):
+    payload = _hook_payload()
+    session_id = payload.get("session_id") if payload else None
     try:
         record = load_record(args.record)
     except LoadError as error:
+        _snapshot_carried(session_id, None)
         if error.code == "RECORD_NOT_FOUND":
-            maybe_nudge(args)
+            maybe_nudge(args, payload)
             return 0
         print("rumbo: record invalid, run record.py validate")
         return 0
+    _snapshot_carried(session_id, record)
     if validate_record(record):
         print("rumbo: record invalid, run record.py validate")
         return 0
@@ -1178,8 +1233,10 @@ def _stop_gate(args, hook_input):
                      "the harness or disclose that provenance is unverified")
     else:
         unverified = unverified_quotes(record, messages)
-        if unverified:
-            unverified = unverified_quotes(record, messages + project_messages(transcript))
+        carried = _read_carried(session_id) if unverified else set()
+        if carried:
+            still = set(unverified_quotes(record, messages + project_messages(transcript)))
+            unverified = [p for p in unverified if p in still or _quote_at(record, p) not in carried]
         for path in unverified:
             parts.append("%s: UNVERIFIED: quote not found in the user's messages" % path)
 
@@ -1199,6 +1256,9 @@ def _stop_gate(args, hook_input):
 
 BROKEN_RECORD = "rumbo: the decision record is unreadable or invalid"
 GATE_ERROR = "rumbo: GATE_ERROR: the stop gate hit an internal error and could not check the decision record"
+REPEAT_REASON = ("rumbo: still open, unchanged since the last block: %s. Fix them, or if "
+                 "your previous reply already told the user, add one line naming what is "
+                 "still open. Do not repeat the full explanation.")
 GATE_ERROR_TAIL = "Tell the user plainly that the decision record could not be checked this turn."
 BROKEN_TAIL = ("Fix the record with record.py validate before finishing; "
                "do not delete it to get past this check.")
@@ -1248,13 +1308,13 @@ def _block_bounded(session_id, parts, tail, problem_ids=None):
     reason = "\n".join(parts) + "\n" + tail
     blocks_path = _marker_path(session_id, ".blocks")
     if blocks_path:
-        # The same problems were already raised this session and the agent has
-        # answered; blocking again only makes it repeat the same disclosure.
+        # Same problems as the last block: ask for a one-line status instead of
+        # the full explanation again. Nothing passes without a reply.
         last_path = _marker_path(session_id, ".lastreason")
+        repeat = False
         try:
             with open(last_path, encoding="utf-8") as handle:
-                if handle.read() == reason:
-                    return 0
+                repeat = handle.read() == reason
         except OSError:
             pass
         try:
@@ -1275,6 +1335,10 @@ def _block_bounded(session_id, parts, tail, problem_ids=None):
                     json.dump(problem_ids, handle)
         except OSError:
             pass
+        if repeat:
+            names = ", ".join(part.split(":")[0] for part in parts
+                              if not part.startswith("rumbo")) or "the decision record"
+            reason = REPEAT_REASON % names
     print(json.dumps({"decision": "block", "reason": reason}))
     return 0
 

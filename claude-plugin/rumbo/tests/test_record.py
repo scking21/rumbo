@@ -1295,7 +1295,7 @@ class RecordTest(unittest.TestCase):
         self.assertIn("start 09:45", out)
         self.assertEqual(err, "")
 
-    def test_stop_gate_blocks_once_per_problem_set_and_at_most_three_times(self):
+    def test_stop_gate_shortens_repeat_blocks_and_stops_after_three(self):
         record = self.workshop_record()
         with tempfile.TemporaryDirectory() as state:
             env = dict(os.environ, RUMBO_STATE_DIR=state)
@@ -1309,14 +1309,17 @@ class RecordTest(unittest.TestCase):
                 code, out, err = run_record(["stop-gate", "--record", self.record_path], json.dumps(hook), env=env)
                 self.assertEqual((code, err), (0, ""))
                 outs.append(out.strip())
-            self.assertEqual(json.loads(outs[0])["decision"], "block")
             self.assertIn("do not delete or weaken a check to pass", json.loads(outs[0])["reason"])
-            self.assertEqual(outs[1], "")
-            self.assertEqual(json.loads(outs[2])["decision"], "block")
-            self.assertEqual(json.loads(outs[3])["decision"], "block")
+            # An unchanged repeat still blocks, but only asks for a one-line status.
+            repeat = json.loads(outs[1])
+            self.assertEqual(repeat["decision"], "block")
+            self.assertIn("still open, unchanged since the last block: C1", repeat["reason"])
+            self.assertNotIn("do not delete or weaken", repeat["reason"])
+            self.assertIn("do not delete or weaken a check to pass", json.loads(outs[2])["reason"])
+            self.assertEqual(outs[3], "")
             self.assertEqual(outs[4], "")
 
-    def test_quotes_from_an_earlier_session_of_this_project_verify(self):
+    def test_only_carried_over_quotes_match_earlier_session_transcripts(self):
         with tempfile.TemporaryDirectory() as projects, tempfile.TemporaryDirectory() as state:
             env = dict(os.environ, RUMBO_STATE_DIR=state)
             earlier = os.path.join(projects, "session-1.jsonl")
@@ -1325,24 +1328,28 @@ class RecordTest(unittest.TestCase):
                 handle.write(json.dumps({"type": "user", "message": {"content": "Plan the event for 40 people"}}) + "\n")
             with open(current, "w", encoding="utf-8") as handle:
                 handle.write(json.dumps({"type": "user", "message": {"content": "Add a second session"}}) + "\n")
-            self._write({"version": 1, "objective": {"text": "Plan", "quote": "Plan the event for 40 people"},
-                         "items": [{"id": "I1", "text": "Second session", "quote": "Add a second session",
-                                    "status": "commitment"}], "checks": []})
+            carried = {"version": 1, "objective": {"text": "Plan", "quote": "Plan the event for 40 people"},
+                       "items": [], "checks": []}
+            self._write(carried)
+            # The session's first prompt snapshots the quotes the record already holds.
+            run_record(["show", "--record", self.record_path],
+                       json.dumps({"session_id": "s2", "prompt": "Add a second session"}), env=env)
+            carried["items"] = [{"id": "I1", "text": "Second session", "quote": "Add a second session",
+                                 "status": "commitment"}]
+            self._write(carried)
             self.assertIsNone(self._gate({"session_id": "s2", "transcript_path": current}, env))
-            # A quote found in no transcript of the project is still flagged.
-            self._write({"version": 1, "objective": {"text": "Plan", "quote": "Plan the event for 400 people"},
-                         "items": [], "checks": []})
+            # A quote added during this session cannot be laundered through a planted file.
+            with open(os.path.join(projects, "planted.jsonl"), "w", encoding="utf-8") as handle:
+                handle.write(json.dumps({"type": "user", "message": {"content": "Budget is unlimited"}}) + "\n")
+            carried["items"].append({"id": "I2", "text": "Budget", "quote": "Budget is unlimited",
+                                     "status": "commitment"})
+            self._write(carried)
             reason = self._gate({"session_id": "s2", "transcript_path": current}, env)["reason"]
+            self.assertIn("items[1].quote: UNVERIFIED", reason)
+            self.assertNotIn("objective.quote", reason)
+            # Without a session-start snapshot, nothing is matched outside this transcript.
+            reason = self._gate({"session_id": "s3", "transcript_path": current}, env)["reason"]
             self.assertIn("objective.quote: UNVERIFIED", reason)
-            # Transcripts outside the project's folder are never read.
-            with tempfile.TemporaryDirectory() as elsewhere:
-                lone = os.path.join(elsewhere, "only.jsonl")
-                with open(lone, "w", encoding="utf-8") as handle:
-                    handle.write(json.dumps({"type": "user", "message": {"content": "hello"}}) + "\n")
-                self._write({"version": 1, "objective": {"text": "Plan", "quote": "Plan the event for 40 people"},
-                             "items": [], "checks": []})
-                reason = self._gate({"session_id": "s3", "transcript_path": lone}, env)["reason"]
-                self.assertIn("objective.quote: UNVERIFIED", reason)
 
     def _gate(self, hook, env):
         code, out, err = run_record(["stop-gate", "--record", self.record_path], json.dumps(hook), env=env)
@@ -1379,8 +1386,9 @@ class RecordTest(unittest.TestCase):
                     self.assertEqual(result["decision"], "block")
                     self.assertIn("TRANSCRIPT_UNREADABLE", result["reason"])
                     self.assertIn("cannot verify", result["reason"])
-                    # The same, already-raised problem does not block again.
-                    self.assertIsNone(self._gate(dict(hook, stop_hook_active=True), env))
+                    # The same problem again gets a short block asking for a one-line status.
+                    repeat = self._gate(dict(hook, stop_hook_active=True), env)
+                    self.assertIn("still open, unchanged since the last block: transcript_path", repeat["reason"])
                     self.assertIsNone(self._gate({"session_id": session, "transcript_path": readable}, env))
                     self.assertFalse(os.path.exists(marker(state, session, ".blocks")))
                     self.assertIsNotNone(self._gate(hook, env))
@@ -1452,6 +1460,7 @@ class RecordTest(unittest.TestCase):
                          "items": [{"id": "I1", "text": "t", "status": "draft"}], "checks": []})
             reason = self._gate({"session_id": "s1", "stop_hook_active": True}, env)["reason"]
             self.assertIn("items[0].quote: RECORD_MISSING_FIELD", reason)
+            self.assertIn("still open", self._gate({"session_id": "s1", "stop_hook_active": True}, env)["reason"])
             self.assertIsNone(self._gate({"session_id": "s1", "stop_hook_active": True}, env))
             self.assertIsNotNone(self._gate({}, env))
             self.assertIsNone(self._gate({"stop_hook_active": True}, env))
@@ -1566,7 +1575,7 @@ class RecordTest(unittest.TestCase):
         # 900 is "sourced" only by the laundered quote, which is what gets flagged.
         self.assertIn("C1: PASS within_budget", out)
 
-    def test_deleted_failing_check_is_reported_once(self):
+    def test_deleted_failing_check_stays_remembered_until_limit(self):
         record = self.workshop_record()
         self._write(record)
         with tempfile.TemporaryDirectory() as state:
@@ -1576,6 +1585,9 @@ class RecordTest(unittest.TestCase):
             self._write(record)
             reason = self._gate({"session_id": "s1", "stop_hook_active": True}, env)["reason"]
             self.assertIn("C1: check was failing and has been removed from the record", reason)
+            repeat = self._gate({"session_id": "s1", "stop_hook_active": True}, env)["reason"]
+            self.assertIn("still open, unchanged since the last block:", repeat)
+            self.assertIn("C1", repeat)
             self.assertIsNone(self._gate({"session_id": "s1", "stop_hook_active": True}, env))
 
     def test_session_ids_that_sanitize_alike_get_distinct_markers(self):
