@@ -1,0 +1,359 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; img-src 'none'; font-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
+<meta name="color-scheme" content="light dark">
+<title>Rumbo · Acceptance board</title>
+<style>
+:root{color-scheme:light;--canvas:#f3f5f8;--surface:#fff;--text:#101a32;--muted:#59667e;--line:#dbe1e9;--soft:#f5f7fa;--blue:#245ed8;--selected:#edf4ff;--green:#137147;--green-bg:#e8f5ee;--amber:#915500;--amber-bg:#fff4db;--red:#a82d39;--red-bg:#ffedf0;--radius:7px;font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+:root[data-theme=dark]{color-scheme:dark;--canvas:#111621;--surface:#181f2c;--text:#f0f3fa;--muted:#afbbd0;--line:#364052;--soft:#202938;--blue:#8cb7ff;--selected:#223751;--green:#8bdfb2;--green-bg:#173d31;--amber:#ffd58a;--amber-bg:#48351b;--red:#ffafba;--red-bg:#482932}
+*{box-sizing:border-box}body{margin:0;background:var(--canvas);color:var(--text);font-size:14px;line-height:1.5}button,select,textarea{font:inherit;color:inherit}button,select{min-height:40px;border:1px solid var(--line);border-radius:var(--radius);background:var(--surface)}button{cursor:pointer;padding:8px 15px}button:hover{background:var(--soft)}button:disabled{cursor:wait;opacity:.6}button:focus-visible,select:focus-visible,summary:focus-visible,textarea:focus-visible,a:focus-visible{outline:3px solid var(--blue);outline-offset:3px}h1,h2,h3,p{margin:0}button,select,textarea,h1,h2,p,dd,li{overflow-wrap:anywhere}h1{font-size:clamp(26px,3.2vw,40px);line-height:1.2;letter-spacing:-1.3px;font-weight:720}h2{font-size:24px;line-height:1.3;letter-spacing:-.5px}h3{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);font-weight:650;margin-bottom:10px;padding-bottom:6px;border-bottom:1px solid var(--line)}.shell{max-width:1440px;margin:0 auto;background:var(--surface);min-height:100vh;border-left:1px solid var(--line);border-right:1px solid var(--line)}.topbar{display:flex;align-items:center;gap:24px;padding:14px 28px;border-bottom:1px solid var(--line)}.brand{font-size:23px;font-weight:800;letter-spacing:-.7px}.board-name{padding-left:24px;border-left:1px solid var(--line);color:var(--muted);font-size:15px}.top-actions{margin-left:auto;display:flex;gap:16px;align-items:center}.quiet{color:var(--muted)}.demo{color:var(--amber);background:var(--amber-bg);padding:4px 9px;border-radius:4px;font-size:12px;font-weight:650}.intro{padding:30px 28px 24px;display:grid;grid-template-columns:minmax(0,1fr) auto;gap:18px 32px}.breadcrumb{margin-top:10px;color:var(--muted);font-size:15px}.contract-meta{display:grid;grid-template-columns:auto minmax(70px,180px);gap:5px 18px;margin:3px 0 0;align-content:start}.contract-meta dt{color:var(--muted)}.contract-meta dd{margin:0}.contract-context{grid-column:1/-1;font-size:13px;color:var(--muted)}summary{cursor:pointer;width:fit-content}details[open] summary{margin-bottom:8px}.context-body{border-left:2px solid var(--line);padding-left:12px;display:grid;gap:6px}.context-body ul{margin:0;padding-left:20px}.summary-band{display:grid;grid-template-columns:repeat(3,1fr);border-top:1px solid var(--line);border-bottom:1px solid var(--line);padding:17px 28px;gap:24px}.stat{border-right:1px solid var(--line);padding-left:10px}.stat:last-child{border:0}.stat strong{display:block;font-size:30px;line-height:1.25;letter-spacing:-.8px}.stat span{color:var(--muted)}.stat.accepted strong{color:var(--green)}.stat.review strong{color:var(--blue)}.stat.attention strong{color:var(--amber)}.workspace{display:grid;grid-template-columns:minmax(250px,31%) minmax(0,1fr);min-height:600px}.task-nav{border-right:1px solid var(--line)}.filter-wrap{padding:18px}.filter-wrap select{width:100%;padding:8px 12px}.task-list{list-style:none;margin:0;padding:0}.task-button{width:100%;text-align:left;border:none;border-bottom:1px solid var(--line);border-radius:0;padding:17px 22px 17px 25px;position:relative;min-height:90px}.task-button[aria-pressed=true]{background:var(--selected)}.task-button[aria-pressed=true]:before{content:"";position:absolute;left:0;top:0;bottom:0;width:4px;background:var(--blue)}.task-title{font-size:15px;font-weight:650;display:block;margin-bottom:5px}.task-meta{font-size:12px;color:var(--muted);margin-top:6px;display:block}.status{display:inline-flex;align-items:center;gap:8px;font-size:13px;color:var(--muted)}.status:before{content:"";display:block;flex:none;width:9px;height:9px;border-radius:50%;background:currentColor}.status[data-status=accepted]{color:var(--green)}.status[data-status=checks_passed],.status[data-status=produced]{color:var(--blue)}.status[data-status=blocked],.status[data-status=stale]{color:var(--amber)}.status[data-status=rejected]{color:var(--red)}.detail{padding:24px 28px 30px;min-width:0}.detail-head{display:flex;justify-content:space-between;align-items:flex-start;gap:16px}.detail-head>div{min-width:0}.detail-head .status{margin-top:8px}.small-button{font-size:12px;white-space:nowrap;flex:none;min-height:36px;padding:7px 11px}.explanation{font-size:13px;color:var(--muted);margin-top:9px}.section{margin-top:22px}.criteria{padding-left:20px;margin:0}.criteria li{padding:2px 0}.criterion-kind{font-size:11px;color:var(--muted);margin-left:7px}.surface{background:var(--soft);border:1px solid var(--line);padding:12px 15px;border-radius:var(--radius);min-width:0}.surface+.surface{margin-top:8px}.artifact-path{font-weight:650}.mono{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:11px;overflow-wrap:anywhere}.metadata{font-size:12px;color:var(--muted);margin-top:3px}.evidence-title{font-weight:600;font-size:13px}.evidence-note{margin-top:6px;font-size:13px;white-space:pre-wrap;overflow-wrap:anywhere}.outcome{color:var(--green)}.outcome.failed{color:var(--red)}.historical{border-left:3px solid var(--amber)}.historical-note{font-size:11px;color:var(--amber);margin-bottom:4px;font-weight:600}.empty{padding:20px;color:var(--muted);font-size:13px}.empty.large{padding:40px 4px}.notice{margin:0 28px 16px;padding:11px 14px;border-left:3px solid var(--amber);background:var(--amber-bg);color:var(--amber);font-size:13px}.notice[hidden],[hidden]{display:none!important}.detail-notice{margin:15px 0 0}.footer{border-top:1px solid var(--line);padding:12px 18px;display:flex;justify-content:space-between;gap:16px;color:var(--muted);font-size:11px;flex-wrap:wrap}.message{font-size:12px;color:var(--muted);margin-top:10px;min-height:18px}.handoff{width:100%;min-height:140px;margin-top:8px;border:1px solid var(--line);border-radius:var(--radius);padding:10px;background:var(--soft);font-family:ui-monospace,monospace;font-size:12px}.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}.skip{position:absolute;top:-50px;left:10px;background:var(--surface);z-index:3;padding:8px}.skip:focus{top:10px}.loading{animation:breathe 1.4s ease-in-out infinite}@keyframes breathe{50%{opacity:.5}}@media(prefers-reduced-motion:reduce){*{animation:none!important;scroll-behavior:auto!important}}@media(max-width:760px){.topbar{padding:12px 18px;gap:14px}.board-name{padding-left:14px;font-size:13px}.top-actions{gap:10px}.read-only{display:none}.intro{padding:24px 20px 20px;grid-template-columns:minmax(0,1fr)}.contract-meta{grid-template-columns:auto 1fr;font-size:12px;gap:4px 14px}.summary-band{padding:14px 18px;gap:12px}.stat{padding-left:0}.stat strong{font-size:26px}.stat span{font-size:11px}.workspace{grid-template-columns:minmax(0,1fr);min-height:0}.task-nav{border-right:0;border-bottom:1px solid var(--line)}.task-list{max-height:270px;overflow:auto}.task-button{min-height:77px;padding:13px 20px}.filter-wrap{padding:14px 18px}.detail{padding:22px 20px 28px}.detail-head{flex-wrap:wrap}.detail-head h2{font-size:23px}.notice{margin-left:20px;margin-right:20px}.detail-notice{margin-left:0;margin-right:0}.contract-context{grid-column:auto}.footer{font-size:10px}.brand{font-size:21px}}@media(max-width:400px){.board-name{font-size:12px;max-width:85px;line-height:1.3}.topbar{gap:10px;padding-left:16px;padding-right:16px}.top-actions{gap:6px}.top-actions button{padding:7px 10px}.demo{font-size:10px;padding:3px 5px}.breadcrumb{font-size:12px}}
+</style>
+</head>
+<body>
+<a class="skip" href="#task-detail">Skip to task details</a>
+<div class="shell">
+<header class="topbar"><span class="brand">rumbo</span><span class="board-name">Acceptance board</span><div class="top-actions"><span id="demo" class="demo" hidden>Demo</span><span class="quiet read-only">Read only</span><button id="refresh" type="button">Refresh</button></div></header>
+<main>
+<section class="intro" aria-labelledby="goal"><div><h1 id="goal">Loading your acceptance board</h1><p class="breadcrumb">Goal → task → artifact → evidence → decision</p></div><dl class="contract-meta"><dt>Contract revision</dt><dd id="contract-revision">—</dd><dt>Decision owner</dt><dd id="decision-owner">—</dd></dl><details class="contract-context" id="contract-context" hidden><summary>Original request &amp; constraints</summary><div id="context-body" class="context-body"></div></details></section>
+<div id="error" class="notice" role="alert" hidden></div>
+<div id="integrity" class="notice" role="status" hidden></div>
+<section class="summary-band" aria-label="Task summary"><div class="stat accepted"><strong id="accepted-count">0</strong><span>Accepted</span></div><div class="stat review"><strong id="review-count">0</strong><span>Ready for review</span></div><div class="stat attention"><strong id="attention-count">0</strong><span>Needs attention</span></div></section>
+<div class="workspace"><nav class="task-nav" aria-label="Tasks"><div class="filter-wrap"><label for="status-filter" class="sr-only">Filter tasks</label><select id="status-filter"><option value="all">All tasks</option><option value="review">Ready for review</option><option value="attention">Needs attention</option><option value="accepted">Accepted</option><option value="active">In progress</option></select></div><ul id="task-list" class="task-list"></ul><p id="list-empty" class="empty" hidden>No tasks yet</p></nav><article id="task-detail" class="detail" aria-label="Task details" tabindex="-1"><p class="empty large loading" id="loading">Waiting for the project snapshot…</p></article></div>
+</main><footer class="footer"><span id="connection">Connecting…</span><span id="ledger">Read-only view · Decisions stay with the named owner</span></footer>
+</div>
+<script>
+(() => {
+'use strict';
+const $ = id => document.getElementById(id);
+const labels = {unclaimed:'Unclaimed', claimed:'Claimed', blocked:'Blocked', produced:'Produced', checks_passed:'Checks passed', accepted:'Accepted', rejected:'Rejected', stale:'Stale'};
+const attention = new Set(['blocked','rejected','stale']);
+const embedded = window.parent !== window;
+const pending = new Map();
+let state = null, selected = null, ready = false, canRefresh = false, hostOrigin = null;
+let requestSequence = 0, resizeTimer = null, lastSize = '', hostContext = {}, closed = false;
+const protocolVersion = '2026-01-26';
+const text = value => value == null ? '—' : typeof value === 'object' ? JSON.stringify(value, null, 2) : String(value);
+const array = value => Array.isArray(value) ? value : [];
+function element(tag, value, className) {
+  const node = document.createElement(tag);
+  if (value != null) node.textContent = text(value);
+  if (className) node.className = className;
+  return node;
+}
+function statusNode(status) {
+  const node = element('span', labels[status] || 'Unknown status', 'status');
+  node.dataset.status = Object.hasOwn(labels, status) ? status : 'unknown';
+  return node;
+}
+function date(value) {
+  if (value == null) return 'Time not recorded';
+  const valueDate = new Date(typeof value === 'number' ? value * 1000 : value);
+  return Number.isNaN(valueDate.getTime()) ? text(value) : valueDate.toLocaleString();
+}
+function error(message) {
+  $('error').textContent = message + (state ? ' Showing the last snapshot; it may be out of date.' : ' No project snapshot is available.');
+  $('error').hidden = false;
+  $('connection').textContent = embedded ? 'Host connection needs attention' : 'Hosted connection needs attention';
+  $('refresh').disabled = false;
+  $('refresh').textContent = 'Refresh';
+  if (!state) {
+    $('goal').textContent = 'Your acceptance board';
+    $('task-detail').replaceChildren(element('p','Refresh to try again. In an MCP host, open the Rumbo board tool to load a project.','empty large'));
+  }
+}
+function matches(task, filter) {
+  return filter === 'all' || (filter === 'review' && task.status === 'checks_passed') ||
+    (filter === 'attention' && attention.has(task.status)) || (filter === 'accepted' && task.status === 'accepted') ||
+    (filter === 'active' && ['unclaimed','claimed','produced'].includes(task.status));
+}
+function renderList() {
+  const tasks = state.tasks.filter(task => matches(task, $('status-filter').value));
+  const fragment = document.createDocumentFragment();
+  for (const task of tasks) {
+    const li = element('li');
+    const button = element('button',null,'task-button');
+    button.type = 'button';
+    button.setAttribute('aria-pressed', String(selected === task.id));
+    button.append(element('span',task.title || task.id,'task-title'),statusNode(task.status));
+    if (task.lease && task.status === 'claimed') button.append(element('span','Claimed by ' + text(task.lease.actor),'task-meta'));
+    button.addEventListener('click', () => { selected = task.id; renderList(); renderDetail(); });
+    li.append(button); fragment.append(li);
+  }
+  $('task-list').replaceChildren(fragment);
+  $('list-empty').hidden = tasks.length > 0;
+  $('list-empty').textContent = state.tasks.length ? 'No tasks match this filter' : 'No tasks yet';
+}
+function section(title) {
+  const node = element('section',null,'section');
+  node.append(element('h3',title));
+  return node;
+}
+function historical(record, task) {
+  return record.contract_revision !== state.contract_revision || record.artifact_revision !== task.artifact?.revision || (record.artifact_sha256 != null && record.artifact_sha256 !== task.artifact?.sha256);
+}
+function receipt(record, task, assertion) {
+  const old = historical(record, task);
+  const latest = array(task.evidence).filter(e => e.check_id === record.check_id && !historical(e,task)).at(-1);
+  const superseded = !old && latest && latest !== record;
+  const card = element('div',null,'surface' + (old ? ' historical' : ''));
+  if (old) card.append(element('p','Historical · does not apply to the current artifact and contract','historical-note'));
+  else if (superseded) card.append(element('p','Superseded receipt · a later record exists for this check','historical-note'));
+  const passed = ['pass','passed','accepted','accept'].includes(record.outcome);
+  card.append(element('p',text(record.outcome) + ' · ' + text(record.check_id || record.kind),'evidence-title outcome' + (passed ? '' : ' failed')));
+  if (record.detail != null) card.append(element('p',record.detail,'evidence-note' + (typeof record.detail === 'object' ? ' mono' : '')));
+  card.append(element('p',(assertion ? 'Assertion by ' : 'Recorded by ') + text(record.actor) + ' · ' + text(record.role || 'role not recorded'),'metadata'));
+  card.append(element('p','Artifact r' + text(record.artifact_revision) + ' · contract r' + text(record.contract_revision) + ' · ' + date(record.at),'metadata'));
+  return card;
+}
+function handoff(task) {
+  const lines = [state.demo ? 'Rumbo DEMO handoff' : 'Rumbo handoff', 'Goal: ' + text(state.goal),
+    'Project: ' + text(state.project_id), 'Contract: r' + text(state.contract_revision),
+    'Task: ' + text(task.id) + ' — ' + text(task.title), 'State: ' + (labels[task.status] || text(task.status)),
+    'Decision owner: ' + text(state.decision_owner), 'Artifact: ' + (task.artifact ? text(task.artifact.path) + ' (r' + text(task.artifact.revision) + ', SHA256 ' + text(task.artifact.sha256) + ')' : 'None'),
+    'Deterministic receipts: ' + array(task.evidence).filter(e => e.kind === 'deterministic').length,
+    'Reviewer assertions: ' + array(task.evidence).filter(e => e.kind === 'reviewer_assertion').length,
+    'Human decisions recorded: ' + array(task.decisions).length];
+  if (task.stale_reason) lines.push('Attention: ' + text(task.stale_reason));
+  lines.push('Receipt/assertion/decision counts include history. Checks passed is not acceptance.',
+    'Ledger head: ' + text(state.ledger_head), 'Ledger integrity: ' + (state.integrity?.valid === true ? 'verified by hosted runtime' : 'not verified'));
+  return lines.join('\n');
+}
+async function copyHandoff(task) {
+  const summary = handoff(task);
+  try {
+    if (!navigator.clipboard?.writeText) throw new Error('Clipboard unavailable');
+    await navigator.clipboard.writeText(summary);
+    $('message').textContent = 'Copied handoff summary';
+  } catch (_) {
+    $('handoff-text').value = summary; $('handoff-text').hidden = false;
+    $('handoff-text').focus(); $('handoff-text').select();
+    $('message').textContent = 'Select and copy the handoff summary below';
+  }
+}
+function renderDetail() {
+  const root = $('task-detail');
+  const task = state.tasks.find(item => item.id === selected);
+  if (!task) { root.replaceChildren(element('p',state.tasks.length ? 'Select a task to follow its evidence trail.' : 'Your goal is ready. Add tasks with explicit acceptance criteria to start the trail.','empty large')); return; }
+  const frag = document.createDocumentFragment();
+  const head = element('div',null,'detail-head'), title = element('div');
+  title.append(element('h2',task.title || task.id), statusNode(task.status));
+  const copy = element('button','Copy handoff','small-button'); copy.type = 'button';
+  copy.addEventListener('click',() => copyHandoff(task)); head.append(title, copy); frag.append(head);
+  frag.append(element('p','Checks passed is not acceptance. The decision belongs to ' + text(state.decision_owner) + '.','explanation'));
+  if (task.stale_reason) frag.append(element('p',task.stale_reason,'notice detail-notice'));
+  if (task.lease) frag.append(element('p','Lease: ' + text(task.lease.actor) + ' · expires ' + date(task.lease.expires_at),'metadata'));
+  if (array(task.dependencies).length) frag.append(element('p','Depends on: ' + task.dependencies.map(text).join(', '),'metadata'));
+  const criteria = section('Acceptance criteria');
+  if (!array(task.acceptance).length) criteria.append(element('p','No acceptance criteria recorded','quiet'));
+  else {
+    const list = element('ol',null,'criteria');
+    for (const check of task.acceptance) {
+      const li = element('li',check.description || check.title || check.id);
+      li.append(element('span',check.kind,'criterion-kind'));
+      if (check.prompt) li.append(element('p',check.prompt,'metadata'));
+      if (Object.hasOwn(check,'key')) li.append(element('p','Key: ' + text(check.key),'metadata mono'));
+      if (Object.hasOwn(check,'value')) li.append(element('p','Expected: ' + text(check.value),'metadata mono'));
+      list.append(li);
+    }
+    criteria.append(list);
+  }
+  frag.append(criteria);
+  const artifact = section('Artifact');
+  if (task.artifact) {
+    const box = element('div',null,'surface');
+    box.append(element('p',task.artifact.path,'artifact-path'),
+      element('p','Revision ' + text(task.artifact.revision) + ' · ' + text(task.artifact.size) + ' bytes · maker ' + text(task.artifact.maker),'metadata'),
+      element('p','SHA256: ' + text(task.artifact.sha256),'metadata mono'));
+    box.append(element('p',task.artifact.source === 'uploaded_text' ? 'Uploaded text: received bytes only; no Git or repository authenticity implied.' : 'Registered project file: exact bytes from the configured root.','metadata'));
+    artifact.append(box);
+  } else artifact.append(element('p','No artifact submitted','quiet'));
+  frag.append(artifact);
+  const groups = [ ['Deterministic receipts', e => e.kind === 'deterministic', false, 'No deterministic receipts recorded'],
+    ['Reviewer assertions', e => e.kind === 'reviewer_assertion', true, 'No reviewer assertions recorded'] ];
+  for (const [name, include, assertion, empty] of groups) {
+    const group = section(name), records = array(task.evidence).filter(include);
+    if (assertion) group.append(element('p','Attributed reviewer statements; not deterministic proof.','explanation'));
+    for (const record of records) group.append(receipt(record,task,assertion));
+    if (!records.length) group.append(element('p',empty,'quiet'));
+    frag.append(group);
+  }
+  const unknown = array(task.evidence).filter(e => !['deterministic','reviewer_assertion'].includes(e.kind));
+  if (unknown.length) {
+    const group = section('Other recorded evidence');
+    group.append(element('p','Unrecognized evidence kind; no proof classification is assumed.','quiet'));
+    for (const record of unknown) group.append(receipt(record,task,true));
+    frag.append(group);
+  }
+  const decisions = section('Human decision');
+  if (!array(task.decisions).length) decisions.append(element('p','Awaiting ' + text(state.decision_owner),'surface'));
+  for (const record of array(task.decisions)) {
+    const old = historical(record,task), card = element('div',null,'surface' + (old ? ' historical' : ''));
+    if (old) card.append(element('p','Historical decision · does not apply to the current revision','historical-note'));
+    else if (record !== array(task.decisions).filter(d => !historical(d,task)).at(-1)) card.append(element('p','Superseded decision · a later decision exists','historical-note'));
+    if (!old && ['accepted','accept'].includes(record.outcome) && task.status !== 'accepted') card.append(element('p','Not current acceptance · evidence or dependency state changed; a new owner decision is needed.','historical-note'));
+    card.append(element('p',text(record.outcome) + ' · ' + text(record.actor),'evidence-title'));
+    card.append(element('p',record.reason,'evidence-note'));
+    card.append(element('p','Artifact r' + text(record.artifact_revision) + ' · contract r' + text(record.contract_revision) + ' · ' + date(record.at),'metadata'));
+    decisions.append(card);
+  }
+  frag.append(decisions);
+  const requests = array(state.requests).filter(r => r.task_id === task.id);
+  if (requests.length) {
+    const group = section('Recorded decision requests');
+    group.append(element('p','Questions recorded for the owner. A request is not a decision; resolution is not tracked separately.','explanation'));
+    for (const record of requests) {
+      const card = element('div',null,'surface');
+      if (record.contract_revision !== state.contract_revision) card.append(element('p','Historical request · prior contract revision','historical-note'));
+      card.append(element('p',record.question,'evidence-note'),element('p',text(record.actor) + ' · contract r' + text(record.contract_revision) + ' · ' + date(record.at),'metadata'));
+      group.append(card);
+    }
+    frag.append(group);
+  }
+  const message = element('p',null,'message');message.id = 'message';message.setAttribute('aria-live','polite');
+  const handoffText = element('textarea',null,'handoff');handoffText.id = 'handoff-text';handoffText.readOnly = true;handoffText.hidden = true;handoffText.setAttribute('aria-label','Handoff summary');
+  frag.append(message,handoffText);root.replaceChildren(frag);
+}
+function render(snapshot) {
+  if (snapshot?.project_selection_required && Array.isArray(snapshot.projects)) {
+    state = null; selected = null; $('goal').textContent = 'Choose your project';
+    $('task-list').replaceChildren(); $('task-detail').replaceChildren(); $('error').hidden = true;
+    $('accepted-count').textContent = '0'; $('review-count').textContent = '0'; $('attention-count').textContent = '0';
+    $('contract-revision').textContent = '—'; $('decision-owner').textContent = '—';
+    $('contract-context').hidden = true; $('integrity').hidden = true; $('demo').hidden = true;
+    for (const project of snapshot.projects) {
+      const button = element('button', project.alias + ' · ' + project.role, 'task-button'); button.type = 'button';
+      button.addEventListener('click', async () => { try { consume(await request('tools/call', {name:'rumbo_state',arguments:{project_key:project.project_key}})); } catch (e) { error(e.message); } });
+      $('task-list').append(button);
+    }
+    $('task-detail').append(element('p', snapshot.projects.length ? 'Select an authorized project to inspect its exact evidence.' : 'No authorized projects yet. Create a contract in the signed-in owner browser.', 'empty large'));
+    $('connection').textContent = 'Authorized project selector'; $('ledger').textContent = 'Read-only project selection';
+    $('refresh').disabled = true; return;
+  }
+
+  if (!snapshot || snapshot.version !== 1 || !Array.isArray(snapshot.tasks) || typeof snapshot.goal !== 'string' || snapshot.tasks.some(t => !t || typeof t.id !== 'string')) throw new Error('Unsupported or malformed project snapshot');
+  state = snapshot;
+  if (!state.tasks.some(task => task.id === selected)) selected = state.tasks[0]?.id || null;
+  $('goal').textContent = state.goal || 'Untitled goal';
+  $('contract-revision').textContent = text(state.contract_revision);
+  $('decision-owner').textContent = text(state.decision_owner);
+  $('demo').hidden = state.demo !== true;
+  $('error').hidden = true;
+  $('accepted-count').textContent = String(state.tasks.filter(t => t.status === 'accepted').length);
+  $('review-count').textContent = String(state.tasks.filter(t => t.status === 'checks_passed').length);
+  $('attention-count').textContent = String(state.tasks.filter(t => attention.has(t.status)).length);
+  const context = $('context-body');context.replaceChildren();
+  if (state.original_request) context.append(element('p',state.original_request));
+  if (array(state.constraints).length) {const list = element('ul');for(const constraint of state.constraints)list.append(element('li',constraint));context.append(list);}
+  $('contract-context').hidden = !context.childNodes.length;
+  const integrity = state.integrity?.valid === true;
+  $('integrity').hidden = integrity;
+  $('integrity').textContent = 'Ledger integrity is not verified. Treat the recorded statuses as untrusted until the ledger is checked.';
+  $('ledger').textContent = text(state.events_count) + ' ledger events · ' + (integrity ? 'Hash chain verified by hosted runtime' : 'Integrity not verified');
+  $('ledger').title = 'Ledger head: ' + text(state.ledger_head) + '. A stored hash chain does not prove real-world correctness.';
+  $('connection').textContent = (embedded ? 'MCP host snapshot' : 'Hosted snapshot') + (state.demo ? ' · demonstration data' : '') + ' · refreshed ' + new Date().toLocaleTimeString();
+  renderList();renderDetail();
+  $('refresh').disabled = embedded && !canRefresh;
+  $('refresh').textContent = 'Refresh';
+}
+function consume(result) {
+  const payload = result?.result || result;
+  if (payload?.isError) throw new Error('The host reported a tool error');
+  render(payload?.structuredContent);
+}
+function post(message) {
+  if (!closed) window.parent.postMessage(message, hostOrigin && hostOrigin !== 'null' ? hostOrigin : '*');
+}
+function notify(method, params = {}) { post({jsonrpc:'2.0',method,params}); }
+function request(method, params) {
+  return new Promise((resolve,reject) => {
+    const id = 'rumbo-' + (++requestSequence);
+    const timeout = setTimeout(() => {pending.delete(id);reject(new Error('Host request timed out'));},10000);
+    pending.set(id,{resolve,reject,timeout});post({jsonrpc:'2.0',id,method,params});
+  });
+}
+function applyContext(update) {
+  hostContext = {...hostContext,...update};
+  document.documentElement.dataset.theme = hostContext.theme === 'dark' ? 'dark' : 'light';
+  // Host CSS and font payloads are deliberately not injected: this app needs no network assets.
+}
+function sizeChanged() {
+  clearTimeout(resizeTimer);
+  resizeTimer = setTimeout(() => {
+    if (!ready || closed) return;
+    const width = Math.ceil(document.documentElement.getBoundingClientRect().width);
+    const height = Math.ceil(document.body.getBoundingClientRect().height);
+    const signature = width + ':' + height;
+    if (signature !== lastSize) {lastSize = signature;notify('ui/notifications/size-changed',{width,height});}
+  },70);
+}
+function onMessage(event) {
+  if (event.source !== window.parent || !embedded || closed) return;
+  if (hostOrigin !== null && event.origin !== hostOrigin) return;
+  const message = event.data;
+  if (!message || typeof message !== 'object' || message.jsonrpc !== '2.0') return;
+  if (Object.hasOwn(message,'id') && pending.has(message.id)) {
+    const call = pending.get(message.id);pending.delete(message.id);clearTimeout(call.timeout);
+    if (hostOrigin === null) hostOrigin = event.origin;
+    if (message.error) call.reject(new Error(text(message.error.message)));
+    else call.resolve(message.result);
+    return;
+  }
+  if (!ready) return;
+  try {
+    if (message.method === 'ui/notifications/tool-result') consume(message.params);
+    else if (message.method === 'ui/notifications/host-context-changed') applyContext(message.params || {});
+    else if (message.method === 'ui/notifications/tool-cancelled') error('The tool call was cancelled.');
+    else if (message.method === 'ping' && Object.hasOwn(message,'id')) post({jsonrpc:'2.0',id:message.id,result:{}});
+    else if (message.method === 'ui/resource-teardown' && Object.hasOwn(message,'id')) {
+      post({jsonrpc:'2.0',id:message.id,result:{}});closed = true;
+      clearTimeout(resizeTimer);observer?.disconnect();window.removeEventListener('message',onMessage);
+      for (const call of pending.values()) {clearTimeout(call.timeout);call.reject(new Error('View closed'));}pending.clear();
+    }
+  } catch (err) {error(err.message);}
+}
+async function initialize() {
+  $('refresh').disabled = true;
+  try {
+    const result = await request('ui/initialize',{appInfo:{name:'Rumbo acceptance board',version:'0.1.0'},appCapabilities:{availableDisplayModes:['inline']},protocolVersion});
+    if (result?.protocolVersion !== protocolVersion) throw new Error('The host does not support MCP Apps protocol ' + protocolVersion);
+    canRefresh = !!result.hostCapabilities?.serverTools;
+    applyContext(result.hostContext || {});ready = true;
+    notify('ui/notifications/initialized');sizeChanged();
+    $('refresh').disabled = !canRefresh;
+    $('refresh').title = canRefresh ? 'Read the latest project state' : 'This host does not provide tool refresh';
+    $('connection').textContent = 'Connected to MCP host · waiting for its initial tool result';
+    // The initial state arrives from the host. Do not issue a duplicate tools/call.
+  } catch (err) {error(err.message);}
+}
+async function refresh() {
+  $('refresh').disabled = true;$('refresh').textContent = 'Refreshing…';
+  try {
+    if (embedded) {
+      if (!ready) {await initialize();return;}
+      if (!canRefresh) throw new Error('The host does not support tool refresh');
+      consume(await request('tools/call',{name:'rumbo_state',arguments:{project_key:state?.hosted_project_key}}));
+    } else {
+      const controller = new AbortController(), timer = setTimeout(() => controller.abort(),10000);
+      try {
+        const response = await fetch('/api/state'+window.location.search,{cache:'no-store',credentials:'omit',signal:controller.signal});
+        if (!response.ok) throw new Error('Cannot read local project state (HTTP ' + response.status + ')');
+        render(await response.json());
+      } finally {clearTimeout(timer);}
+    }
+  } catch (err) {error(err.name === 'AbortError' ? 'The local request timed out.' : err.message);}
+}
+$('status-filter').addEventListener('change',() => { if (state) renderList(); });
+$('refresh').addEventListener('click',refresh);
+let observer = null;
+if (embedded) {
+  window.addEventListener('message',onMessage);
+  if (typeof ResizeObserver !== 'undefined') {observer = new ResizeObserver(sizeChanged);observer.observe(document.body);}
+  initialize();
+} else refresh();
+})();
+</script>
+</body>
+</html>
