@@ -457,6 +457,38 @@ def unverified_quotes(record, messages):
     return unverified
 
 
+MAX_PROJECT_TRANSCRIPTS = 50
+
+
+def project_messages(transcript_path):
+    """User messages from this project's other Claude Code session transcripts.
+
+    Claude Code keeps one transcript per session in the same directory, so a
+    record started in an earlier session quotes messages that only exist there.
+    Reads at most the MAX_PROJECT_TRANSCRIPTS most recently modified ones.
+    """
+    current = os.path.abspath(transcript_path)
+    folder = os.path.dirname(current)
+    try:
+        names = os.listdir(folder)
+    except OSError:
+        return []
+
+    def modified(path):
+        try:
+            return os.path.getmtime(path)
+        except OSError:
+            return 0
+
+    others = [os.path.join(folder, name) for name in names if name.endswith(".jsonl")]
+    others = [p for p in others if p != current and os.path.isfile(p) and not os.path.islink(p)]
+    others.sort(key=modified, reverse=True)
+    messages = []
+    for path in others[:MAX_PROJECT_TRANSCRIPTS]:
+        messages.extend(user_messages(path) or [])
+    return messages
+
+
 # ------------------------------------------------------------ validation
 
 
@@ -892,6 +924,28 @@ def _marker_path(session_id, suffix):
     return os.path.join(state_dir, "%s-%s%s" % (safe, digest, suffix))
 
 
+def _planning_prompts(session_id):
+    path = _marker_path(session_id, ".prompts")
+    try:
+        with open(path, encoding="utf-8") as handle:
+            return int(handle.read().strip() or "0")
+    except (OSError, TypeError, ValueError):
+        return 0
+
+
+def _count_planning_prompt(session_id):
+    path = _marker_path(session_id, ".prompts")
+    if not path:
+        return
+    count = _planning_prompts(session_id) + 1
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as handle:
+            handle.write(str(count))
+    except OSError:
+        pass
+
+
 def maybe_nudge(args):
     """Print the no-record nudge when stdin carries planning-looking work.
 
@@ -917,6 +971,7 @@ def maybe_nudge(args):
     if not PLANNING_PATTERN.search(prompt):
         return
     session_id = payload.get("session_id")
+    _count_planning_prompt(session_id)
     if session_id:
         for suffix in (".nudged", ".enforced"):
             existing = _marker_path(session_id, suffix)
@@ -1085,6 +1140,10 @@ def _stop_gate(args, hook_input):
         enforced_path = _marker_path(session_id, ".enforced")
         if not marker_path:
             return 0
+        # A single planning-looking request is often one-off; the prompt-time
+        # nudge is enough. Enforce once the session keeps planning.
+        if _planning_prompts(session_id) < 2:
+            return 0
         try:
             if os.path.exists(enforced_path):
                 return 0
@@ -1118,11 +1177,14 @@ def _stop_gate(args, hook_input):
                      "record's quotes; provide a readable transcript_path from "
                      "the harness or disclose that provenance is unverified")
     else:
-        for path in unverified_quotes(record, messages):
+        unverified = unverified_quotes(record, messages)
+        if unverified:
+            unverified = unverified_quotes(record, messages + project_messages(transcript))
+        for path in unverified:
             parts.append("%s: UNVERIFIED: quote not found in the user's messages" % path)
 
     if not parts:
-        for suffix in (".blocks", ".failed"):
+        for suffix in (".blocks", ".failed", ".lastreason"):
             path = _marker_path(session_id, suffix)
             if path:
                 try:
@@ -1183,8 +1245,18 @@ def _read_failed_ids(session_id):
 
 def _block_bounded(session_id, parts, tail, problem_ids=None):
     """Print a Stop-hook block, at most MAX_BLOCKS times per session; always exit 0."""
+    reason = "\n".join(parts) + "\n" + tail
     blocks_path = _marker_path(session_id, ".blocks")
     if blocks_path:
+        # The same problems were already raised this session and the agent has
+        # answered; blocking again only makes it repeat the same disclosure.
+        last_path = _marker_path(session_id, ".lastreason")
+        try:
+            with open(last_path, encoding="utf-8") as handle:
+                if handle.read() == reason:
+                    return 0
+        except OSError:
+            pass
         try:
             with open(blocks_path, encoding="utf-8") as handle:
                 count = int(handle.read().strip() or "0")
@@ -1196,12 +1268,14 @@ def _block_bounded(session_id, parts, tail, problem_ids=None):
             os.makedirs(os.path.dirname(blocks_path), exist_ok=True)
             with open(blocks_path, "w", encoding="utf-8") as handle:
                 handle.write(str(count + 1))
+            with open(last_path, "w", encoding="utf-8") as handle:
+                handle.write(reason)
             if problem_ids is not None:
                 with open(_marker_path(session_id, ".failed"), "w", encoding="utf-8") as handle:
                     json.dump(problem_ids, handle)
         except OSError:
             pass
-    print(json.dumps({"decision": "block", "reason": "\n".join(parts) + "\n" + tail}))
+    print(json.dumps({"decision": "block", "reason": reason}))
     return 0
 
 # ------------------------------------------------------------------ main
