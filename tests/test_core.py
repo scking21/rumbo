@@ -263,6 +263,41 @@ class CoreTests(unittest.TestCase):
         with self.assertRaisesRegex(RumboError,'UNKNOWN_FIELD'):
             self.reviewer.artifact_view(dict(task_id='export',contract_revision=1,artifact_revision=1,path='/etc/passwd'))
 
+    def test_artifact_view_includes_snapshot_status_without_weakening_byte_checks(self):
+        self.produce()
+        args=dict(task_id='export',contract_revision=1,artifact_revision=1)
+        for expected, action in [('produced', None), ('checks_passed', 'run_checks')]:
+            if action:self.worker.execute(action,args)
+            view=self.reviewer.artifact_view(args)
+            task=self.reviewer.snapshot()['tasks'][0]
+            self.assertEqual(view.get('status'),expected)
+            self.assertEqual(view.get('stale_reason'),task['stale_reason'])
+            self.assertEqual(view['sha256'],task['artifact']['sha256'])
+            self.assertEqual(view['text'],'name,amount\nAlice,10\n')
+        (self.root/'export.csv').write_text('changed')
+        with self.assertRaisesRegex(RumboError,'ARTIFACT_CHANGED'):
+            self.reviewer.artifact_view(args)
+
+    def test_artifact_view_explains_blocked_dependency_with_original_bytes(self):
+        c=contract()
+        c['tasks'].append(dict(id='docs',title='Docs',dependencies=['export'],acceptance=[dict(id='doc',kind='file_contains',value='name')]))
+        self.owner.execute('revise_contract',dict(contract=c,expected_revision=1,reason='docs'))
+        for task in ['export','docs']:
+            self.worker.execute('claim_task',dict(task_id=task,contract_revision=2,lease_seconds=60))
+            self.worker.execute('submit_artifact',dict(task_id=task,contract_revision=2,path='export.csv'))
+            self.worker.execute('run_checks',dict(task_id=task,contract_revision=2,artifact_revision=1))
+            self.owner.execute('decide',dict(task_id=task,contract_revision=2,artifact_revision=1,outcome='accepted',reason='Reviewed'))
+        self.owner.execute('decide',dict(task_id='export',contract_revision=2,artifact_revision=1,outcome='rejected',reason='Reopened'))
+        view=self.reviewer.artifact_view(dict(task_id='docs',contract_revision=2,artifact_revision=1))
+        self.assertEqual(view.get('status'),'blocked')
+        self.assertEqual(view.get('stale_reason'),'Dependencies need acceptance: export')
+        self.assertEqual(view['text'],'name,amount\nAlice,10\n')
+        self.owner.execute('decide',dict(task_id='export',contract_revision=2,artifact_revision=1,outcome='accepted',reason='Re-reviewed'))
+        view=self.reviewer.artifact_view(dict(task_id='docs',contract_revision=2,artifact_revision=1))
+        self.assertEqual(view['status'],'stale')
+        self.assertEqual(view['stale_reason'],'Dependency acceptance changed')
+        self.assertEqual(view['text'],'name,amount\nAlice,10\n')
+
     def test_upload_quota_and_concurrent_immutable_storage(self):
         from unittest.mock import patch
         self.claim()

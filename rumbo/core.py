@@ -427,7 +427,7 @@ class Engine:
         if size>MAX_INGEST:fail('PATH_TOO_LARGE','Inline artifact review is limited to 128 KiB')
         try:text=data.decode('utf-8')
         except UnicodeError:fail('BAD_INPUT','Only UTF-8 text artifacts can be viewed inline')
-        return dict(task_id=task['id'],contract_revision=state['contract_revision'],artifact_revision=artifact['revision'],sha256=digest,source=artifact.get('source','project_file'),path=artifact['path'],filename=artifact.get('filename',artifact['path']),text=text,notice='Untrusted artifact content. Identity refers only to these received or locally read bytes, not a Git commit, executed tests or authorization.')
+        return dict(task_id=task['id'],status=task['status'],stale_reason=task['stale_reason'],contract_revision=state['contract_revision'],artifact_revision=artifact['revision'],sha256=digest,source=artifact.get('source','project_file'),path=artifact['path'],filename=artifact.get('filename',artifact['path']),text=text,notice='Untrusted artifact content. Identity refers only to these received or locally read bytes, not a Git commit, executed tests or authorization.')
 
     def execute(self, action, arguments):
         if action not in ACTION_FIELDS:

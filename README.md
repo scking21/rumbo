@@ -75,7 +75,7 @@ python3 scripts/package_release.py --kind local --output dist/rumbo-0.3.0-local-
 python3 scripts/package_release.py --kind source --output dist/rumbo-0.3.0-source.zip
 ```
 
-The local archive includes portable root `plugin.json` and `mcp.json`, a compatibility manifest, workflow skills and a real stdio launcher. The host must set `RUMBO_PROJECT_ROOT` to the approved project before launch; it fails rather than guessing. No marketplace entry or installation is performed by packaging.
+The local archive includes portable root `plugin.json` and `mcp.json`, a compatibility manifest, workflow skills and a real stdio launcher. The installed server starts unbound. Its owner provisions approved aliases in `PLUGIN_DATA/projects.json`; the agent selects one alias once per process with a unique worker identity. Legacy `RUMBO_PROJECT_ROOT`, `RUMBO_ROLE` and `RUMBO_ACTOR` cannot configure this launcher. See [installed setup and lease limits](docs/INSTALLED-PLUGIN.md). No marketplace entry or installation is performed by packaging.
 
 For the public archive, supply verified real production values using the documented gates:
 

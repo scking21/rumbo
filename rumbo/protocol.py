@@ -132,7 +132,11 @@ class Protocol:
 
 
 def serve_stdio(engine):
-    protocol=Protocol(engine)
+    serve_protocol_stdio(Protocol(engine))
+
+
+def serve_protocol_stdio(protocol):
+    """Serve a protocol adapter using the shared bounded stdio transport."""
     while True:
         raw=sys.stdin.buffer.readline(MAX_MESSAGE+1)
         if not raw:

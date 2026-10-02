@@ -26,12 +26,25 @@ class PackageTests(unittest.TestCase):
                 self.assertEqual(len(manifest['extensions']['com.openai']['review']['test_cases']['positive']),5)
                 self.assertEqual(len(manifest['extensions']['com.openai']['review']['test_cases']['negative']),3)
                 z.extractall(Path(d)/'extracted')
-            project=Path(d)/'project';project.mkdir()
-            env=dict(os.environ,RUMBO_PROJECT_ROOT=str(project))
-            request=json.dumps(dict(jsonrpc='2.0',id=1,method='tools/list'))+'\n'
+            project=Path(d).resolve()/'project';project.mkdir()
+            plugin_data=Path(d).resolve()/'plugin-data';plugin_data.mkdir(mode=0o700)
+            env=dict(os.environ,PLUGIN_DATA=str(plugin_data),RUMBO_PROJECT_ROOT=str(project),RUMBO_ROLE='human',RUMBO_ACTOR='owner')
+            requests=[dict(jsonrpc='2.0',id=1,method='tools/list'),
+                      dict(jsonrpc='2.0',id=2,method='tools/call',params=dict(name='rumbo_list_projects',arguments={})),
+                      dict(jsonrpc='2.0',id=3,method='tools/call',params=dict(name='rumbo_state',arguments={}))]
+            request=''.join(json.dumps(item)+'\n' for item in requests)
             p=subprocess.run([sys.executable,str(Path(d)/'extracted/rumbo/scripts/run_mcp.py')],input=request,text=True,capture_output=True,env=env)
             self.assertEqual(p.returncode,0,p.stderr)
-            self.assertIn('open_project_board',p.stdout)
+            listed,projects,state=map(json.loads,p.stdout.splitlines())
+            names={tool['name'] for tool in listed['result']['tools']}
+            self.assertIn('open_project_board',names)
+            self.assertIn('rumbo_connect_project',names)
+            self.assertNotIn('rumbo_submit_review',names)
+            self.assertEqual(projects['result']['structuredContent']['projects'],[])
+            self.assertTrue(state['result']['isError'])
+            self.assertIn('PROJECT_UNBOUND',state['result']['content'][0]['text'])
+            self.assertEqual(list(plugin_data.iterdir()),[])
+            self.assertFalse((project/'.rumbo').exists())
 
     def test_submission_refuses_missing_or_placeholder_configuration(self):
         for config in [{},dict(mcp_url='http://localhost:8765/mcp'),dict(mcp_url='https://example.com/mcp')]:
