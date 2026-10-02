@@ -35,10 +35,11 @@ class ReviewDraftPackageTests(unittest.TestCase):
             self.assertEqual(report['status'], 'review-draft-not-submission-ready')
             self.assertFalse(report['uploaded'])
             self.assertFalse(report['submitted'])
+            self.assertEqual(report['omitted_optional_fields'], ['author'])
             self.assertEqual(report['operator_attestations'], {gate: False for gate in package_release.GATES})
             self.assertEqual(set(report['pending_external_gates']), package_release.GATES)
             self.assertEqual(set(report['pending_review_fields']), {
-                'author.name', 'interface.developerName', 'interface.websiteURL',
+                'interface.developerName', 'interface.websiteURL',
                 'interface.supportURL', 'interface.privacyPolicyURL',
                 'interface.termsOfServiceURL', 'review.demo_recording_url'})
             with zipfile.ZipFile(target) as archive:

@@ -27,7 +27,7 @@ The Sites skills use authorized `project_key` values, server-issued `worker_id` 
 
 ## Missing information remains missing
 
-The draft omits `author` and `interface.developerName` because source authorship is not the selected verified developer/legal publisher. The report lists those publisher fields as pending. It also lists missing website, support, privacy, terms and video fields by their exact manifest names. No country targeting, jurisdiction, operational retention promise, placeholder URL, reviewer credential or legal identity is invented.
+The draft omits `author` and `interface.developerName` because source authorship is not the selected verified developer/legal publisher. The report lists `interface.developerName` as pending and `author` as intentionally omitted optional metadata. The portable `author` object is not required to complete review. It also lists missing website, support, privacy, terms and video fields by their exact manifest names. No country targeting, jurisdiction, operational retention promise, placeholder URL, reviewer credential or legal identity is invented.
 
 Optional approved URLs can be supplied using `--production-config /path/to/draft-config.json` instead of `--mcp-url`. This draft configuration requires only `mcp_url`; it may also contain `website_url`, `support_url`, `privacy_url`, `terms_url`, `video_url`, and an `attestations` object containing any subset of the documented boolean gates. Unknown fields, placeholder URLs and non-boolean attestations are rejected. Omitted gates are false; supplied values are preserved, never promoted automatically. They are operator claims, not checks performed by the packager. Never include credentials or private reviewer sign-in instructions in this configuration or package.
 

@@ -224,7 +224,7 @@ def build_review_draft(root,target,config):
     # Source authorship is not a selected, verified legal publisher identity.
     manifest.pop('author',None)
     ext=manifest['extensions']['com.openai'];ext['interface'].pop('developerName',None)
-    pending=['author.name','interface.developerName']
+    pending=['interface.developerName']
     for config_name,field in LISTING_URLS.items():
         ext['interface'].pop(field,None)
         if config_name in config:ext['interface'][field]=config[config_name]
@@ -241,7 +241,7 @@ def build_review_draft(root,target,config):
             'uploaded':False,'submitted':False,'endpoint':config['mcp_url'],
             'operator_attestations':attestations,
             'pending_external_gates':[gate for gate,value in attestations.items() if not value],
-            'pending_review_fields':pending,'source_tool_names':names,
+            'pending_review_fields':pending,'omitted_optional_fields':['author'],'source_tool_names':names,
             'validation_scope':'Local manifests, explicit file allowlists, actual source tool catalog and review-case references only; no endpoint or portal checks.',
             'review_case_status':'Scenarios from Sites sources, not evidence of authenticated managed-host execution.',
             'review_setup':json.loads((root/'openai-sites/reviewer-cases.json').read_text())['setup'],
