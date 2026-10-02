@@ -493,8 +493,27 @@ def _ledger_path(record_path):
     return os.path.join(os.path.dirname(os.path.abspath(record_path)), "verified-quotes.json")
 
 
-def _quote_hash(quote):
-    return hashlib.sha256(_normalize(quote).encode("utf-8")).hexdigest()
+def _fingerprints(record, path):
+    """Ledger keys for the quote at path: (full, core).
+
+    Both bind the quote to what it was recorded for (an item's id, text and
+    scope, or the objective's text), so the same words cannot verify a
+    different or rewritten item. The full key also binds an approval's status,
+    so an earlier draft or preference promoted to a commitment needs fresh
+    words; the core key lets an approval closed as done or rejected keep its
+    verification.
+    """
+    match = re.fullmatch(r"items\[(\d+)\]\.quote", path)
+    source = record["items"][int(match.group(1))] if match else record["objective"]
+    core = {"path": "item" if match else "objective", "quote": _normalize(source.get("quote", ""))}
+    for field in ("id", "text", "scope"):
+        core[field] = source.get(field)
+    full = dict(core, status=source.get("status"))
+
+    def digest(value):
+        return hashlib.sha256(json.dumps(value, sort_keys=True).encode("utf-8")).hexdigest()
+
+    return digest(full), digest(core)
 
 
 def _read_ledger(record_path):
@@ -1221,19 +1240,21 @@ def _stop_gate(args, hook_input):
         items = record.get("items") or []
         replaced = {ref for item in items for ref in item.get("replaces") or []}
         for path, quote in _quote_paths(record):
-            digest = _quote_hash(quote)
+            full, core = _fingerprints(record, path)
+            match = re.fullmatch(r"items\[(\d+)\]\.quote", path)
+            item = items[int(match.group(1))] if match else None
             if path not in unverified:
-                if digest not in ledger:
-                    ledger[digest] = {"session": session_id or "", "seen": datetime.date.today().isoformat()}
-                    changed = True
+                for key in (full, core):
+                    if key not in ledger:
+                        ledger[key] = {"session": session_id or "", "seen": datetime.date.today().isoformat()}
+                        changed = True
                 continue
-            if digest not in ledger:
+            approval = item is not None and item.get("status") in ("commitment", "authorized")
+            if (full if approval else core) not in ledger:
                 parts.append("%s: UNVERIFIED: quote not found in the user's messages" % path)
                 continue
             # Verified in an earlier session. That shows the words were said, not
             # that an approval still stands after this session's messages.
-            match = re.fullmatch(r"items\[(\d+)\]\.quote", path)
-            item = items[int(match.group(1))] if match else None
             if item and item.get("status") in ("commitment", "authorized") and item.get("id") not in replaced:
                 said = _retraction_for(item, messages)
                 if said:
