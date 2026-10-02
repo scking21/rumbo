@@ -1,4 +1,5 @@
 """Installed launcher boundary tests; the trusted CLI remains separately configured."""
+from contextlib import closing
 import importlib
 import importlib.util
 import json
@@ -194,7 +195,7 @@ class InstalledTests(unittest.TestCase):
         roots.append(corrupt)
         wrong = self.base / 'wrong'
         (wrong / '.rumbo').mkdir(parents=True)
-        with sqlite3.connect(wrong / '.rumbo/state.sqlite3') as db:
+        with closing(sqlite3.connect(wrong / '.rumbo/state.sqlite3')) as db, db:
             db.execute('CREATE TABLE events(unrelated TEXT)')
         roots.append(wrong)
         for root in roots:
@@ -210,7 +211,7 @@ class InstalledTests(unittest.TestCase):
         self.register()
         protocol = self.protocol()
         dbpath = self.project / '.rumbo/state.sqlite3'
-        with sqlite3.connect(dbpath) as db:
+        with closing(sqlite3.connect(dbpath)) as db, db:
             db.execute('DELETE FROM events')
         before = dbpath.read_bytes()
         self.assertToolError(self.call(protocol, 'rumbo_connect_project', dict(alias='sample')), 'PROJECT_UNINITIALIZED')
@@ -318,9 +319,8 @@ class InstalledTests(unittest.TestCase):
         self.assertEqual(self.project_descriptors(), before)
         protocol = self.protocol()
         path = self.project / '.rumbo/state.sqlite3'
-        with sqlite3.connect(path) as db:
+        with closing(sqlite3.connect(path)) as db, db:
             db.execute('DELETE FROM events')
-        db.close()
         for _ in range(10):
             self.assertToolError(self.call(protocol, 'rumbo_connect_project', dict(alias='sample')), 'PROJECT_UNINITIALIZED')
             self.assertEqual(self.project_descriptors(), before)
@@ -419,9 +419,8 @@ finally:
     def test_wal_database_validation_cannot_create_sidecars(self):
         registry, _ = self.modules()
         path = self.project / '.rumbo/state.sqlite3'
-        with sqlite3.connect(path) as db:
+        with closing(sqlite3.connect(path)) as db, db:
             self.assertEqual(db.execute('PRAGMA journal_mode=WAL').fetchone(), ('wal',))
-        db.close()
         before = {p.name: p.read_bytes() for p in path.parent.iterdir()}
         with self.assertRaisesRegex(RumboError, 'LEDGER_STORAGE_UNSUPPORTED'):
             registry.register_project(self.data, 'sample', self.project)
@@ -441,7 +440,7 @@ finally:
         protocol = self.protocol()
         self.bind(protocol)
         path = self.project / '.rumbo/state.sqlite3'
-        with sqlite3.connect(path) as db:
+        with closing(sqlite3.connect(path)) as db, db:
             db.execute('DELETE FROM events')
         Engine(self.project, 'owner', 'human').execute('create_contract', dict(contract(), project_id='different'))
         before = path.read_bytes()
@@ -454,7 +453,7 @@ finally:
         self.register()
         protocol = self.protocol()
         path = self.project / '.rumbo/state.sqlite3'
-        with sqlite3.connect(path) as db:
+        with closing(sqlite3.connect(path)) as db, db:
             db.execute("UPDATE events SET digest='bad'")
         before = path.read_bytes()
         self.assertToolError(self.call(protocol, 'rumbo_connect_project', dict(alias='sample')), 'LEDGER_CORRUPT')
@@ -472,6 +471,149 @@ finally:
         data_link.symlink_to(self.data, target_is_directory=True)
         with self.assertRaisesRegex(RumboError, 'REGISTRY_UNSAFE'):
             installed.InstalledProtocol(data_link)
+
+    def test_darwin_transient_lock_leaf_enoent_retries_safely(self):
+        import errno
+        from unittest.mock import patch
+        registry, _ = self.modules()
+        real_open = os.open
+        leaf_calls = []
+        def race_open(path, flags, mode=0o777, *, dir_fd=None):
+            if path == '.projects.lock':
+                leaf_calls.append((flags, mode, dir_fd))
+                if len(leaf_calls) < 3:
+                    raise FileNotFoundError(errno.ENOENT, 'concurrent first-create lookup', path)
+            return real_open(path, flags, mode, dir_fd=dir_fd)
+        with patch.object(registry.sys, 'platform', 'darwin'), patch.object(registry.os, 'open', side_effect=race_open):
+            try:
+                result = registry.register_project(self.data, 'sample', self.project)
+            except RumboError as error:
+                self.fail('A bounded transient Darwin lock-leaf ENOENT should recover: ' + str(error))
+        self.assertEqual(result['alias'], 'sample')
+        self.assertEqual(len(leaf_calls), 3)
+        self.assertEqual(len(set(leaf_calls)), 1, 'Retry must preserve the same flags, mode, and pinned parent fd')
+        self.assertTrue(leaf_calls[0][0] & os.O_NOFOLLOW)
+        self.assertTrue(leaf_calls[0][0] & os.O_NONBLOCK)
+        self.assertEqual((self.data / '.projects.lock').stat().st_mode & 0o777, 0o600)
+        self.assertEqual(set(json.loads((self.data / 'projects.json').read_text())['projects']), {'sample'})
+
+    def test_lock_leaf_retry_exhaustion_and_unrelated_errors_fail_closed(self):
+        import errno
+        from unittest.mock import patch
+        registry, _ = self.modules()
+        real_open = os.open
+        for platform, code, expected_attempts in [('darwin', errno.ENOENT, 3), ('linux', errno.ENOENT, 1),
+                                                   ('darwin', errno.EACCES, 1), ('darwin', errno.ELOOP, 1), ('darwin', errno.EIO, 1)]:
+            calls = []
+            def failing_open(path, flags, mode=0o777, *, dir_fd=None):
+                if path == '.projects.lock':
+                    calls.append(path)
+                    raise OSError(code, 'injected lock open error', path)
+                return real_open(path, flags, mode, dir_fd=dir_fd)
+            with self.subTest(platform=platform, code=code), patch.object(registry.sys, 'platform', platform), patch.object(registry.os, 'open', side_effect=failing_open):
+                with self.assertRaisesRegex(RumboError, 'REGISTRY_UNSAFE'):
+                    registry.register_project(self.data, 'sample', self.project)
+                self.assertEqual(len(calls), expected_attempts)
+            self.assertFalse((self.data / 'projects.json').exists())
+
+    def test_darwin_retry_revalidates_directory_identity_before_reopening(self):
+        import errno
+        from unittest.mock import patch
+        registry, _ = self.modules()
+        real_open = os.open
+        calls = []
+        original = self.base / 'original-data'
+        def replaced_directory(path, flags, mode=0o777, *, dir_fd=None):
+            if path == '.projects.lock':
+                calls.append(path)
+                self.data.rename(original)
+                self.data.mkdir(mode=0o700)
+                raise FileNotFoundError(errno.ENOENT, 'directory replaced', path)
+            return real_open(path, flags, mode, dir_fd=dir_fd)
+        with patch.object(registry.sys, 'platform', 'darwin'), patch.object(registry.os, 'open', side_effect=replaced_directory):
+            with self.assertRaisesRegex(RumboError, 'REGISTRY_CHANGED'):
+                registry.register_project(self.data, 'sample', self.project)
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(list(original.iterdir()), [])
+        self.assertEqual(list(self.data.iterdir()), [])
+
+    def test_darwin_retry_rejects_directory_permission_change(self):
+        import errno
+        from unittest.mock import patch
+        registry, _ = self.modules()
+        real_open = os.open
+        calls = []
+        def changed_permissions(path, flags, mode=0o777, *, dir_fd=None):
+            if path == '.projects.lock':
+                calls.append(path)
+                self.data.chmod(0o777)
+                raise FileNotFoundError(errno.ENOENT, 'permissions changed', path)
+            return real_open(path, flags, mode, dir_fd=dir_fd)
+        with patch.object(registry.sys, 'platform', 'darwin'), patch.object(registry.os, 'open', side_effect=changed_permissions):
+            with self.assertRaisesRegex(RumboError, 'REGISTRY_UNSAFE'):
+                registry.register_project(self.data, 'sample', self.project)
+        self.assertEqual(len(calls), 1)
+        self.assertFalse((self.data / 'projects.json').exists())
+        self.data.chmod(0o700)
+
+    def test_darwin_retry_never_follows_racing_lock_symlink(self):
+        import errno
+        from unittest.mock import patch
+        registry, _ = self.modules()
+        real_open = os.open
+        target = self.base / 'untouched-file'
+        target.write_bytes(b'never alter this file')
+        calls = []
+        def symlink_race(path, flags, mode=0o777, *, dir_fd=None):
+            if path == '.projects.lock':
+                calls.append(path)
+                if len(calls) == 1:
+                    (self.data / '.projects.lock').symlink_to(target)
+                    raise FileNotFoundError(errno.ENOENT, 'concurrent leaf change', path)
+            return real_open(path, flags, mode, dir_fd=dir_fd)
+        with patch.object(registry.sys, 'platform', 'darwin'), patch.object(registry.os, 'open', side_effect=symlink_race):
+            with self.assertRaisesRegex(RumboError, 'REGISTRY_UNSAFE'):
+                registry.register_project(self.data, 'sample', self.project)
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(target.read_bytes(), b'never alter this file')
+        self.assertFalse((self.data / 'projects.json').exists())
+
+    def test_concurrent_subprocess_registration_converges_on_one_lock_inode(self):
+        script = """import json, pathlib, sys
+from rumbo.registry import register_project
+print('ready', flush=True)
+sys.stdin.readline()
+result = register_project(sys.argv[1], sys.argv[2], sys.argv[3])
+info = (pathlib.Path(sys.argv[1]) / '.projects.lock').stat()
+print(json.dumps(dict(alias=result['alias'], device=info.st_dev, inode=info.st_ino)))
+"""
+        # Every round races first creation in a fresh directory; independent
+        # subprocesses also exercise flock rather than process-local threading.
+        for round_number in range(3):
+            directory = self.base / ('race-data-' + str(round_number))
+            directory.mkdir(mode=0o700)
+            processes = [subprocess.Popen([sys.executable, '-c', script, str(directory), alias, str(self.project)], cwd=ROOT,
+                                          text=True, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                         for alias in ('one', 'two', 'three', 'four')]
+            try:
+                for process in processes:
+                    self.assertEqual(process.stdout.readline().strip(), 'ready')
+                for process in processes:
+                    process.stdin.write('go\n')
+                    process.stdin.flush()
+                results = []
+                for process in processes:
+                    stdout, stderr = process.communicate(timeout=15)
+                    self.assertEqual(process.returncode, 0, stderr)
+                    results.append(json.loads(stdout))
+                self.assertEqual({item['alias'] for item in results}, {'one', 'two', 'three', 'four'})
+                self.assertEqual(len({(item['device'], item['inode']) for item in results}), 1)
+                self.assertEqual(set(json.loads((directory / 'projects.json').read_text())['projects']), {'one', 'two', 'three', 'four'})
+            finally:
+                for process in processes:
+                    if process.poll() is None:
+                        process.kill()
+                    process.communicate()
 
     def test_concurrent_owner_registration_preserves_both_aliases(self):
         # Delay the real final rename so concurrent unprotected writers both

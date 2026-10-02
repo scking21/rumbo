@@ -341,7 +341,21 @@ def _registration_lock(plugin_data):
     directory_fd = os.open(str(directory), os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
     lock_fd = None
     try:
-        lock_fd = os.open('.projects.lock', os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600, dir_fd=directory_fd)
+        # Darwin may return transient ENOENT for concurrent O_CREAT on this
+        # first-created leaf. Retry only that platform/error, at most twice,
+        # against the same still-safe directory descriptor and unchanged flags.
+        attempts = 3 if sys.platform == 'darwin' else 1
+        for attempt in range(attempts):
+            try:
+                lock_fd = os.open('.projects.lock', os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600, dir_fd=directory_fd)
+                break
+            except FileNotFoundError:
+                if attempt + 1 == attempts:
+                    raise
+                current = _safe_directory(directory, 'REGISTRY_UNSAFE', private=True)
+                pinned = os.fstat(directory_fd)
+                if pinned.st_nlink < 1 or _identity(current) != _identity(pinned):
+                    fail('REGISTRY_CHANGED', 'Owner registration directory changed during lock creation; inspect configuration before retrying')
         info = os.fstat(lock_fd)
         if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid()
                 or info.st_mode & 0o077 or info.st_nlink != 1):
