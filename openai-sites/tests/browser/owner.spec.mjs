@@ -12,3 +12,34 @@ test('owner cancels, retries, inspects exact bytes and accepts only the checked 
 test('mobile owner layout keeps controls in bounds and preserves invalid drafts',async({page})=>{
  await page.setViewportSize({width:390,height:844});await create(page,'browser-mobile');await page.locator('#contract').fill('{invalid');await page.locator('#create').click();await expect(page.locator('#message')).toContainText('draft has been kept');await expect(page.locator('#contract')).toHaveValue('{invalid');expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);await page.screenshot({path:'qa-artifacts/owner-mobile-error.png',fullPage:true});
 });
+
+test('Escape after an earlier confirmation cancels a revision without writing',async({page})=>{
+ const key=await create(page,'browser-escape');await page.locator('#change-reason').fill('This revision is canceled');
+ await page.locator('#revise').click();await expect(page.locator('#confirmation')).toBeVisible();await page.keyboard.press('Escape');
+ await expect(page.locator('#confirmation')).not.toBeVisible();await expect(page.locator('#revise')).toBeEnabled();
+ const state=await (await page.request.get('/api/state?project_key='+key)).json();expect(state.contract_revision).toBe(1);
+ await expect(page.locator('#change-reason')).toHaveValue('This revision is canceled');
+});
+test('new project selection survives reload and interrupted refresh recovers cleanly',async({page})=>{
+ const key=await create(page,'browser-reload');await expect(page).toHaveURL(new RegExp('project_key='+key));
+ await page.reload();await expect(page.locator('#projects')).toHaveValue(key);await expect(page.locator('#goal')).toHaveText('Ship exact synthetic artifact');
+ await page.route('**/api/state?*',route=>route.fulfill({status:503,contentType:'application/json',body:JSON.stringify({error:'Synthetic interrupted refresh'})}));
+ await page.locator('#refresh').click();await expect(page.locator('#message')).toContainText('Synthetic interrupted refresh');await expect(page.locator('#project-panel')).not.toBeVisible();
+ await page.getByText('Create or revise a contract',{exact:true}).click();await page.locator('#change-reason').fill('Draft survives a failed refresh');await page.locator('#revise').click();await expect(page.locator('#message')).toContainText('Choose a project first');await expect(page.locator('#confirmation')).not.toBeVisible();
+ await page.unroute('**/api/state?*');await page.locator('#refresh').click();await expect(page.locator('#goal')).toHaveText('Ship exact synthetic artifact');await expect(page.locator('#change-reason')).toHaveValue('Draft survives a failed refresh');
+});
+
+test('failed project switch hides old context and retry loads the selected project',async({page})=>{
+ const first=await create(page,'browser-switch-first'),second=await create(page,'browser-switch-second');
+ await page.route('**/api/state?project_key='+first,route=>route.fulfill({status:503,contentType:'application/json',body:JSON.stringify({error:'Synthetic failed project switch'})}));
+ await page.locator('#projects').selectOption(first);await expect(page.locator('#message')).toContainText('Synthetic failed project switch');await expect(page.locator('#project-panel')).not.toBeVisible();await expect(page.locator('#projects')).toHaveValue(first);
+ await page.locator('#change-reason').fill('Preserved retry draft');await page.locator('#revise').click();await expect(page.locator('#confirmation')).not.toBeVisible();await expect(page.locator('#message')).toContainText('Choose a project first');
+ await page.unroute('**/api/state?project_key='+first);await page.locator('#refresh').click();await expect(page.locator('#project-panel')).toBeVisible();await expect(page.locator('#board-link')).toHaveAttribute('href','/board?project_key='+first);await expect(page.locator('#change-reason')).toHaveValue('Preserved retry draft');
+ expect((await (await page.request.get('/api/state?project_key='+second)).json()).contract_revision).toBe(1);
+});
+test('project picker stays disabled until a pending state refresh settles',async({page})=>{
+ await create(page,'browser-pending');let release,entered;const pending=new Promise(r=>entered=r),gate=new Promise(r=>release=r);
+ await page.route('**/api/state?*',async route=>{entered();await gate;await route.continue();});
+ await page.locator('#refresh').click();await pending;try{await expect(page.locator('#projects')).toBeDisabled();}finally{release();}
+ await expect(page.locator('#projects')).toBeEnabled();await expect(page.locator('#project-panel')).toBeVisible();
+});

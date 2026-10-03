@@ -37,3 +37,15 @@ The installed reviewer workflow is incomplete until a separately authorized revi
 The earlier local `0.3.1-local.1` candidate used `projects.json`, but its source archive and exact schema were unavailable during this reconstruction. This implementation preserves the filename, not an unverified compatibility claim. Unknown registry schemas fail closed with setup guidance. The owner must review existing configuration and explicitly re-register approved projects using the recognized schema; never silently overwrite unknown configuration.
 
 New test evidence applies only to this reconstructed source and its exact revision. Earlier Mac/Luna/Sol reports are historical evidence for their own candidate. Unit, stdio, package and browser-fixture checks do not establish actual installed host UI behavior; that remains a separate QA gate.
+
+## Verify the distributable wheel
+
+With the developer build prerequisites `setuptools>=68` and `wheel` already installed, run:
+
+```sh
+python3 scripts/verify_installed_wheel.py
+```
+
+The verifier builds without dependency resolution, installs only that wheel into a fresh virtual environment, removes inherited Python import overrides, and runs the core, protocol, demo, backup and installed-registry test modules from a temporary directory outside the checkout. It checks that imported Rumbo modules belong to the isolated environment, runs the installed `rumbo --help` console entrypoint, and confirms that the packaged board matches the canonical resource. The final JSON line reports the actual test count, failures, errors, skips and import paths; any test skip fails verification. Two source-packaging-specific launcher cases stay in the normal full suite, where their required source inputs are available.
+
+To inspect an existing wheel instead, pass `--wheel /absolute/path/to/rumbo_referee-0.3.0-py3-none-any.whl`. Both forms use offline pip invocation (`--no-index --no-deps`); install build prerequisites separately beforehand. This proves the wheel's local runtime behavior on the interpreter executing the verifier. It does not certify a different Python version, host plugin installation, UI rendering, or public submission readiness.

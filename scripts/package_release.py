@@ -61,6 +61,14 @@ def read_plugin(root, review_profile):
                 if relative not in allowed:
                     raise ValueError('Unrecognized plugin input: '+relative+'; review the explicit package allowlist')
                 files[relative]=path.read_bytes()
+    required={'plugin.json','mcp.json','assets/icon.svg'}
+    if review_profile=='local':
+        required=allowed
+    elif review_profile=='hosted':
+        required=required|{'skills/coordinate-work/SKILL.md','skills/review-evidence/SKILL.md'}
+    missing=required-files.keys()
+    if missing:
+        raise ValueError('Missing required plugin input: '+', '.join(sorted(missing)))
     manifest=json.loads(files['plugin.json'])
     def inspect_keys(value):
         if isinstance(value,dict):
@@ -112,6 +120,10 @@ def write_zip(target,files,prefix='rumbo'):
 
 def build_local(root,target):
     root=Path(root);files=read_plugin(root, review_profile='local')
+    required={'__init__.py','core.py','protocol.py','registry.py','installed.py','web/board.html'}
+    missing={name for name in required if not (root/'rumbo'/name).is_file()}
+    if missing:
+        raise ValueError('Missing required local runtime input: '+', '.join(sorted(missing)))
     for path in (root/'rumbo').glob('*.py'):
         files['rumbo/'+path.name]=path.read_bytes()
     files['rumbo/web/board.html']=(root/'rumbo/web/board.html').read_bytes()
@@ -291,8 +303,12 @@ SITES_SOURCE_FILES={
     'tests/owner-dom.test.mjs',
     'tests/review-cases.test.mjs',
     'tests/runtime.test.mjs',
+    'tests/offline-runtime.mjs',
+    'tests/offline-runtime.test.mjs',
+    'WORKFLOW-VERIFICATION-2026-10-03.md',
     'tests/storage.test.mjs',
     'tests/support.mjs',
+    'tests/workflows.test.mjs',
     'web/board.html',
     'web/owner.css',
     'web/owner.html',

@@ -100,6 +100,16 @@ class CoreTests(unittest.TestCase):
         with self.assertRaisesRegex(RumboError, 'STALE_CONTRACT'):
             self.claim()
 
+    def test_complete_contract_replacement_does_not_inherit_demo_flag(self):
+        synthetic = contract()
+        synthetic['demo'] = True
+        self.owner.execute('revise_contract', dict(contract=synthetic, expected_revision=1, reason='Synthetic fixture'))
+        self.assertTrue(self.owner.snapshot()['demo'])
+        normal = contract()
+        self.owner.execute('revise_contract', dict(contract=normal, expected_revision=2, reason='Replace complete contract'))
+        self.assertFalse(self.owner.snapshot()['demo'])
+        self.assertFalse(Engine(self.root, 'viewer', 'viewer').snapshot()['demo'])
+
     def test_rejected_decision_supersedes_acceptance(self):
         self.accept()
         self.owner.execute('decide', dict(task_id='export', contract_revision=1, artifact_revision=1, outcome='rejected', reason='Found incorrect rows'))
@@ -144,6 +154,14 @@ class CoreTests(unittest.TestCase):
         c = contract(); c['tasks'][0]['dependencies'] = ['export']
         with self.assertRaisesRegex(RumboError, 'DEPENDENCY_CYCLE'):
             self.owner.execute('revise_contract', dict(contract=c, expected_revision=1, reason='edit'))
+
+    def test_check_kind_requires_text_without_changing_contract(self):
+        for kind in ([], {}, None, True, 1):
+            c = contract()
+            c['tasks'][0]['acceptance'][0]['kind'] = kind
+            with self.subTest(kind=kind), self.assertRaisesRegex(RumboError, 'BAD_INPUT'):
+                self.owner.execute('revise_contract', dict(contract=c, expected_revision=1, reason='edit'))
+            self.assertEqual(self.owner.snapshot()['contract_revision'], 1)
 
     def test_dependency_rejection_invalidates_downstream_acceptance(self):
         c = contract(); c['tasks'].append(dict(id='docs', title='Docs', dependencies=['export'], acceptance=[dict(id='doc', kind='file_contains', value='name')]))
@@ -310,6 +328,17 @@ class CoreTests(unittest.TestCase):
             with self.assertRaisesRegex(RumboError,'STORAGE_LIMIT'):
                 self.worker.execute('ingest_artifact',dict(args,content='other bytes'))
         self.assertEqual(len(list((self.root/'.rumbo/artifacts').iterdir())),1)
+
+    def test_full_ledger_rejects_upload_before_storing_uncommitted_bytes(self):
+        from unittest.mock import patch
+        self.claim()
+        before = self.owner.snapshot()
+        with patch('rumbo.core.MAX_LEDGER_BYTES', 1):
+            with self.assertRaisesRegex(RumboError, 'LEDGER_LIMIT'):
+                self.worker.execute('ingest_artifact', dict(task_id='export', contract_revision=1,
+                    filename='uncommitted.txt', content='Unique text rejected by the full ledger'))
+        self.assertEqual(self.owner.snapshot()['ledger_head'], before['ledger_head'])
+        self.assertFalse((self.root/'.rumbo/artifacts').exists())
 
     def test_partial_upload_failure_can_be_safely_retried(self):
         from unittest.mock import patch

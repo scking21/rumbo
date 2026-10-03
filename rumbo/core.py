@@ -119,7 +119,7 @@ def validate_contract(data, actor):
             kind = check.get('kind')
             required = {'id','kind'}
             extras = {'file_contains': {'value'}, 'json_equals': {'key','value'}, 'sha256': {'value'}, 'manual_review': {'prompt'}}
-            if kind not in extras:
+            if not isinstance(kind, str) or kind not in extras:
                 fail('BAD_INPUT', 'Unsupported check kind')
             fields(check, required | extras[kind])
             identifier(check['id'], 'check id')
@@ -156,31 +156,48 @@ def validate_contract(data, actor):
 
 
 class Engine:
-    def __init__(self, root, actor, role, clock=None):
+    def __init__(self, root, actor, role, clock=None, read_only=False):
         self.root = Path(root).resolve()
         if not self.root.is_dir():
             fail('PATH_INVALID', 'Project root must exist')
         self.actor = identifier(actor, 'host actor')
         if role not in ROLES:
             fail('FORBIDDEN', 'Unknown host role')
+        if type(read_only) is not bool:
+            fail('BAD_INPUT', 'read_only must be boolean')
+        if read_only and role != 'viewer':
+            fail('FORBIDDEN', 'Read-only storage requires a viewer principal')
         self.role = role
+        self.read_only = read_only
         self.clock = clock or time.time
         state = self.root / '.rumbo'
         if state.is_symlink():
             fail('PATH_UNSAFE', 'State directory may not be a symlink')
-        state.mkdir(mode=0o700, exist_ok=True)
+        if read_only:
+            if not state.is_dir():
+                fail('NO_CONTRACT', 'No existing project ledger; initialize an owner-approved contract first')
+        else:
+            state.mkdir(mode=0o700, exist_ok=True)
         self.db_path = state / 'state.sqlite3'
         if self.db_path.is_symlink():
             fail('PATH_UNSAFE', 'State database may not be a symlink')
-        with self._db() as db:
-            db.execute('CREATE TABLE IF NOT EXISTS events(seq INTEGER PRIMARY KEY, payload TEXT NOT NULL, previous TEXT NOT NULL, digest TEXT NOT NULL)')
-        os.chmod(self.db_path, 0o600)
+        if read_only:
+            if not self.db_path.is_file():
+                fail('NO_CONTRACT', 'No existing project ledger; initialize an owner-approved contract first')
+        else:
+            with self._db() as db:
+                db.execute('CREATE TABLE IF NOT EXISTS events(seq INTEGER PRIMARY KEY, payload TEXT NOT NULL, previous TEXT NOT NULL, digest TEXT NOT NULL)')
+            os.chmod(self.db_path, 0o600)
 
     @contextmanager
     def _db(self):
         db=None
         try:
-            db=sqlite3.connect(str(self.db_path),timeout=15)
+            if self.read_only:
+                db=sqlite3.connect(self.db_path.as_uri()+'?mode=ro',uri=True,timeout=15)
+                db.execute('PRAGMA query_only=ON')
+            else:
+                db=sqlite3.connect(str(self.db_path),timeout=15)
             db.execute('PRAGMA busy_timeout=15000')
             with db:
                 yield db
@@ -410,6 +427,14 @@ class Engine:
         with self._db() as db:
             return self._project(self._replay(db))
 
+    def checkpoint(self):
+        """Verify existing ledger history without reading mutable artifact files."""
+        with self._db() as db:
+            state = self._replay(db)
+        if not state['contract_revision']:
+            fail('NO_CONTRACT', 'The existing ledger has no owner-approved contract')
+        return {key: state[key] for key in ('project_id', 'events_count', 'ledger_head', 'integrity')}
+
     def artifact_view(self,arguments):
         fields(arguments,{'task_id','contract_revision','artifact_revision'})
         identifier(arguments['task_id'],'task_id')
@@ -454,6 +479,8 @@ class Engine:
             raw = canonical(event); prev = state['ledger_head']
             total=db.execute('SELECT COALESCE(SUM(length(payload)),0) FROM events').fetchone()[0]
             if total+len(raw)>MAX_LEDGER_BYTES:fail('LEDGER_LIMIT','Event payloads are limited to 16 MiB per project; ask its owner to archive or manage retention')
+            if action == 'ingest_artifact':
+                self._store_upload(data['artifact']['sha256'], arguments['content'].encode('utf-8'))
             digest = hashlib.sha256((prev+'\n'+raw).encode()).hexdigest()
             db.execute('INSERT INTO events VALUES(?,?,?,?)', (state['events_count']+1,raw,prev,digest))
             return self._project(self._replay(db))
@@ -478,7 +505,7 @@ class Engine:
             validate_contract(args['contract'], self.actor)
             if args['contract']['project_id'] != state['project_id']:
                 fail('BAD_INPUT', 'Project id is immutable')
-            return dict(copy.deepcopy(args['contract']), contract_revision=rev+1, contract_change_reason=args['reason'])
+            return dict(copy.deepcopy(args['contract']), demo=args['contract'].get('demo', False), contract_revision=rev+1, contract_change_reason=args['reason'])
         identifier(args['task_id'], 'task_id')
         task = next((t for t in state['tasks'] if t['id'] == args['task_id']), None)
         if task is None:
@@ -515,7 +542,6 @@ class Engine:
                 if len(data)>MAX_INGEST:
                     fail('PATH_TOO_LARGE','Uploaded text is limited to 128 KiB of UTF-8 bytes')
                 digest=hashlib.sha256(data).hexdigest();size=len(data)
-                self._store_upload(digest,data)
                 metadata=dict(path='uploaded:'+filename,filename=filename,source='uploaded_text')
             else:
                 digest, size, _ = self._digest(args['path'])

@@ -37,7 +37,7 @@ export function validateContract(data,actor){
   for(const check of task.acceptance){
    if(!check||typeof check!=='object'||Array.isArray(check))fail('BAD_INPUT','Acceptance must contain objects');
    const extras={file_contains:['value'],json_equals:['key','value'],sha256:['value'],manual_review:['prompt']};
-   if(!Object.hasOwn(extras,check.kind))fail('BAD_INPUT','Unsupported check kind');
+   if(typeof check.kind!=='string'||!Object.hasOwn(extras,check.kind))fail('BAD_INPUT','Unsupported check kind');
    fields(check,['id','kind',...extras[check.kind]]);identifier(check.id,'check id');if(seen.has(check.id))fail('BAD_INPUT','Duplicate check id');seen.add(check.id);
    if(['file_contains','sha256'].includes(check.kind))string(check.value,'check value',16000);
    if(check.kind==='sha256'&&!/^[a-f0-9]{64}$/.test(check.value))fail('BAD_INPUT','sha256 must be a lowercase digest');
@@ -121,6 +121,7 @@ export class Engine {
    const rows=await this.store.read(),state=await this.project(await this.replay(rows));if(state.events_count>=MAX_EVENTS)fail('LEDGER_LIMIT');const now=this.clock();if(typeof now!=='number'||!Number.isFinite(now))fail('BAD_CLOCK');
    const data=await this.prepare(action,args,state,now),event={action,data,actor:this.actor,role:this.role,at:now};const payload=canonical(event),previous=state.ledger_head;
    if(rows.reduce((n,row)=>n+row.payload.length,0)+payload.length>MAX_LEDGER_BYTES)fail('LEDGER_LIMIT','Event payloads are limited to 16 MiB per project; ask its owner to archive or manage retention');
+   if(action==='ingest_artifact')await this.artifacts.put(data.artifact.sha256,utf8(args.content));
    const row={seq:state.events_count+1,payload,previous,digest:await sha256(previous+'\n'+payload)};
    if(await this.store.append({count:state.events_count,head:previous},row))return this.project(await this.replay([...rows,row]));
   }
@@ -132,7 +133,7 @@ export class Engine {
   if(!rev)fail('NO_CONTRACT','The human owner must initialize a contract first');
   if(['revise_contract','decide'].includes(action)&&this.actor!==state.decision_owner)fail('FORBIDDEN','Only the configured decision owner may decide');
   if(action==='revise_contract'){
-   integer(args.expected_revision,'expected_revision');if(args.expected_revision!==rev)fail('STALE_CONTRACT');string(args.reason,'reason');validateContract(args.contract,this.actor);if(args.contract.project_id!==state.project_id)fail('BAD_INPUT','Project id is immutable');return {...clone(args.contract),contract_revision:rev+1,contract_change_reason:args.reason};
+   integer(args.expected_revision,'expected_revision');if(args.expected_revision!==rev)fail('STALE_CONTRACT');string(args.reason,'reason');validateContract(args.contract,this.actor);if(args.contract.project_id!==state.project_id)fail('BAD_INPUT','Project id is immutable');return {...clone(args.contract),demo:args.contract.demo??false,contract_revision:rev+1,contract_change_reason:args.reason};
   }
   identifier(args.task_id,'task_id');const task=state.tasks.find(t=>t.id===args.task_id);if(!task)fail('UNKNOWN_TASK');
   if(action==='request_decision'){string(args.question,'question');return {id:eventid,task_id:task.id,question:args.question,actor:this.actor,contract_revision:rev,at:now};}
@@ -145,7 +146,7 @@ export class Engine {
    if(!task.lease||task.lease.actor!==this.actor)fail('LEASE_REQUIRED');if(task.status==='blocked')fail('DEPENDENCY_BLOCKED');const filename=string(args.filename,'filename',128);
    if(!/^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/.test(filename)||/\.(pem|key|p12|pfx)$/i.test(filename))fail('PATH_INVALID','Use a simple display filename; paths and credential filenames are not accepted');
    if(typeof args.content!=='string'||!args.content.isWellFormed())fail('BAD_INPUT','content must be valid UTF-8 text');const bytes=utf8(args.content);if(bytes.length>MAX_INGEST)fail('PATH_TOO_LARGE','Uploaded text is limited to 128 KiB of UTF-8 bytes');
-   const digest=await sha256(bytes);await this.artifacts.put(digest,bytes);
+   const digest=await sha256(bytes);
    return {task_id:task.id,artifact:{path:'uploaded:'+filename,filename,source:'uploaded_text',sha256:digest,size:bytes.length,revision:task.artifact?task.artifact.revision+1:1,contract_revision:rev,maker:this.actor,at:now,dependencies:Engine.dependencyStamp(task,tasks)}};
   }
   const artifact=task.artifact;integer(args.artifact_revision,'artifact_revision');if(!artifact||args.artifact_revision!==artifact.revision||artifact.contract_revision!==rev)fail('STALE_ARTIFACT');const {digest,data:raw}=await this.digestArtifact(artifact);if(digest!==artifact.sha256)fail('ARTIFACT_CHANGED');if(task.status==='blocked'||canonical(artifact.dependencies??{})!==canonical(Engine.dependencyStamp(task,tasks)))fail('DEPENDENCY_BLOCKED');

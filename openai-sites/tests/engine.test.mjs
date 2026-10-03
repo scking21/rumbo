@@ -51,3 +51,41 @@ test('artifact JSON parsing and text bytes preserve Python semantics',async()=>{
 });
 
 test('a top-level JSON float is never mistaken for an object with a value field',async()=>{const c=contract();c.tasks[0].acceptance=[{id:'json',kind:'json_equals',key:'value',value:1}];const steps=[step('create_contract',c),claim(),upload('1.0'),checks()];assert.deepEqual(await actual(steps),oracle(steps));});
+test('check-kind validation rejects non-string JSON values with canonical BAD_INPUT errors',async()=>{
+ for(const kind of [[],['file_contains'],['sha256'],{}, {toString:null},null,0,true]){
+  const c=contract();c.tasks[0].acceptance[0].kind=kind;const steps=[step('create_contract',c)];
+  assert.deepEqual(await actual(steps),oracle(steps),'kind='+JSON.stringify(kind));
+ }
+});
+
+const childUpload=()=>step('ingest_artifact',{task_id:'two',contract_revision:1,filename:'child.json',content:'{"ok":true}'},'next','worker');
+const childChecks=artifact_revision=>step('run_checks',{task_id:'two',contract_revision:1,artifact_revision},'next','worker');
+const childDecision=artifact_revision=>step('decide',{task_id:'two',contract_revision:1,artifact_revision,outcome:'accepted',reason:'Exact downstream revision inspected'});
+const workflowScenarios={
+ 'rejecting and reaccepting a dependency requires downstream resubmission':[
+  ...scenarios['complete owner/worker/reviewer workflow'],childUpload(),childChecks(1),childDecision(1),decide('rejected'),step('snapshot'),decide(),childChecks(1),childUpload(),childChecks(2),childDecision(2),step('snapshot')
+ ],
+ 'rerunning checks invalidates the exact earlier acceptance and dependent work':[
+  ...scenarios['complete owner/worker/reviewer workflow'],childUpload(),childChecks(1),childDecision(1),checks(),step('snapshot'),decide(),step('snapshot')
+ ],
+ 'latest uncertain reviewer assertion supersedes an earlier passing review':[
+  ...scenarios['complete owner/worker/reviewer workflow'],step('submit_review',{...review().args,outcome:'uncertain',detail:'A later review needs owner clarification'},'reviewer','reviewer'),decide(),step('snapshot'),review(),decide()
+ ],
+ 'same-content upload replacement still requires fresh revision-bound evidence':[
+  ...scenarios['complete owner/worker/reviewer workflow'].slice(0,6),upload(),decide(),step('read',{task_id:'one',contract_revision:1,artifact_revision:2}),step('run_checks',{...checks().args,artifact_revision:2},'maker','worker'),step('submit_review',{...review().args,artifact_revision:2},'reviewer','reviewer'),step('decide',{...decide().args,artifact_revision:2})
+ ],
+};
+for(const [name,steps] of Object.entries(workflowScenarios))test('Python workflow parity: '+name,async()=>assert.deepEqual(await actual(steps),oracle(steps)));
+
+test('UTF-8 upload limits use received bytes at the exact multibyte boundary',async()=>{
+ for(const count of [32768,32769]){const c=contract();c.tasks[0].acceptance=[{id:'text',kind:'file_contains',value:'😀'}];const steps=[step('create_contract',c),claim(),upload('😀'.repeat(count)),checks(),step('snapshot')];assert.deepEqual(await actual(steps),oracle(steps));}
+});
+
+test('removing and later restoring a task does not revive its old acceptance',async()=>{
+ const c=contract(),reduced={...c,tasks:[{...c.tasks[1],dependencies:[]}]};
+ const steps=[...scenarios['complete owner/worker/reviewer workflow'].slice(0,6),step('revise_contract',{contract:reduced,expected_revision:1,reason:'Remove first task'}),step('revise_contract',{contract:c,expected_revision:2,reason:'Restore task as new work'}),step('snapshot')];assert.deepEqual(await actual(steps),oracle(steps));
+});
+test('complete contract replacement resets an omitted demo flag to the canonical default',async()=>{
+ const synthetic={...contract(),demo:true};const steps=[step('create_contract',synthetic),step('revise_contract',{contract:contract(),expected_revision:1,reason:'Replace complete synthetic scope'}),step('snapshot')];
+ assert.deepEqual(await actual(steps),oracle(steps));
+});

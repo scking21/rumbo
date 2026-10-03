@@ -333,6 +333,17 @@ class OwnerPortalTests(unittest.TestCase):
         (self.root / 'export.csv').write_text('changed')
         self.assertEqual(self.request('GET', path, cookie=cookie)[0], 409)
 
+    def test_wrong_type_check_kind_returns_helpful_error_and_allows_retry(self):
+        cookie, csrf, _ = self.login()
+        invalid = contract()
+        invalid['tasks'][0]['acceptance'][0]['kind'] = []
+        response = self.action(cookie, csrf, 'create_contract', invalid)
+        self.assertEqual(response[0], 400)
+        self.assertIn('BAD_INPUT', response[2])
+        self.assertEqual(Engine(self.root, 'owner', 'human').snapshot()['events_count'], 0)
+        self.assertEqual(self.action(cookie, csrf, 'create_contract', contract())[0], 303)
+        self.assertEqual(Engine(self.root, 'owner', 'human').snapshot()['events_count'], 1)
+
     def test_login_and_session_storage_are_bounded(self):
         from rumbo.owner import MAX_LOGINS, MAX_SESSIONS
         self.portal.logins = {str(i): {'expires': 1600} for i in range(MAX_LOGINS)}

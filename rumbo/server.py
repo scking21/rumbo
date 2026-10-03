@@ -44,10 +44,13 @@ def validate_principals(principals,mode):
         raise ValueError('Configure 1 to 1000 principals')
     seen=set()
     for principal in principals:
-        key=principal.get('subject' if mode=='oauth' else 'token')
-        if not isinstance(key,str) or not key or key in seen:
-            raise ValueError('Principals require unique configured identities')
-        seen.add(key)
+        if not isinstance(principal,dict):
+            raise ValueError('Each principal must be a JSON object')
+        if mode!='demo':
+            key=principal.get('subject' if mode=='oauth' else 'token')
+            if not isinstance(key,str) or not key or key in seen:
+                raise ValueError('Principals require unique configured identities')
+            seen.add(key)
         if principal.get('role') not in ('worker','reviewer','viewer'):
             raise ValueError('MCP principals cannot acquire human authority')
         if not isinstance(principal.get('actor'),str) or not isinstance(principal.get('root'),str):
@@ -125,6 +128,7 @@ class BoundedServer(ThreadingHTTPServer):
     daemon_threads=True
     def __init__(self,*args,**kwargs):
         self.slots=threading.BoundedSemaphore(32)
+        self.log_lock=threading.Lock()
         super().__init__(*args,**kwargs)
     def process_request(self,request,address):
         if not self.slots.acquire(blocking=False):
@@ -141,6 +145,8 @@ class BoundedServer(ThreadingHTTPServer):
 
 
 def create_server(host,port,config):
+    if not isinstance(config,dict):
+        raise ValueError('Server configuration must be a JSON object')
     mode=config.get('mode')
     log_requests=config.get('log_requests',False)
     if type(log_requests) is not bool:raise ValueError('log_requests must be boolean')
@@ -150,6 +156,15 @@ def create_server(host,port,config):
         raise ValueError('Development bearer mode may only bind loopback')
     if mode!='demo':
         validate_principals(config.get('principals'),mode)
+    else:
+        principals=config.get('principals',[])
+        if not isinstance(principals,list):
+            raise ValueError('principals must be a list')
+        if principals:
+            validate_principals(principals,mode)
+    demo_root=config.get('demo_root')
+    if demo_root is not None and not isinstance(demo_root,str):
+        raise ValueError('demo_root must be a configured path string')
     verifier=OAuthVerifier(config) if mode=='oauth' else None
     public=urlsplit(config['public_url']) if verifier else None
     portal=OwnerPortal(config) if mode=='oauth' else None
@@ -162,7 +177,6 @@ def create_server(host,port,config):
     if portal and portal.enabled:
         for p in portal.principals.values():
             engine=Engine(p['root'],p['actor'],'human');health_engines[str(engine.root)]=engine
-    demo_root=config.get('demo_root')
     demo_engine=None
     if demo_root:
         if mode not in ('development','demo'):
@@ -198,7 +212,8 @@ def create_server(host,port,config):
                 path=self.path.partition('?')[0]
                 route='mcp' if path=='/mcp' else ('owner' if path=='/owner' or path.startswith('/owner/') else ('health' if path.startswith('/health/') else ('metadata' if path.startswith('/.well-known/') else 'other')))
                 method=self.command if self.command in ('GET','POST','DELETE','HEAD','OPTIONS') else 'OTHER'
-                print(json.dumps(dict(event='http_request',method=method,route=route,status=status,duration_ms=max(0,int((time.monotonic()-self.started)*1000))),separators=(',',':')),file=sys.stderr,flush=True)
+                with self.server.log_lock:
+                    print(json.dumps(dict(event='http_request',method=method,route=route,status=status,duration_ms=max(0,int((time.monotonic()-self.started)*1000))),separators=(',',':')),file=sys.stderr,flush=True)
         def safe_host(self):
             for header in ('Host','Authorization','Content-Length','Content-Type','Origin','MCP-Protocol-Version'):
                 if len(self.headers.get_all(header,[]))>1:
