@@ -47,13 +47,15 @@ test('project picker stays disabled during refresh without stealing a newer inpu
 test('keyboard focus returns to the initiating control after Cancel and native Escape',async({page})=>{
  await create(page,'browser-focus-cancel');await page.locator('#change-reason').fill('Keep this revision draft');
  const trigger=page.locator('#revise');
+ await page.evaluate(()=>{window.dialogFocusTrace=[];const record=phase=>{const active=document.activeElement;window.dialogFocusTrace.push({phase,tag:active?.tagName,id:active?.id,text:active?.textContent?.slice(0,40),dialogOpen:active?.closest('dialog')?.open});};document.getElementById('confirmation').addEventListener('close',()=>{record('close');queueMicrotask(()=>{record('close microtask');queueMicrotask(()=>record('settled microtask'));});setTimeout(()=>record('close timeout'),0);});});
  for(const cancel of ['button','escape']){
   await page.locator('#change-reason').focus();await page.keyboard.press('Tab');await page.keyboard.press('Tab');await expect(trigger).toBeFocused();
   await page.keyboard.press('Enter');await expect(page.locator('#confirmation')).toBeVisible();
   await expect(page.getByRole('button',{name:'Cancel',exact:true})).toBeFocused();
   if(cancel==='escape')await page.keyboard.press('Escape');else await page.keyboard.press('Enter');
   await expect(page.locator('#confirmation')).not.toBeVisible();await expect(trigger).toBeEnabled();
-  await expect(trigger).toBeFocused();
+  const focus=await page.evaluate(()=>{const active=document.activeElement,dialog=active?.closest('dialog');return {tag:active?.tagName,id:active?.id,text:active?.textContent?.slice(0,100),visible:active?.checkVisibility(),dialog:dialog?.id,dialogOpen:dialog?.open,trace:window.dialogFocusTrace};});
+  await expect(trigger,'Focus after '+cancel+': '+JSON.stringify(focus)).toBeFocused();
  }
  await expect(page.locator('#change-reason')).toHaveValue('Keep this revision draft');
 });

@@ -64,6 +64,9 @@ jobs:
           python -m unittest discover -s tests -p test_backup.py -v
           python -m unittest discover -s tests -p test_installed.py -v
           python -m unittest discover -s tests -p test_readonly_verify.py -v
+          python -m unittest discover -s tests -p test_artifact_json_policy.py -v
+          python -m unittest discover -s tests -p test_json_check_cache.py -v
+          python -m unittest discover -s tests -p test_decision_clock.py -v
       - name: Verify legacy adapter floor
         working-directory: claude-plugin/rumbo
         run: python -m unittest discover -s tests -v
@@ -100,3 +103,6 @@ jobs:
           python -m unittest discover -s tests -p test_installed.py -v
           python -m unittest discover -s tests -p test_protocol.py -v
           python -m unittest discover -s tests -p test_readonly_verify.py -v
+          python -m unittest discover -s tests -p test_artifact_json_policy.py -v
+          python -m unittest discover -s tests -p test_json_check_cache.py -v
+          python -m unittest discover -s tests -p test_decision_clock.py -v

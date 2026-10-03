@@ -16,8 +16,10 @@ async function run(action){
  finally{
   busy=false;document.querySelectorAll('button,#projects').forEach(b=>b.disabled=false);
   // Disabling the trigger blurs it before a dialog can remember its focus.
+  // A just-closed dialog can still own focus when this action settles.
   // Restore only lost focus, never a newer focus choice or a hidden control.
-  if(document.activeElement===document.body&&previousFocus&&previousFocus!==document.body){
+  const active=document.activeElement,focusLost=active===document.body||active?.closest('dialog:not([open])');
+  if(focusLost&&previousFocus&&previousFocus!==document.body){
    const target=previousFocus.isConnected&&!previousFocus.closest('[hidden]')?previousFocus:state&&!$('project-panel').hidden?$('goal'):null;
    target?.focus({preventScroll:true});
   }

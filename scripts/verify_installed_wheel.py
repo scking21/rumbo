@@ -18,7 +18,9 @@ import venv
 
 ROOT = Path(__file__).resolve().parents[1]
 TEST_FILES = ('test_core.py', 'test_protocol.py', 'test_demo.py',
-              'test_backup.py', 'test_installed.py')
+              'test_backup.py', 'test_installed.py', 'test_cli_workflows.py',
+              'test_readonly_verify.py', 'test_artifact_json_policy.py',
+              'test_decision_clock.py', 'test_json_check_cache.py')
 # These two tests need source packaging inputs and run in the normal full suite.
 # The other installed/registry cases exercise the installed wheel here.
 SOURCE_ONLY_TESTS = {

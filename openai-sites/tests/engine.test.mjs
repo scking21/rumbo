@@ -51,6 +51,17 @@ test('artifact JSON parsing and text bytes preserve Python semantics',async()=>{
 });
 
 test('a top-level JSON float is never mistaken for an object with a value field',async()=>{const c=contract();c.tasks[0].acceptance=[{id:'json',kind:'json_equals',key:'value',value:1}];const steps=[step('create_contract',c),claim(),upload('1.0'),checks()];assert.deepEqual(await actual(steps),oracle(steps));});
+
+test('fractional lease clocks expire at the exact boundary after canonical replay',async()=>{
+ const args={task_id:'one',contract_revision:1,lease_seconds:60};
+ const steps=[step('create_contract',contract(),'owner','human',1000.5),
+  step('claim_task',args,'maker','worker',1000.5),
+  step('snapshot',{},'reader','viewer',1060.49),
+  step('claim_task',args,'other','worker',1060.49),
+  step('claim_task',args,'other','worker',1060.5),
+  step('snapshot',{},'reader','viewer',1120.5)];
+ assert.deepEqual(await actual(steps),oracle(steps));
+});
 test('check-kind validation rejects non-string JSON values with canonical BAD_INPUT errors',async()=>{
  for(const kind of [[],['file_contains'],['sha256'],{}, {toString:null},null,0,true]){
   const c=contract();c.tasks[0].acceptance[0].kind=kind;const steps=[step('create_contract',c)];

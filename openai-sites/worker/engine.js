@@ -1,8 +1,9 @@
 /** Experimental hosted implementation. Python core.py remains the parity oracle.
  * Authority is supplied by the verified host, never by action arguments.
  */
-import {canonical,parseJSON,clone,sha256,utf8,FloatValue} from './codec.js';
+import {canonical,parseJSON,clone,sha256,utf8,FloatValue,decodeJSONBytes} from './codec.js';
 export const MAX_INGEST=128*1024, MAX_EVENTS=10000, MAX_LEDGER_BYTES=16*1024*1024;
+export const MAX_ARTIFACT_JSON_DEPTH=512, MAX_ARTIFACT_JSON_INTEGER_DIGITS=4300;
 export class RumboError extends Error { constructor(code,message=''){super(code+': '+(message||code.toLowerCase().replaceAll('_',' ')));this.code=code;} }
 export function fail(code,message=''){throw new RumboError(code,message);}
 export function fields(value,required,optional=[]){
@@ -81,12 +82,14 @@ export class Engine {
  }
  static currentEvidence(task,revision){const latest=Object.create(null);if(!task.artifact)return latest;for(const item of task.evidence)if(item.contract_revision===revision&&item.artifact_revision===task.artifact.revision&&item.artifact_sha256===task.artifact.sha256)latest[item.check_id]=item;return latest;}
  static dependencyStamp(task,tasks){const out=Object.create(null);for(const dep of task.dependencies){const t=tasks.get(dep);if(t.artifact&&t.decisions.length)out[dep]={artifact:t.artifact.sha256,decision:t.decisions.at(-1).id};}return out;}
- async project(state){
-  const tasks=new Map(state.tasks.map(t=>[t.id,t])),done=new Set(),visiting=new Set(),now=this.clock();
+ now(){const now=this.clock();if(typeof now!=='number'||!Number.isFinite(now))fail('BAD_CLOCK','Clock must return finite numeric seconds');return now;}
+ async project(state,now=this.now()){
+  const tasks=new Map(state.tasks.map(t=>[t.id,t])),done=new Set(),visiting=new Set();
   const status=async task=>{
    if(done.has(task.id))return;if(visiting.has(task.id))fail('LEDGER_CORRUPT');visiting.add(task.id);
    for(const dep of task.dependencies){if(!tasks.has(dep))fail('LEDGER_CORRUPT');await status(tasks.get(dep));}
-   task.stale_reason='';const artifact=task.artifact;if(task.lease&&task.lease.expires_at<=now)task.lease=null;
+   task.stale_reason='';const artifact=task.artifact;
+   if(task.lease){const expiry=task.lease.expires_at; if((expiry instanceof FloatValue?expiry.value:expiry)<=now)task.lease=null;}
    let result=task.lease?'claimed':'unclaimed';const blocked=task.dependencies.filter(d=>tasks.get(d).status!=='accepted');
    if(blocked.length){result='blocked';task.stale_reason='Dependencies need acceptance: '+blocked.join(', ');}
    else if(artifact){
@@ -118,12 +121,18 @@ export class Engine {
   if(this.role==='viewer')fail('FORBIDDEN','Read-only principal');if(action==='submit_review'&&this.role!=='reviewer')fail('FORBIDDEN','A configured reviewer principal is required');
   fields(args,...ACTION_FIELDS[action]);if(utf8(canonical(args)).length>(action==='ingest_artifact'?1024*1024:256000))fail('BAD_INPUT','Action too large');
   for(let attempt=0;attempt<8;attempt++){
-   const rows=await this.store.read(),state=await this.project(await this.replay(rows));if(state.events_count>=MAX_EVENTS)fail('LEDGER_LIMIT');const now=this.clock();if(typeof now!=='number'||!Number.isFinite(now))fail('BAD_CLOCK');
+   const rows=await this.store.read(),replayed=await this.replay(rows);
+   // Each CAS attempt linearizes eligibility after read/replay, with the same
+   // decision time for projection and metadata. A retry must sample afresh.
+   const now=this.now(),state=await this.project(replayed,now);if(state.events_count>=MAX_EVENTS)fail('LEDGER_LIMIT');
    const data=await this.prepare(action,args,state,now),event={action,data,actor:this.actor,role:this.role,at:now};const payload=canonical(event),previous=state.ledger_head;
    if(rows.reduce((n,row)=>n+row.payload.length,0)+payload.length>MAX_LEDGER_BYTES)fail('LEDGER_LIMIT','Event payloads are limited to 16 MiB per project; ask its owner to archive or manage retention');
    if(action==='ingest_artifact')await this.artifacts.put(data.artifact.sha256,utf8(args.content));
    const row={seq:state.events_count+1,payload,previous,digest:await sha256(previous+'\n'+payload)};
-   if(await this.store.append({count:state.events_count,head:previous},row))return this.project(await this.replay([...rows,row]));
+   // Validate the fresh response before persistence can succeed. Its status
+   // reflects this projection's sample, not time subsequently spent in append.
+   const projected=await this.project(await this.replay([...rows,row]));
+   if(await this.store.append({count:state.events_count,head:previous},row))return projected;
   }
   fail('CONCURRENT_MODIFICATION','Project changed repeatedly; read its latest state and retry');
  }
@@ -152,8 +161,10 @@ export class Engine {
   const artifact=task.artifact;integer(args.artifact_revision,'artifact_revision');if(!artifact||args.artifact_revision!==artifact.revision||artifact.contract_revision!==rev)fail('STALE_ARTIFACT');const {digest,data:raw}=await this.digestArtifact(artifact);if(digest!==artifact.sha256)fail('ARTIFACT_CHANGED');if(task.status==='blocked'||canonical(artifact.dependencies??{})!==canonical(Engine.dependencyStamp(task,tasks)))fail('DEPENDENCY_BLOCKED');
   const common={actor:this.actor,role:this.role,contract_revision:rev,artifact_revision:artifact.revision,artifact_sha256:digest,at:now};
   if(action==='run_checks'){
+   // Cache failed parses too, only for these exact bytes in this action.
+   let jsonParsed=false,jsonValue=null;
    const evidence=[];for(const check of task.acceptance){if(check.kind==='manual_review')continue;let passed=false;
-    try {if(check.kind==='sha256')passed=digest===check.value;else if(check.kind==='file_contains')passed=new RegExp(check.value.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'),'u').test(new TextDecoder('utf-8',{fatal:true,ignoreBOM:true}).decode(raw));else if(check.kind==='json_equals'){const value=parseJSON(new TextDecoder('utf-8',{fatal:true}).decode(raw),990,{duplicates:true,nonfinite:true});passed=value!==null&&typeof value==='object'&&!(value instanceof FloatValue)&&!Array.isArray(value)&&Object.hasOwn(value,check.key)&&canonical(value[check.key])===canonical(check.value);}}catch{passed=false;}
+    try {if(check.kind==='sha256')passed=digest===check.value;else if(check.kind==='file_contains')passed=new RegExp(check.value.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'),'u').test(new TextDecoder('utf-8',{fatal:true,ignoreBOM:true}).decode(raw));else if(check.kind==='json_equals'){if(!jsonParsed){jsonParsed=true;jsonValue=parseJSON(decodeJSONBytes(raw),MAX_ARTIFACT_JSON_DEPTH,{duplicates:true,nonfinite:true,maxIntegerDigits:MAX_ARTIFACT_JSON_INTEGER_DIGITS,scalarStrings:true});}const value=jsonValue;passed=value!==null&&typeof value==='object'&&!(value instanceof FloatValue)&&!Array.isArray(value)&&Object.hasOwn(value,check.key)&&canonical(value[check.key])===canonical(check.value);}}catch{passed=false;}
     evidence.push({...common,id:eventid+'-'+check.id,kind:'deterministic',check_id:check.id,outcome:passed?'pass':'fail',detail:check.kind+' evaluated against the recorded artifact bytes'});
    }return {task_id:task.id,evidence};
   }

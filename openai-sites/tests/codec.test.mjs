@@ -17,3 +17,8 @@ test('twenty thousand seeded finite floats match the unchanged Python encoder',(
  while(values.length<20000){view.setUint32(0,next());view.setUint32(4,next());const value=view.getFloat64(0);if(Number.isFinite(value))values.push(value.toExponential());}
  const raw='['+values.join(',')+']',expected=oracle(raw),actual=parseJSON(raw).map(v=>canonical(v));for(let i=0;i<actual.length;i++)assert.equal(actual[i],expected[i],values[i]);
 });
+
+test('artifact scalar-string validation is opt-in and keeps generic codec defaults',()=>{
+ const raw='"'+String.fromCharCode(92)+'ud800"';assert.equal(parseJSON(raw),String.fromCharCode(0xd800));assert.throws(()=>parseJSON(raw,64,{scalarStrings:true}),/Unicode scalars/);assert.equal(canonical(parseJSON(raw)),raw);
+ const paired='"'+String.fromCharCode(92)+'ud83d'+String.fromCharCode(92)+'ude00"';assert.equal(parseJSON(paired,64,{scalarStrings:true}),'😀');
+});

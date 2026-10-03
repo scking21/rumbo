@@ -1,6 +1,6 @@
 import test from 'node:test';import assert from 'node:assert/strict';import {JSDOM} from 'jsdom';import {readFileSync} from 'node:fs';
 import worker from '../worker/index.js';import {fixture} from './support.mjs';
-async function ownerDOM({browserFocus=false}={}){
+async function ownerDOM({browserFocus=false,retainDialogFocus=false}={}){
  const {env,storage}=fixture(),identity={'oai-authenticated-user-id':'owner','oai-authenticated-user-email':'owner@example.test'};const page=await worker.fetch(new Request('https://rumbo.test/',{headers:{...identity,'sec-fetch-mode':'navigate','sec-fetch-dest':'document'}}),env);const cookie=page.headers.get('set-cookie').split(';')[0];
  const dom=new JSDOM(await page.text(),{url:'https://rumbo.test/',runScripts:'outside-only'}),w=dom.window;
  w.HTMLDialogElement.prototype.showModal=function(){this.open=true;};w.HTMLDialogElement.prototype.close=function(v){if(v!==undefined)this.returnValue=v;this.open=false;this.dispatchEvent(new w.Event('close'));};w.HTMLElement.prototype.scrollIntoView=function(){};
@@ -12,9 +12,10 @@ async function ownerDOM({browserFocus=false}={}){
    const disabled=Object.getOwnPropertyDescriptor(prototype,'disabled');
    Object.defineProperty(prototype,'disabled',{...disabled,set(value){if(value&&w.document.activeElement===this)this.blur();disabled.set.call(this,value);}});
   }
+  // Exercise both settlement states: body, or a control in a now-closed dialog.
   let previousFocus;
   w.HTMLDialogElement.prototype.showModal=function(){previousFocus=w.document.activeElement;this.open=true;this.querySelector('button').focus();};
-  w.HTMLDialogElement.prototype.close=function(value){if(value!==undefined)this.returnValue=value;this.open=false;if(this.contains(w.document.activeElement))w.document.activeElement.blur();previousFocus?.focus();this.dispatchEvent(new w.Event('close'));};
+  w.HTMLDialogElement.prototype.close=function(value){if(value!==undefined)this.returnValue=value;this.open=false;if(!retainDialogFocus&&this.contains(w.document.activeElement))w.document.activeElement.blur();previousFocus?.focus();this.dispatchEvent(new w.Event('close'));};
  }
  // The fixture uses Node Request/fetch, so use its matching AbortSignal brand.
  w.AbortController=AbortController;
@@ -124,8 +125,8 @@ test('a stale inspected revision is rejected and refreshed exact bytes can be ac
 });
 
 
-test('canceling a confirmation restores focus after the initiating button was disabled',async()=>{
- const {w,dom}=await ownerDOM({browserFocus:true}),d=w.document;try{
+for(const retainDialogFocus of [false,true])test('canceling a confirmation restores focus from '+(retainDialogFocus?'the closed dialog':'body'),async()=>{
+ const {w,dom}=await ownerDOM({browserFocus:true,retainDialogFocus}),d=w.document;try{
   assert.equal(d.activeElement,d.body,'Initial loading must not move focus');
   const trigger=d.getElementById('create');trigger.focus();trigger.click();await tick();
   assert.equal(d.activeElement,d.querySelector('#confirmation button'));
@@ -158,15 +159,15 @@ async function inspectOwnerArtifact(w,storage){
  w.document.getElementById('refresh').click();await idle(w.document);w.document.querySelector('#tasks button').click();await idle(w.document);
  w.document.getElementById('decision-reason').value='Keyboard-reviewed exact bytes';
 }
-for(const outcome of ['accept','reject'])test('successful '+outcome+' moves lost focus from the hidden decision panel to the project heading',async()=>{
- const {w,storage,dom}=await ownerDOM({browserFocus:true}),d=w.document;try{
+for(const retainDialogFocus of [false,true])for(const outcome of ['accept','reject'])test('successful '+outcome+' moves '+(retainDialogFocus?'closed-dialog':'body')+' focus to the project heading',async()=>{
+ const {w,storage,dom}=await ownerDOM({browserFocus:true,retainDialogFocus}),d=w.document;try{
   await inspectOwnerArtifact(w,storage);const trigger=d.getElementById(outcome);trigger.focus();trigger.click();await tick();d.getElementById('confirmation').close('confirm');await idle(d);
   assert.equal(d.getElementById('artifact-panel').hidden,true);assert.equal(d.getElementById('project-panel').hidden,false);
   assert.equal(d.activeElement,d.getElementById('goal'));assert.equal(d.getElementById('goal').getAttribute('tabindex'),'-1');
  }finally{dom.window.close();}
 });
 test('a completed decision keeps focus on another input the owner selected while waiting',async()=>{
- const {w,storage,dom}=await ownerDOM({browserFocus:true}),d=w.document;let release;try{
+ const {w,storage,dom}=await ownerDOM({browserFocus:true,retainDialogFocus:true}),d=w.document;let release;try{
   await inspectOwnerArtifact(w,storage);const fetch=w.fetch,gate=new Promise(resolve=>release=resolve);let entered;const pending=new Promise(resolve=>entered=resolve);
   w.fetch=async(path,options)=>{if(path==='/owner/api/decide'){entered();await gate;}return fetch(path,options);};
   d.getElementById('accept').focus();d.getElementById('accept').click();await tick();d.getElementById('confirmation').close('confirm');await pending;

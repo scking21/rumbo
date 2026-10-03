@@ -16,6 +16,10 @@ class WheelVerificationTests(unittest.TestCase):
         spec.loader.exec_module(module)
         return module
 
+    def test_installed_wheel_exercises_cli_and_read_only_checkpoint_workflows(self):
+        module = self.verifier()
+        self.assertTrue({'test_cli_workflows.py', 'test_readonly_verify.py', 'test_artifact_json_policy.py', 'test_decision_clock.py', 'test_json_check_cache.py'} <= set(module.TEST_FILES))
+
     def test_import_paths_must_belong_to_isolated_environment(self):
         module = self.verifier()
         with tempfile.TemporaryDirectory() as tmp:

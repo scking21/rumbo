@@ -19,6 +19,8 @@ MAX_INGEST = 128 * 1024
 MAX_UPLOAD_TOTAL = 64 * 1024 * 1024
 MAX_EVENTS = 10000
 MAX_LEDGER_BYTES = 16 * 1024 * 1024
+MAX_ARTIFACT_JSON_DEPTH = 512
+MAX_ARTIFACT_JSON_INTEGER_DIGITS = 4300
 ROLES = {'human', 'worker', 'reviewer', 'viewer'}
 IDENTIFIER = re.compile(r'^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$')
 ACTION_FIELDS = {
@@ -50,6 +52,54 @@ def canonical(value):
         return json.dumps(value, sort_keys=True, separators=(',', ':'), ensure_ascii=True, allow_nan=False)
     except (TypeError, ValueError, RecursionError):
         fail('BAD_INPUT', 'Use finite, JSON-compatible values')
+
+
+def artifact_json(raw):
+    """Decode artifact JSON with stable limits independent of transport policy.
+
+    Preserve byte-encoding detection and last-key-wins for scalar strings.
+    Nonfinite values cannot themselves become passing canonical evidence.
+    """
+    text = raw.decode(json.detect_encoding(raw), 'strict')
+    depth = 0
+    quoted = escaped = False
+    token_start = 0
+    for offset, char in enumerate(text):
+        if quoted:
+            if escaped:
+                escaped = False
+            elif char == '\\':
+                escaped = True
+            elif char == '"':
+                quoted = False
+                token = text[token_start:offset+1]
+                # Strict byte decoding already excludes literal surrogates.
+                # Validate escaped strings before duplicate keys discard values.
+                if '\\u' in token and any(0xD800 <= ord(value) <= 0xDFFF for value in json.loads(token)):
+                    raise ValueError('Artifact JSON strings must be Unicode scalars')
+        elif char == '"':
+            quoted = True
+            token_start = offset
+        elif char in '[{':
+            depth += 1
+            if depth > MAX_ARTIFACT_JSON_DEPTH:
+                raise ValueError('Artifact JSON nesting exceeds limit')
+        elif char in ']}':
+            depth -= 1
+
+    def parse_integer(token):
+        negative = token.startswith('-')
+        digits = token[1:] if negative else token
+        if len(digits) > MAX_ARTIFACT_JSON_INTEGER_DIGITS:
+            raise ValueError('Artifact JSON integer exceeds digit limit')
+        # Chunk conversion avoids interpreter-global integer-string settings.
+        value = 0
+        for start in range(0, len(digits), 500):
+            chunk = digits[start:start+500]
+            value = value * (10 ** len(chunk)) + int(chunk)
+        return -value if negative else value
+
+    return json.loads(text, parse_int=parse_integer)
 
 
 def fields(value, required, optional=()):
@@ -372,10 +422,21 @@ class Engine:
     def _dependency_stamp(task, tasks):
         return {dep: {'artifact': tasks[dep]['artifact']['sha256'], 'decision': tasks[dep]['decisions'][-1]['id']} for dep in task['dependencies'] if tasks[dep].get('artifact') and tasks[dep]['decisions']}
 
-    def _project(self, state):
+    def _now(self):
+        now = self.clock()
+        try:
+            valid = type(now) in (int, float) and math.isfinite(now)
+        except OverflowError:
+            valid = False
+        if not valid:
+            fail('BAD_CLOCK', 'Clock must return finite numeric seconds')
+        return now
+
+    def _project(self, state, now=None):
+        if now is None:
+            now = self._now()
         tasks = {t['id']: t for t in state['tasks']}
         done = set()
-        now = self.clock()
         def status(task):
             if task['id'] in done:
                 return
@@ -468,12 +529,13 @@ class Engine:
             fail('BAD_INPUT', 'Action too large')
         with self._db() as db:
             db.execute('BEGIN IMMEDIATE')
-            state = self._project(self._replay(db))
+            state = self._replay(db)
+            # Linearize eligibility after lock acquisition and replay. Metadata
+            # uses this same decision time even if artifact work takes longer.
+            now = self._now()
+            state = self._project(state, now)
             if state['events_count'] >= MAX_EVENTS:
                 fail('LEDGER_LIMIT')
-            now = self.clock()
-            if not math.isfinite(now):
-                fail('BAD_CLOCK')
             data = self._prepare(action, arguments, state, now)
             event = dict(action=action, data=data, actor=self.actor, role=self.role, at=now)
             raw = canonical(event); prev = state['ledger_head']
@@ -560,6 +622,8 @@ class Engine:
         common = dict(actor=self.actor, role=self.role, contract_revision=rev, artifact_revision=artifact['revision'], artifact_sha256=digest, at=now)
         if action == 'run_checks':
             evidence = []
+            json_parsed = False
+            json_value = None
             for check in task['acceptance']:
                 kind = check['kind']
                 if kind == 'manual_review':
@@ -571,7 +635,11 @@ class Engine:
                     elif kind == 'file_contains':
                         passed = check['value'] in raw.decode('utf-8')
                     elif kind == 'json_equals':
-                        value = json.loads(raw)
+                        if not json_parsed:
+                            # Cache failed parses too, only for these exact bytes in this action.
+                            json_parsed = True
+                            json_value = artifact_json(raw)
+                        value = json_value
                         passed = isinstance(value, dict) and check['key'] in value and canonical(value[check['key']]) == canonical(check['value'])
                 except (ValueError, UnicodeError, RumboError, RecursionError):
                     passed = False
