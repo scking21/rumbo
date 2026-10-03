@@ -294,6 +294,7 @@ SITES_SOURCE_FILES={
     'scripts/verify-export.py',
     'scripts/verify-oracle.mjs',
     'tests/browser/owner.spec.mjs',
+    'tests/board-dom.test.mjs',
     'tests/codec.test.mjs',
     'tests/decision-clock.test.mjs',
     'tests/engine.test.mjs',

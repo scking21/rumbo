@@ -9,7 +9,8 @@ returns it as `text/html;profile=mcp-app` to capable MCP hosts.
 The board follows goal → task → artifact → evidence → human decision. It includes:
 
 - Original request, constraints, contract revision, and named decision owner
-- Filterable task states with keyboard-operable selection
+- Filterable task states with keyboard-operable selection; filtering keeps the
+  selected detail open and labels it when it is outside the current filter
 - Exact acceptance check values, keys, and manual-review prompts
 - Artifact path, revision, maker, size, and SHA-256
 - Deterministic receipts separated from attributed reviewer assertions

@@ -14,12 +14,22 @@ Worker handles are coordination identifiers scoped by the authenticated user and
 
 Use Node 24 and Python 3.12. Run `npm ci`, `npm test`, `npm run validate`, `npm audit --audit-level=moderate`, and `npm run test:browser` after installing official Playwright Chromium. The main tests include the unchanged Python oracle, a 20,000-number canonicalization sweep, D1/R2 adapter tests, real workerd runtime tests, HTTP owner/MCP paths and DOM interaction tests. The browser suite uses an explicitly enabled synthetic fixture server which is never bundled or deployed.
 
-The parent repository's original Python/Claude tests and CI remain applicable and unchanged. The separate `verify-sites.yml` workflow tests this adapter. A passing DOM test is not visual browser QA. A saved/deployed private Site is not a verified OAuth connection or a public-directory submission.
+The canonical Python and independently versioned Claude adapter suites remain required alongside the Sites suite. The separate `verify-sites.yml` workflow tests this adapter. A passing DOM test is not visual browser QA. A saved/deployed private Site is not a verified OAuth connection or a public-directory submission.
+
+After dependencies are already installed, use explicit process-only offline settings for local test/build validation. These disable npm's optional registry update check as well as package fetching, and retain the synthetic runtime's disabled CF metadata bootstrap:
+
+```sh
+export npm_config_offline=true npm_config_update_notifier=false CLOUDFLARE_CF_FETCH_ENABLED=false
+npm test
+npm run validate
+```
+
+These commands use the existing local dependency tree; they do not install missing packages or provide a browser-download fallback. `npm ci`, `npm audit` and initial browser installation are separate network-requiring preparation steps, not part of this offline run. The flags change only this shell/process environment, not persistent npm or system configuration.
 
 ## Release gates
 
 - Resolve any remaining behavior-parity gaps before presenting the hosted runtime as equivalent for its supported upload workflow
-- Synthetic Chromium workflows passed and their screenshots were visually inspected for runtime source `60a9f9f8e5bc595a3322a38c435592374937a823`. Keep that evidence bound to unchanged runtime inputs. Managed HTTPS/OAuth read-only connection, deployed persistence readback and two separate authenticated reviewer/worker account checks remain unverified
+- Current synthetic CI evidence is recorded per exact head on [draft PR #7](https://github.com/scking21/rumbo/pull/7). Earlier synthetic Chromium workflows passed and their screenshots were visually inspected for runtime source `60a9f9f8e5bc595a3322a38c435592374937a823`. Keep that evidence bound to unchanged runtime inputs. Managed HTTPS/OAuth read-only connection, deployed persistence readback and two separate authenticated reviewer/worker account checks remain unverified
 - Complete independent review; a partially interrupted review is not clearance
 - Establish publisher-approved policy/legal URLs, retention/deletion and recovery procedures, reviewer access, final listing/ZIP and the user's final review
 - Preserve the local distribution for project-file registration, local file staleness and local backup/restore
