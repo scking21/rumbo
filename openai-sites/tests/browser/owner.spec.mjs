@@ -43,3 +43,27 @@ test('project picker stays disabled until a pending state refresh settles',async
  await page.locator('#refresh').click();await pending;try{await expect(page.locator('#projects')).toBeDisabled();}finally{release();}
  await expect(page.locator('#projects')).toBeEnabled();await expect(page.locator('#project-panel')).toBeVisible();
 });
+
+test('keyboard focus returns to the initiating control after Cancel and native Escape',async({page})=>{
+ await create(page,'browser-focus-cancel');await page.locator('#change-reason').fill('Keep this revision draft');
+ const trigger=page.locator('#revise');
+ for(const cancel of ['button','escape']){
+  await page.locator('#change-reason').focus();await page.keyboard.press('Tab');await page.keyboard.press('Tab');await expect(trigger).toBeFocused();
+  await page.keyboard.press('Enter');await expect(page.locator('#confirmation')).toBeVisible();
+  await expect(page.getByRole('button',{name:'Cancel',exact:true})).toBeFocused();
+  if(cancel==='escape')await page.keyboard.press('Escape');else await page.keyboard.press('Enter');
+  await expect(page.locator('#confirmation')).not.toBeVisible();await expect(trigger).toBeEnabled();
+  await expect(trigger).toBeFocused();
+ }
+ await expect(page.locator('#change-reason')).toHaveValue('Keep this revision draft');
+});
+
+test('keyboard focus recovers after failed refresh and successful retry',async({page})=>{
+ await create(page,'browser-focus-retry');const trigger=page.locator('#refresh');
+ await page.route('**/api/state?*',route=>route.fulfill({status:503,contentType:'application/json',body:JSON.stringify({error:'Synthetic keyboard retry'})}));
+ await page.locator('#projects').focus();await page.keyboard.press('Tab');await expect(trigger).toBeFocused();
+ await page.keyboard.press('Enter');await expect(page.locator('#message')).toContainText('Synthetic keyboard retry');
+ await expect(trigger).toBeEnabled();await expect(trigger).toBeFocused();
+ await page.unroute('**/api/state?*');await page.keyboard.press('Enter');
+ await expect(page.locator('#project-panel')).toBeVisible();await expect(trigger).toBeEnabled();await expect(trigger).toBeFocused();
+});
