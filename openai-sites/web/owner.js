@@ -8,7 +8,21 @@ async function request(path,options,consume){
  finally{clearTimeout(timer);}
 }
 async function api(path,body){return request(path,{method:body===undefined?'GET':'POST',credentials:'same-origin',headers:body===undefined?{}:{'content-type':'application/json','x-rumbo-csrf':csrf},...(body===undefined?{}:{body:typeof body==='string'?body:JSON.stringify(body)})},async response=>{const data=await response.json();if(!response.ok)throw new Error(data.error||'Request failed');return data;});}
-async function run(action){if(busy)return;busy=true;document.querySelectorAll('button,#projects').forEach(b=>{if(!b.closest('dialog'))b.disabled=true;});try{await action();}catch(e){message(e.message+' Your draft has been kept.',true);}finally{busy=false;document.querySelectorAll('button,#projects').forEach(b=>b.disabled=false);}}
+async function run(action){
+ if(busy)return;
+ const previousFocus=document.activeElement;
+ busy=true;document.querySelectorAll('button,#projects').forEach(b=>{if(!b.closest('dialog'))b.disabled=true;});
+ try{await action();}catch(e){message(e.message+' Your draft has been kept.',true);}
+ finally{
+  busy=false;document.querySelectorAll('button,#projects').forEach(b=>b.disabled=false);
+  // Disabling the trigger blurs it before a dialog can remember its focus.
+  // Restore only lost focus, never a newer focus choice or a hidden control.
+  if(document.activeElement===document.body&&previousFocus&&previousFocus!==document.body){
+   const target=previousFocus.isConnected&&!previousFocus.closest('[hidden]')?previousFocus:state&&!$('project-panel').hidden?$('goal'):null;
+   target?.focus({preventScroll:true});
+  }
+ }
+}
 function confirmAction(title,text,detail){$('confirm-title').textContent=title;$('confirm-text').textContent=text;$('confirm-detail').textContent=detail;const dialog=$('confirmation');dialog.returnValue='';return new Promise(resolve=>{dialog.addEventListener('close',()=>resolve(dialog.returnValue==='confirm'),{once:true});dialog.showModal();});}
 function el(tag,text){const node=document.createElement(tag);node.textContent=text;return node;}
 async function loadProjects(){const list=await api('/api/projects');const select=$('projects');select.replaceChildren(new Option('Choose a project',''));for(const p of list.projects)select.add(new Option(p.alias+' · '+p.role,p.project_key));if([...select.options].some(o=>o.value===projectKey))select.value=projectKey;}

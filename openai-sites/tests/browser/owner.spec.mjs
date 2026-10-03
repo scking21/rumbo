@@ -37,11 +37,11 @@ test('failed project switch hides old context and retry loads the selected proje
  await page.unroute('**/api/state?project_key='+first);await page.locator('#refresh').click();await expect(page.locator('#project-panel')).toBeVisible();await expect(page.locator('#board-link')).toHaveAttribute('href','/board?project_key='+first);await expect(page.locator('#change-reason')).toHaveValue('Preserved retry draft');
  expect((await (await page.request.get('/api/state?project_key='+second)).json()).contract_revision).toBe(1);
 });
-test('project picker stays disabled until a pending state refresh settles',async({page})=>{
+test('project picker stays disabled during refresh without stealing a newer input focus',async({page})=>{
  await create(page,'browser-pending');let release,entered;const pending=new Promise(r=>entered=r),gate=new Promise(r=>release=r);
  await page.route('**/api/state?*',async route=>{entered();await gate;await route.continue();});
- await page.locator('#refresh').click();await pending;try{await expect(page.locator('#projects')).toBeDisabled();}finally{release();}
- await expect(page.locator('#projects')).toBeEnabled();await expect(page.locator('#project-panel')).toBeVisible();
+ await page.locator('#refresh').click();await pending;try{await expect(page.locator('#projects')).toBeDisabled();await page.locator('#contract').focus();}finally{release();}
+ await expect(page.locator('#projects')).toBeEnabled();await expect(page.locator('#project-panel')).toBeVisible();await expect(page.locator('#contract')).toBeFocused();
 });
 
 test('keyboard focus returns to the initiating control after Cancel and native Escape',async({page})=>{
@@ -66,4 +66,13 @@ test('keyboard focus recovers after failed refresh and successful retry',async({
  await expect(trigger).toBeEnabled();await expect(trigger).toBeFocused();
  await page.unroute('**/api/state?*');await page.keyboard.press('Enter');
  await expect(page.locator('#project-panel')).toBeVisible();await expect(trigger).toBeEnabled();await expect(trigger).toBeFocused();
+});
+
+for(const outcome of ['accept','reject'])test('keyboard '+outcome+' recovers focus on the project when its decision panel is hidden',async({page})=>{
+ const key=await create(page,'browser-focus-'+outcome),session=await call(page,'rumbo_open_worker',{project_key:key,label:'keyboard decision test'}),args={project_key:key,worker_id:session.worker_id};
+ await call(page,'rumbo_claim_task',{...args,task_id:'one',contract_revision:1,lease_seconds:300});await call(page,'rumbo_ingest_artifact',{...args,task_id:'one',contract_revision:1,filename:'keyboard.txt',content:'hello keyboard'});await call(page,'rumbo_run_checks',{...args,task_id:'one',contract_revision:1,artifact_revision:1});
+ await page.locator('#refresh').click();await page.getByRole('button',{name:'Inspect exact bytes'}).click();await page.locator('#decision-reason').fill('Keyboard-reviewed exact bytes');
+ await page.keyboard.press('Tab');if(outcome==='reject')await page.keyboard.press('Tab');await expect(page.locator('#'+outcome)).toBeFocused();await page.keyboard.press('Enter');
+ await expect(page.locator('#confirmation')).toBeVisible();await page.keyboard.press('Tab');await expect(page.locator('#confirm-submit')).toBeFocused();await page.keyboard.press('Enter');
+ await expect(page.locator('#artifact-panel')).not.toBeVisible();await expect(page.locator('#tasks')).toContainText(outcome==='accept'?'accepted':'rejected');await expect(page.locator('#goal')).toBeFocused();await expect(page.locator('#goal')).toHaveAttribute('tabindex','-1');
 });

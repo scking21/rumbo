@@ -1,9 +1,21 @@
 import test from 'node:test';import assert from 'node:assert/strict';import {JSDOM} from 'jsdom';import {readFileSync} from 'node:fs';
 import worker from '../worker/index.js';import {fixture} from './support.mjs';
-async function ownerDOM(){
+async function ownerDOM({browserFocus=false}={}){
  const {env,storage}=fixture(),identity={'oai-authenticated-user-id':'owner','oai-authenticated-user-email':'owner@example.test'};const page=await worker.fetch(new Request('https://rumbo.test/',{headers:{...identity,'sec-fetch-mode':'navigate','sec-fetch-dest':'document'}}),env);const cookie=page.headers.get('set-cookie').split(';')[0];
  const dom=new JSDOM(await page.text(),{url:'https://rumbo.test/',runScripts:'outside-only'}),w=dom.window;
  w.HTMLDialogElement.prototype.showModal=function(){this.open=true;};w.HTMLDialogElement.prototype.close=function(v){if(v!==undefined)this.returnValue=v;this.open=false;this.dispatchEvent(new w.Event('close'));};w.HTMLElement.prototype.scrollIntoView=function(){};
+ if(browserFocus){
+  // jsdom does not implement native dialog focus or the disabled-control blur
+  // observed in the Chromium keyboard regressions. Model those transitions only
+  // for these deterministic tests; the browser suite verifies the native behavior.
+  for(const prototype of [w.HTMLButtonElement.prototype,w.HTMLSelectElement.prototype]){
+   const disabled=Object.getOwnPropertyDescriptor(prototype,'disabled');
+   Object.defineProperty(prototype,'disabled',{...disabled,set(value){if(value&&w.document.activeElement===this)this.blur();disabled.set.call(this,value);}});
+  }
+  let previousFocus;
+  w.HTMLDialogElement.prototype.showModal=function(){previousFocus=w.document.activeElement;this.open=true;this.querySelector('button').focus();};
+  w.HTMLDialogElement.prototype.close=function(value){if(value!==undefined)this.returnValue=value;this.open=false;if(this.contains(w.document.activeElement))w.document.activeElement.blur();previousFocus?.focus();this.dispatchEvent(new w.Event('close'));};
+ }
  // The fixture uses Node Request/fetch, so use its matching AbortSignal brand.
  w.AbortController=AbortController;
  w.fetch=async(path,options={})=>worker.fetch(new Request(new URL(path,w.location.href),{...options,headers:{...identity,cookie,...(options.method==='POST'?{origin:'https://rumbo.test','sec-fetch-site':'same-origin','sec-fetch-mode':'cors'}:{}),...options.headers}}),env);
@@ -108,5 +120,64 @@ test('a stale inspected revision is rejected and refreshed exact bytes can be ac
   d.getElementById('refresh').click();await idle(d);assert.equal(d.getElementById('artifact-panel').hidden,true);d.querySelector('#tasks button').click();await idle(d);assert.equal(d.getElementById('artifact-text').textContent,'hello second');
   d.getElementById('accept').click();d.getElementById('accept').click();await tick();d.getElementById('confirmation').close('confirm');d.getElementById('confirmation').close('confirm');await idle(d);
   const task=(await engine.snapshot()).tasks[0];assert.equal(task.status,'accepted');assert.equal(task.decisions.length,1);assert.equal(task.decisions[0].artifact_revision,2);
+ }finally{dom.window.close();}
+});
+
+
+test('canceling a confirmation restores focus after the initiating button was disabled',async()=>{
+ const {w,dom}=await ownerDOM({browserFocus:true}),d=w.document;try{
+  assert.equal(d.activeElement,d.body,'Initial loading must not move focus');
+  const trigger=d.getElementById('create');trigger.focus();trigger.click();await tick();
+  assert.equal(d.activeElement,d.querySelector('#confirmation button'));
+  d.getElementById('confirmation').close('cancel');await idle(d);
+  assert.equal(d.activeElement,trigger);
+ }finally{dom.window.close();}
+});
+test('failed asynchronous work and a successful retry restore keyboard focus',async()=>{
+ const {w,storage,dom}=await ownerDOM({browserFocus:true}),d=w.document;try{
+  await createOwnerProject(w,storage);const fetch=w.fetch,trigger=d.getElementById('refresh');
+  w.fetch=async(path,options)=>path.startsWith('/api/state?')?new Response(JSON.stringify({error:'Synthetic focus failure'}),{status:503}):fetch(path,options);
+  trigger.focus();trigger.click();await idle(d);assert.match(d.getElementById('message').textContent,/Synthetic focus failure/);assert.equal(d.activeElement,trigger);
+  w.fetch=fetch;trigger.click();await idle(d);assert.equal(d.getElementById('project-panel').hidden,false);assert.equal(d.activeElement,trigger);
+ }finally{dom.window.close();}
+});
+test('settling a pending request preserves focus the owner moved to another input',async()=>{
+ const {w,storage,dom}=await ownerDOM({browserFocus:true}),d=w.document;let release;try{
+  await createOwnerProject(w,storage);const fetch=w.fetch,gate=new Promise(resolve=>release=resolve);let entered;const pending=new Promise(resolve=>entered=resolve);
+  w.fetch=async(path,options)=>{if(path.startsWith('/api/state?')){entered();await gate;}return fetch(path,options);};
+  d.getElementById('refresh').focus();d.getElementById('refresh').click();await pending;
+  d.getElementById('contract').focus();release();await idle(d);assert.equal(d.activeElement,d.getElementById('contract'));
+ }finally{release?.();await idle(d);dom.window.close();}
+});
+
+async function inspectOwnerArtifact(w,storage){
+ const {project}=await createOwnerProject(w,storage),session=await storage.openWorker('owner',project.project_key,'Keyboard test worker'),engine=await storage.workerEngine('owner',project.project_key,session.worker_id);
+ await engine.execute('claim_task',{task_id:'first-task',contract_revision:1,lease_seconds:300});
+ await engine.execute('ingest_artifact',{task_id:'first-task',contract_revision:1,filename:'keyboard.txt',content:'hello keyboard'});
+ await engine.execute('run_checks',{task_id:'first-task',contract_revision:1,artifact_revision:1});
+ w.document.getElementById('refresh').click();await idle(w.document);w.document.querySelector('#tasks button').click();await idle(w.document);
+ w.document.getElementById('decision-reason').value='Keyboard-reviewed exact bytes';
+}
+for(const outcome of ['accept','reject'])test('successful '+outcome+' moves lost focus from the hidden decision panel to the project heading',async()=>{
+ const {w,storage,dom}=await ownerDOM({browserFocus:true}),d=w.document;try{
+  await inspectOwnerArtifact(w,storage);const trigger=d.getElementById(outcome);trigger.focus();trigger.click();await tick();d.getElementById('confirmation').close('confirm');await idle(d);
+  assert.equal(d.getElementById('artifact-panel').hidden,true);assert.equal(d.getElementById('project-panel').hidden,false);
+  assert.equal(d.activeElement,d.getElementById('goal'));assert.equal(d.getElementById('goal').getAttribute('tabindex'),'-1');
+ }finally{dom.window.close();}
+});
+test('a completed decision keeps focus on another input the owner selected while waiting',async()=>{
+ const {w,storage,dom}=await ownerDOM({browserFocus:true}),d=w.document;let release;try{
+  await inspectOwnerArtifact(w,storage);const fetch=w.fetch,gate=new Promise(resolve=>release=resolve);let entered;const pending=new Promise(resolve=>entered=resolve);
+  w.fetch=async(path,options)=>{if(path==='/owner/api/decide'){entered();await gate;}return fetch(path,options);};
+  d.getElementById('accept').focus();d.getElementById('accept').click();await tick();d.getElementById('confirmation').close('confirm');await pending;
+  d.getElementById('contract').focus();release();await idle(d);assert.equal(d.getElementById('artifact-panel').hidden,true);assert.equal(d.activeElement,d.getElementById('contract'));
+ }finally{release?.();await idle(d);dom.window.close();}
+});
+test('a failed reload after a decision does not focus the hidden project heading',async()=>{
+ const {w,storage,dom}=await ownerDOM({browserFocus:true}),d=w.document;try{
+  await inspectOwnerArtifact(w,storage);const fetch=w.fetch;
+  w.fetch=async(path,options)=>path.startsWith('/api/state?')?new Response(JSON.stringify({error:'Synthetic decision refresh failure'}),{status:503}):fetch(path,options);
+  d.getElementById('accept').focus();d.getElementById('accept').click();await tick();d.getElementById('confirmation').close('confirm');await idle(d);
+  assert.equal(d.getElementById('project-panel').hidden,true);assert.match(d.getElementById('message').textContent,/Synthetic decision refresh failure/);assert.equal(d.activeElement,d.body);
  }finally{dom.window.close();}
 });
