@@ -204,9 +204,15 @@ def create_server(host,port,config):
             for k,v in (headers or {}).items():
                 for item in (v if isinstance(v,list) else [v]):
                     self.send_header(k,item)
-            self.end_headers()
-            if raw:
-                self.wfile.write(raw)
+            try:
+                self.end_headers()
+                if raw:
+                    self.wfile.write(raw)
+            except (BrokenPipeError,ConnectionResetError):
+                # The peer can leave after an action commits. Only discard this
+                # unbuffered response; application/storage failures stay visible.
+                self.close_connection=True
+                return
             if log_requests and not self.logged:
                 self.logged=True
                 path=self.path.partition('?')[0]

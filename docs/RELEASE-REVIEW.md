@@ -1,5 +1,7 @@
 # Rumbo 0.3.0 review candidate
 
+> **Historical snapshot (2026-10-01).** The commit IDs, PR #1, test counts and unverified items below describe that earlier preparation pass, not the current candidate. The current reliability draft is [PR #7](https://github.com/scking21/rumbo/pull/7), whose description links its verified CI. For current packaging/upload/submission sequencing, follow [SUBMISSION-REQUIREMENTS.md](SUBMISSION-REQUIREMENTS.md#1-release-gates-and-ownership) and [DRAFT-PACKAGING.md](DRAFT-PACKAGING.md). In particular, an authorized upload to create a draft is separate from final submission and publication; this historical report's broader “before any upload” wording does not replace the current staged checklist.
+
 Portability and packaging follow-up prepared 2026-10-01 against verified remote base `21c005d5670c9111526de34fc0001e846bfe4ea6`. All 35 files changed by that commit match the recovered local index byte-for-byte. Local HEAD remains the older `cf61658517f41471f0a3617c6948cc4d2ba5a2ae`; the incremental review patch is against the verified index/remote base, not that older HEAD.
 
 **Status:** implemented and locally tested review candidate. No OpenAI upload, submission, approval or publication; no production deployment, new accounts, persistent credentials or external model calls. [Draft code-review PR #1](https://github.com/scking21/rumbo/pull/1) remains the review destination. This report records pre-push checks for the incremental portability/packaging patch; its own exact-head CI must be checked separately on that PR.
