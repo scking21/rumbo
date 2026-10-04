@@ -10,7 +10,7 @@ The public-plugin goal remains the supported OpenAI-hosted route. Review these a
 - [Sites service terms](HOSTED-TERMS-draft.md)
 - [Sites support](HOSTED-SUPPORT-draft.md)
 
-The copy separates currently deployed v3 (`ca406c4`) from source-only owner-browser deletion and expired-session cleanup awaiting deployment review. Deployed v3 retains project history and has no self-service deletion or hosted restore. The proposed controls retain hash-derived, pseudonymous/linkable guard keys indefinitely to prevent content resurrection; they do not promise anonymous/zero-data erasure or deletion of provider backups/logs. There is no automatic project-age purge. Published review materials remain unchanged until review of the implementation and copy. Source review does not establish live provider handling, legal compliance or public-directory eligibility.
+The copy describes deployed owner-private v4 (Sites source `c477594`), which includes owner-browser deletion and expired-session cleanup from tested GitHub source `efb8fa6`. Hosted restore is not implemented. The controls retain hash-derived, pseudonymous/linkable guard keys indefinitely to prevent content resurrection; they do not promise anonymous/zero-data erasure or deletion of provider backups/logs. There is no automatic project-age purge. Use this deployed-state copy when updating the review materials; verify the published bytes separately. Source review does not establish live provider handling, legal compliance or public-directory eligibility.
 
 ## Separate local distribution
 

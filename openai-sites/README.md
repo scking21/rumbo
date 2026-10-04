@@ -1,6 +1,6 @@
 # OpenAI Sites runtime candidate
 
-This experimental hosted runtime is isolated from Rumbo's canonical Python engine and its unchanged Claude/local distributions. An owner-only private deployment exists at v3, source `ca406c4`. It has not been submitted to or approved for the public directory. Authenticated managed use remains unverified.
+This experimental hosted runtime is isolated from Rumbo's canonical Python engine and its unchanged Claude/local distributions. The owner-only private deployment is v4, Sites source `c477594e6ad1e84e9be5cdb6c3d8e7037d58194b`, with runtime inputs from tested GitHub source `efb8fa6`. It has not been submitted to or approved for the public directory. Authenticated managed use remains unverified.
 
 ## Approved implementation boundary
 
@@ -18,11 +18,11 @@ Hosted artifacts are explicitly uploaded immutable UTF-8 bytes. A hosted server 
 
 Important review cases: concurrent distinct claims, same-content upload races and quotas, replay tampering, stale revisions/dependency decisions, untrusted text and JSON edge cases, tenant/project isolation, identity role spoofing, CSRF and interrupted owner flows.
 
-## Source-only privacy changes
+## Deployed privacy controls
 
-Owner-browser project deletion and expired browser-session cleanup are implemented in source, with exact-head verification tracked in draft PR #7. They are not in deployed v3, and the published review policy is unchanged. The deletion flow requires the exact project ID and a fresh confirmation, blocks further project activity, and supports continuation when cleanup is pending. No MCP delete tool or automatic project-age purge is added.
+Owner-browser project deletion and expired browser-session cleanup are included in deployed v4. The runtime inputs passed exact-head CI at `efb8fa6`; native deployment and additive database migration succeeded on 4 October 2026. No live project deletion was performed for verification. The deletion flow requires the exact project ID and a fresh confirmation, blocks further project activity, and supports continuation when cleanup is pending. No MCP delete tool or automatic project-age purge is added.
 
-Owners should export before deletion; hosted restore is unavailable. Completion removes application-held project content and records while retaining a hash-derived deleted-project key and empty R2 guard objects indefinitely so delayed uploads cannot restore content. Those keys are pseudonymous/linkable technical metadata, not anonymous or zero-data erasure. The same owner cannot reuse that project ID. Provider backups/logs and already downloaded copies are outside the operation. See [the full retention limits](PRIVACY.md#source-only-deletion-and-cleanup-proposal) and [the bounded cleanup procedure](OPERATIONS.md#source-only-deletion-and-session-cleanup).
+Owners should export before deletion; hosted restore is unavailable. Completion removes application-held project content and records while retaining a hash-derived deleted-project key and empty R2 guard objects indefinitely so delayed uploads cannot restore content. Those keys are pseudonymous/linkable technical metadata, not anonymous or zero-data erasure. The same owner cannot reuse that project ID. Provider backups/logs and already downloaded copies are outside the operation. See [the full retention limits](PRIVACY.md#owner-controlled-deletion-and-cleanup) and [the bounded cleanup procedure](OPERATIONS.md#deletion-and-session-cleanup).
 
 ## Current verification status
 
