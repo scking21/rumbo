@@ -18,7 +18,9 @@ Access is limited by the signed-in account and configured project membership. Ke
 
 The hosted candidate reviews the bytes uploaded to it. It cannot inspect changes to your laptop files, synchronize your repository or execute shell tests. Checks and hashes establish only their stated conditions; they do not guarantee correctness, provenance or safety. Review results before relying on them.
 
-There is no guarantee of uninterrupted availability, a support response time or a fix schedule. Keep your own copies of anything you need. Owner export is available; hosted restore and self-service deletion are not implemented in this candidate. The separate data-handling notice describes current retention limits.
+There is no guarantee of uninterrupted availability, a support response time or a fix schedule. Keep your own copies of anything you need. Owner export is available; the currently deployed v3 candidate (source `ca406c4`) has no hosted restore or self-service deletion. The separate [data-handling notice](HOSTED-review-notice-draft.md) describes current retention and proposed source-only deletion controls. Those source changes await deployment review and are not a published service commitment.
+
+If deployed after review, deletion would require owner-browser confirmation, retain pseudonymous hash-derived guard keys indefinitely, and prevent that owner from reusing the deleted project ID. Exports and provider-held copies are outside that operation; provider backup/log deletion timing remains unverified.
 
 ## Software and support
 

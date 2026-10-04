@@ -1,5 +1,5 @@
 import {DatabaseSync} from 'node:sqlite';
-import {readFileSync} from 'node:fs';
+import {readFileSync,readdirSync} from 'node:fs';
 import {Storage} from '../worker/storage.js';
 class D1 {
  constructor(db){this.db=db;}
@@ -7,7 +7,7 @@ class D1 {
  async batch(statements){this.db.exec('BEGIN IMMEDIATE');try{const out=[];for(const s of statements)out.push(await s.run());this.db.exec('COMMIT');return out;}catch(e){this.db.exec('ROLLBACK');throw e;}}
 }
 export function fixture(){
- const db=new DatabaseSync(':memory:');db.exec(readFileSync('drizzle/0000_initial.sql','utf8'));const objects=new Map();
- const bucket={async get(key){if(!objects.has(key))return null;const b=objects.get(key);return {async arrayBuffer(){return b.slice().buffer;}};},async put(key,value){objects.set(key,new Uint8Array(value).slice());return {};}};
+ const db=new DatabaseSync(':memory:');for(const name of readdirSync('drizzle').filter(n=>/^\d+.*\.sql$/.test(n)).sort())db.exec(readFileSync('drizzle/'+name,'utf8'));const objects=new Map();
+ const bucket={async get(key){if(!objects.has(key))return null;const b=objects.get(key);return {async arrayBuffer(){return b.slice().buffer;}};},async put(key,value,options){if(options?.onlyIf?.etagDoesNotMatch==='*'&&objects.has(key))return null;objects.set(key,new Uint8Array(value).slice());return {};}};
  return {db,objects,env:{DB:new D1(db),ARTIFACTS:bucket},storage:new Storage({DB:new D1(db),ARTIFACTS:bucket})};
 }

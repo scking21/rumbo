@@ -1,6 +1,6 @@
 # OpenAI Sites runtime candidate
 
-This experimental hosted runtime is isolated from Rumbo's canonical Python engine and its unchanged Claude/local distributions. An owner-only private deployment exists. It has not been submitted to or approved for the public directory. Authenticated managed use remains unverified.
+This experimental hosted runtime is isolated from Rumbo's canonical Python engine and its unchanged Claude/local distributions. An owner-only private deployment exists at v3, source `ca406c4`. It has not been submitted to or approved for the public directory. Authenticated managed use remains unverified.
 
 ## Approved implementation boundary
 
@@ -17,6 +17,12 @@ Hosted artifacts are explicitly uploaded immutable UTF-8 bytes. A hosted server 
 5. Prepare an exact-commit draft PR and review packet; any authenticated private deployment/connection needs its required tool approval; never submit the public directory listing
 
 Important review cases: concurrent distinct claims, same-content upload races and quotas, replay tampering, stale revisions/dependency decisions, untrusted text and JSON edge cases, tenant/project isolation, identity role spoofing, CSRF and interrupted owner flows.
+
+## Source-only privacy changes
+
+Owner-browser project deletion and expired browser-session cleanup are implemented in source, with exact-head verification tracked in draft PR #7. They are not in deployed v3, and the published review policy is unchanged. The deletion flow requires the exact project ID and a fresh confirmation, blocks further project activity, and supports continuation when cleanup is pending. No MCP delete tool or automatic project-age purge is added.
+
+Owners should export before deletion; hosted restore is unavailable. Completion removes application-held project content and records while retaining a hash-derived deleted-project key and empty R2 guard objects indefinitely so delayed uploads cannot restore content. Those keys are pseudonymous/linkable technical metadata, not anonymous or zero-data erasure. The same owner cannot reuse that project ID. Provider backups/logs and already downloaded copies are outside the operation. See [the full retention limits](PRIVACY.md#source-only-deletion-and-cleanup-proposal) and [the bounded cleanup procedure](OPERATIONS.md#source-only-deletion-and-session-cleanup).
 
 ## Current verification status
 

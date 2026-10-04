@@ -148,4 +148,6 @@ The original 20-run synthetic planning comparison measured version **0.1.0**, no
 
 Local deterministic operation has no telemetry or network requests. The optional OAuth resource server sends presented access tokens to its explicitly configured authorization-server introspection endpoint. Connected AI hosts process tool output under their own terms. See [PRIVACY.md](PRIVACY.md).
 
+The separate hosted candidate retains project history in deployed v3 (`ca406c4`). Owner-browser deletion and expired-session cleanup are source-only changes awaiting deployment review; published policy is unchanged. The proposed deletion removes project content but retains pseudonymous/linkable hash-derived guard keys indefinitely to prevent delayed uploads from restoring it. It does not erase exported/client copies or establish provider backup/log deletion timing. See [hosted data handling and retention](openai-sites/PRIVACY.md).
+
 MIT, Copyright (c) 2026 Corby King.

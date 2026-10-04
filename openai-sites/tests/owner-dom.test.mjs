@@ -53,6 +53,61 @@ async function createOwnerProject(w,storage){
  d.getElementById('create').click();await tick();d.getElementById('confirmation').close('confirm');await idle(d);
  return {contract:c,project:(await storage.listProjects('owner'))[0]};
 }
+test('project deletion requires typed alias and a fresh confirmation; Cancel preserves project',async()=>{
+ const {w,storage,dom}=await ownerDOM(),d=w.document;try{
+  const {project}=await createOwnerProject(w,storage),remove=d.getElementById('delete-project');assert.ok(remove,'Owner deletion control exists');
+  assert.equal(d.getElementById('privacy-panel').hidden,false);
+  d.getElementById('delete-confirmation').value='wrong';remove.click();await idle(d);assert.equal(d.getElementById('confirmation').open,false);assert.equal((await storage.listProjects('owner')).length,1);
+  d.getElementById('delete-confirmation').value=project.alias;remove.click();await tick();assert.equal(d.getElementById('confirmation').open,true);assert.match(d.getElementById('confirm-text').textContent,/cannot be undone/i);assert.match(d.getElementById('confirm-detail').textContent,/provider|backup/i);
+  d.getElementById('confirmation').close('cancel');await idle(d);assert.equal((await storage.listProjects('owner')).length,1);
+  remove.click();await tick();d.getElementById('confirmation').close();await idle(d);assert.equal((await storage.listProjects('owner')).length,1);
+  remove.click();await tick();d.getElementById('confirmation').close('confirm');await idle(d);
+  assert.equal((await storage.listProjects('owner')).length,0);assert.equal(d.getElementById('projects').value,'');assert.equal(d.getElementById('project-panel').hidden,true);assert.equal(d.getElementById('privacy-panel').hidden,true);assert.equal(d.getElementById('contract').value,'');assert.equal(d.getElementById('artifact-text').textContent,'');assert.match(d.getElementById('message').textContent,/content deleted/i);
+ }finally{dom.window.close();}
+});
+test('an interrupted deletion is visibly pending and resumes without re-enabling project actions',async()=>{
+ const {w,storage,dom}=await ownerDOM(),d=w.document;try{
+  const {project}=await createOwnerProject(w,storage),session=await storage.openWorker('owner',project.project_key,'Synthetic maker'),engine=await storage.workerEngine('owner',project.project_key,session.worker_id);
+  await engine.execute('claim_task',{task_id:'first-task',contract_revision:1,lease_seconds:300});await engine.execute('ingest_artifact',{task_id:'first-task',contract_revision:1,filename:'test.txt',content:'hello'});
+  const put=storage.bucket.put.bind(storage.bucket);let fail=true;storage.bucket.put=async(...args)=>{if(fail&&args[1].byteLength===0)throw new Error('Synthetic storage interruption');return put(...args);};
+  assert.ok(d.getElementById('delete-project'),'Owner deletion control exists');d.getElementById('delete-confirmation').value=project.alias;d.getElementById('delete-project').click();await tick();d.getElementById('confirmation').close('confirm');await idle(d);
+  assert.equal(d.getElementById('project-panel').hidden,true);assert.equal(d.getElementById('privacy-panel').hidden,false);assert.match(d.getElementById('message').textContent,/pending/i);assert.match(d.getElementById('delete-project').textContent,/continue/i);
+  d.getElementById('refresh').click();await idle(d);assert.equal(d.getElementById('project-panel').hidden,true);assert.equal(d.getElementById('privacy-panel').hidden,false);
+  fail=false;d.getElementById('delete-project').click();await tick();d.getElementById('confirmation').close('confirm');await idle(d);assert.equal((await storage.listProjects('owner')).length,0);
+ }finally{dom.window.close();}
+});
+test('a deletion request lost before delivery never claims project access is blocked',async()=>{
+ const {w,storage,dom}=await ownerDOM(),d=w.document;try{
+  const {project}=await createOwnerProject(w,storage),fetch=w.fetch;
+  w.fetch=async(path,options)=>{if(path==='/owner/api/delete')throw new Error('Synthetic request not delivered');return fetch(path,options);};
+  d.getElementById('delete-confirmation').value=project.alias;d.getElementById('delete-project').click();await tick();d.getElementById('confirmation').close('confirm');await idle(d);
+  assert.doesNotMatch(d.getElementById('delete-status').textContent,/access is blocked/);assert.match(d.getElementById('delete-status').textContent,/unknown|unconfirmed/i);assert.equal((await storage.listProjects('owner')).length,1);
+  w.fetch=fetch;d.getElementById('refresh').click();await idle(d);assert.equal(d.getElementById('project-panel').hidden,false);
+ }finally{dom.window.close();}
+});
+test('a committed deletion with a lost response remains confirmable after Refresh',async()=>{
+ const {w,storage,dom}=await ownerDOM(),d=w.document;try{
+  const {project}=await createOwnerProject(w,storage),fetch=w.fetch;let lose=true;
+  w.fetch=async(path,options)=>{const response=await fetch(path,options);if(path==='/owner/api/delete'&&lose){lose=false;throw new Error('Synthetic completed response lost');}return response;};
+  d.getElementById('delete-confirmation').value=project.alias;d.getElementById('delete-project').click();await tick();d.getElementById('confirmation').close('confirm');await idle(d);assert.equal((await storage.listProjects('owner')).length,0);
+  d.getElementById('refresh').click();await idle(d);assert.equal(d.getElementById('privacy-panel').hidden,false);assert.equal(d.getElementById('delete-confirmation').value,project.alias);assert.match(d.getElementById('delete-status').textContent,/unknown|unconfirmed/i);
+  d.getElementById('delete-project').click();await tick();d.getElementById('confirmation').close('confirm');await idle(d);assert.match(d.getElementById('message').textContent,/content deleted/i);assert.equal(d.getElementById('projects').value,'');
+ }finally{dom.window.close();}
+});
+test('completed deletion moves lost focus to the project picker',async()=>{
+ const {w,storage,dom}=await ownerDOM({browserFocus:true,retainDialogFocus:true}),d=w.document;try{
+  const {project}=await createOwnerProject(w,storage);d.getElementById('delete-confirmation').value=project.alias;d.getElementById('delete-project').focus();d.getElementById('delete-project').click();await tick();d.getElementById('confirmation').close('confirm');await idle(d);
+  assert.equal(d.activeElement,d.getElementById('projects'));
+ }finally{dom.window.close();}
+});
+test('confirmed deletion remains successful when refreshing the remaining project list fails',async()=>{
+ const {w,storage,dom}=await ownerDOM(),d=w.document;try{
+  const {project}=await createOwnerProject(w,storage),fetch=w.fetch;let deleted=false;
+  w.fetch=async(path,options)=>{if(path==='/api/projects'&&deleted)return new Response(JSON.stringify({error:'Synthetic list interruption'}),{status:503,headers:{'content-type':'application/json'}});const response=await fetch(path,options);if(path==='/owner/api/delete'&&response.ok)deleted=true;return response;};
+  d.getElementById('delete-confirmation').value=project.alias;d.getElementById('delete-project').click();await tick();d.getElementById('confirmation').close('confirm');await idle(d);
+  assert.equal((await storage.listProjects('owner')).length,0);assert.match(d.getElementById('message').textContent,/content deleted/i);assert.doesNotMatch(d.getElementById('message').textContent,/draft has been kept/);assert.equal(d.getElementById('projects').value,'');
+ }finally{dom.window.close();}
+});
 test('creating a project records its selection in the reloadable URL',async()=>{
  const {w,storage,dom}=await ownerDOM();try{const {project}=await createOwnerProject(w,storage);assert.equal(new URLSearchParams(w.location.search).get('project_key'),project.project_key);}finally{dom.window.close();}
 });

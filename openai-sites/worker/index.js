@@ -16,7 +16,7 @@ async function bodyJSON(request){
  const bytes=new Uint8Array(length);let offset=0;for(const chunk of chunks){bytes.set(chunk,offset);offset+=chunk.length;}
  try{return parseJSON(new TextDecoder('utf-8',{fatal:true}).decode(bytes));}catch{fail('INVALID_JSON');}
 }
-function statusFor(code){return code==='FORBIDDEN'?403:code==='REQUEST_TOO_LARGE'?413:code==='CONTENT_TYPE'?415:['STORAGE_UNAVAILABLE','LEDGER_UNREADABLE','ARTIFACT_CORRUPT','PATH_UNSAFE','LEDGER_CORRUPT'].includes(code)?503:code?.startsWith('STALE_')||['LEASE_CONFLICT','CONTRACT_EXISTS','CONCURRENT_MODIFICATION'].includes(code)?409:400;}
+function statusFor(code){return code==='FORBIDDEN'?403:code==='REQUEST_TOO_LARGE'?413:code==='CONTENT_TYPE'?415:['STORAGE_UNAVAILABLE','LEDGER_UNREADABLE','ARTIFACT_CORRUPT','PATH_UNSAFE','LEDGER_CORRUPT'].includes(code)?503:code?.startsWith('STALE_')||['LEASE_CONFLICT','CONTRACT_EXISTS','CONCURRENT_MODIFICATION','PROJECT_DELETING','PROJECT_DELETED'].includes(code)?409:400;}
 export default {async fetch(request,env){
  const url=new URL(request.url),path=url.pathname,subject=user(request);
  try{
@@ -45,6 +45,7 @@ export default {async fetch(request,env){
    await requireBrowserSession(request,storage,subject);const args=await bodyJSON(request);
    if(path==='/owner/api/create'){fields(args,['contract']);return response(await storage.createProject(subject,args.contract.project_id,args.contract));}
    if(path==='/owner/api/export'){fields(args,['project_key']);return exportProject(storage,subject,args.project_key);}
+   if(path==='/owner/api/delete'){fields(args,['project_key','confirmation']);return response(await storage.deleteProject(subject,args.project_key,args.confirmation));}
    if(path==='/owner/api/member'){fields(args,['project_key','subject','role']);return response(await storage.setMember(subject,args.project_key,args.subject,args.role));}
    if(path==='/owner/api/revise'||path==='/owner/api/decide'){
     const expected=path.endsWith('revise')?['project_key','contract','expected_revision','reason']:['project_key','task_id','contract_revision','artifact_revision','outcome','reason'];fields(args,expected);const {project_key,...action}=args;const engine=await storage.engine(subject,project_key,'human');return response(await engine.execute(path.endsWith('revise')?'revise_contract':'decide',action));

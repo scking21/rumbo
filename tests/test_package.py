@@ -257,6 +257,27 @@ class ExtractedDistributionTests(unittest.TestCase):
 
 
 class SitesSourceCompletenessTests(unittest.TestCase):
+    def test_source_archive_preserves_privacy_migration_and_regressions(self):
+        from scripts.package_release import build_source
+        paths = ('drizzle/0001_guarded_project_deletion.sql',
+                 'drizzle/meta/0001_snapshot.json',
+                 'tests/deletion.test.mjs', 'tests/privacy-http.test.mjs')
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)/'source'
+            for name in paths:
+                path = root/'openai-sites'/name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text('Reviewed privacy fixture: '+name+'\n')
+            target = Path(tmp)/'source.zip'
+            try:
+                build_source(root, target)
+            except ValueError as error:
+                self.fail('Reviewed privacy migrations and regressions must be distributable: '+str(error))
+            with zipfile.ZipFile(target) as archive:
+                for name in paths:
+                    self.assertEqual(archive.read('rumbo-0.3.0-source/openai-sites/'+name),
+                                     (root/'openai-sites'/name).read_bytes())
+
     def test_source_archive_includes_reviewed_sites_workflow_tests(self):
         from scripts.package_release import build_source
         with tempfile.TemporaryDirectory() as tmp:

@@ -10,7 +10,7 @@ The public-plugin goal remains the supported OpenAI-hosted route. Review these a
 - [Sites service terms](HOSTED-TERMS-draft.md)
 - [Sites support](HOSTED-SUPPORT-draft.md)
 
-The copy accurately describes D1/R2 storage, managed identity, owner export and the absence of automatic deletion or hosted restore. It makes no promise that unimplemented operations exist. Source review does not establish live provider handling or public-directory eligibility.
+The copy separates currently deployed v3 (`ca406c4`) from source-only owner-browser deletion and expired-session cleanup awaiting deployment review. Deployed v3 retains project history and has no self-service deletion or hosted restore. The proposed controls retain hash-derived, pseudonymous/linkable guard keys indefinitely to prevent content resurrection; they do not promise anonymous/zero-data erasure or deletion of provider backups/logs. There is no automatic project-age purge. Published review materials remain unchanged until review of the implementation and copy. Source review does not establish live provider handling, legal compliance or public-directory eligibility.
 
 ## Separate local distribution
 
