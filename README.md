@@ -12,6 +12,8 @@ The separate [OpenAI Sites runtime](openai-sites/README.md) has an **owner-priva
 
 A Sites review-draft ZIP can be prepared before portal verification, with unresolved fields omitted and a separate honest readiness report. Final submission still needs verified access, required review materials and owner review. See [draft packaging and submission sequence](docs/DRAFT-PACKAGING.md); historical local-only verification is in [the earlier release report](docs/RELEASE-REVIEW.md).
 
+The goal remains a free public plugin in the OpenAI ecosystem, using the existing Sites candidate or another supported OpenAI route without additional-cost services or an external-hosting fallback. No new dashboard or video production is planned. Independent security-audit approval is not a mandatory submission gate; existing test coverage and its limits remain documented. See [current scope and milestones](docs/SUBMISSION-REQUIREMENTS.md#current-scope-and-milestones).
+
 ### What works
 
 - Versioned human-owned contracts with original words, constraints, bounded tasks and dependency checks

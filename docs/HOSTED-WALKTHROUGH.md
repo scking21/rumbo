@@ -1,5 +1,7 @@
 # Hosted walkthrough recording plan
 
+**Reference only; no new recording work is planned.** Video production and further dashboard work are out of scope. This previously prepared guide is retained for accuracy, not as an assigned task or a prerequisite to local/draft packaging.
+
 **Plan only. No video, authenticated hosted run, native-host rendering or managed OAuth proof is supplied by this document.** Use this after an owner authorizes the recording target and test actions. Follow [draft packaging](DRAFT-PACKAGING.md) and [submission requirements](SUBMISSION-REQUIREMENTS.md) for release sequencing; this guide does not resolve private Sites-to-public-directory eligibility.
 
 ## 1. Pin the target before recording

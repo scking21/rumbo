@@ -2,6 +2,8 @@
 
 This document describes the **Python remote deployment profile** and its final release checks. The separate [Sites candidate](../openai-sites/README.md) now has an owner-private deployment, with managed authentication/reviewer access unverified. The historical Python setup plan is not evidence that a Python service, provider account, verified domain/publisher or public-directory submission exists.
 
+This optional Python deployment profile is reference material, not the selected release work. The current goal is the free OpenAI-hosted route; no external hosting, new dashboard or video production is in scope. Its implementation-specific attestations are not universal plugin requirements.
+
 Local ZIP creation must not wait on portal-only checks. Use [Sites review-draft packaging](DRAFT-PACKAGING.md) to prepare the actual hosted candidate without marking those checks complete; upload, external verification, final review and publication are separate steps.
 
 The repository now includes an optional [WorkOS Connect adapter](WORKOS.md), [deployment kit and operational checks](OPERATIONS.md), a separate [Render recipe](RENDER.md), and [SQLite-consistent backup/restore](BACKUP.md). Those locally testable components do not substitute for real deployment/provider approval and verification.
@@ -91,7 +93,7 @@ These are explicit operator attestations, not network checks performed by the pa
 5. Exercise five positive and three negative cases in a fresh real ChatGPT/Codex host, including owner creation → upload → exact-byte review → evidence → acceptance → changed artifact invalidation
 6. Check desktop/mobile layout, keyboard flow, owner login/CSRF, panel global/thread entrypoints and refresh without browser console errors
 7. Record a walkthrough on an accessible approved URL using only synthetic data
-8. Generate the public review ZIP from verified values; inspect its contents, then obtain final owner review before any upload/submission
+8. Generate this final-gated Python-profile ZIP only from verified values; inspect its contents and obtain final owner review before submission. A Sites review-draft upload is an earlier, separate step and does not require this final-gated generator
 9. Upload/scan, submit for review and eventually publish are separate external actions. None is performed by the build script
 
 The source includes tests, security rationale, privacy text and draft case metadata. Listing legal text/identity must be reviewed for the actual operating service; the local policy file alone is not a live-service legal commitment.

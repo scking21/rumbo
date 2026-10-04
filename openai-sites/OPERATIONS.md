@@ -26,13 +26,15 @@ npm run validate
 
 These commands use the existing local dependency tree; they do not install missing packages or provide a browser-download fallback. `npm ci`, `npm audit` and initial browser installation are separate network-requiring preparation steps, not part of this offline run. The flags change only this shell/process environment, not persistent npm or system configuration.
 
-## Release gates
+## Distribution readiness and evidence limits
 
 - Resolve any remaining behavior-parity gaps before presenting the hosted runtime as equivalent for its supported upload workflow
 - Current synthetic CI evidence is recorded per exact head on [draft PR #7](https://github.com/scking21/rumbo/pull/7). Earlier synthetic Chromium workflows passed and their screenshots were visually inspected for runtime source `60a9f9f8e5bc595a3322a38c435592374937a823`. Keep that evidence bound to unchanged runtime inputs. Managed HTTPS/OAuth read-only connection, deployed persistence readback and two separate authenticated reviewer/worker account checks remain unverified
-- Complete independent review; a partially interrupted review is not clearance
-- Establish publisher-approved policy/legal URLs, retention/deletion and recovery procedures, reviewer access, final listing/ZIP and the user's final review
+- Independent security review remains partial. This is a coverage limitation, not a mandatory submission approval or a prerequisite to generating/distributing the local package or creating a review draft. No security clearance is claimed
+- For public MCP review, satisfy the actual portal requirements for the selected supported route, including public listing/legal URLs and final owner review. The checks above describe this optional hosted candidate; do not present every managed-host check as a universal plugin requirement
 - Preserve the local distribution for project-file registration, local file staleness and local backup/restore
+
+The goal remains a free public plugin hosted within the OpenAI ecosystem, with no external-hosting fallback or additional-cost services. The private Sites-to-public-directory route is unresolved; that is a platform question to investigate, not a requirement for the owner to buy hosting. No new dashboard or video work is planned. Existing useful UI is retained. See [submission scope](../docs/SUBMISSION-REQUIREMENTS.md#current-scope-and-milestones).
 
 No automatic final submission, public audience change, merge or reviewer grant is authorized by this candidate's build/test process.
 

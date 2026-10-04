@@ -13,7 +13,7 @@ Hosted artifacts are explicitly uploaded immutable UTF-8 bytes. A hosted server 
 1. Add failing Python-oracle differential tests, then implement validation, replay, projection, mutations and exact-byte review in a storage-independent Worker engine
 2. Add failing D1/R2 integration tests, then implement transactional append-CAS, isolated project memberships, immutable uploads and storage quotas
 3. Add failing HTTP/MCP/owner-route security tests, then implement stateless MCP and same-origin, CSRF-protected owner decisions; never expose owner authority through MCP
-4. Test browser owner flows, full Python and Claude regressions, package output and independent security review
+4. Test browser owner flows, full Python and Claude regressions, package output; record the scope and limits of any independent review
 5. Prepare an exact-commit draft PR and review packet; any authenticated private deployment/connection needs its required tool approval; never submit the public directory listing
 
 Important review cases: concurrent distinct claims, same-content upload races and quotas, replay tampering, stale revisions/dependency decisions, untrusted text and JSON edge cases, tenant/project isolation, identity role spoofing, CSRF and interrupted owner flows.
@@ -22,6 +22,6 @@ Important review cases: concurrent distinct claims, same-content upload races an
 
 The local automated suite includes Python-oracle differential cases, 20,000 seeded finite-number canonicalization comparisons, role/revision/artifact regressions, D1 SQL adapter tests, owner/MCP HTTP tests, DOM interactions and local workerd runtime tests using Miniflare-emulated D1/R2. Emulator success is not proof of managed hosted persistence or OAuth. The separate CI workflow runs real Chromium and retains synthetic desktop/mobile screenshots; its result must be checked on the exact PR commit.
 
-An independent read-only engine/storage review returned several reproducible findings which were fixed with regression tests. Its final report was interrupted by a platform review restriction, so the independent review remains partial. No full security clearance is claimed.
+An independent read-only engine/storage review returned several reproducible findings which were fixed with regression tests. Its final report was interrupted by a platform review restriction, so the independent review remains partial. No full security clearance is claimed. An independent audit is not a published mandatory submission gate and is not required to generate the local package or review draft.
 
-See [data handling](PRIVACY.md), [operations and release gates](OPERATIONS.md), and the separate local Python distribution for capabilities that require local filesystem access. The final public plugin package, public legal URLs, directory submission, managed OAuth user connection, production reviewer grant, and hosted recovery/deletion policy remain separately gated.
+See [data handling](PRIVACY.md), [operations and release gates](OPERATIONS.md), and the separate local Python distribution for capabilities that require local filesystem access. Local distribution readiness, this optional hosted candidate, and public-directory review are separate milestones; see [current scope](../docs/SUBMISSION-REQUIREMENTS.md#current-scope-and-milestones). Managed connection and reviewer tests describe hosted evidence limits, not universal packaging prerequisites.
