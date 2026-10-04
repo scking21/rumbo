@@ -1,0 +1,11 @@
+import {sqliteTable,text,integer,primaryKey,index} from 'drizzle-orm/sqlite-core';
+export const projects=sqliteTable('projects',{key:text('key').primaryKey(),alias:text('alias').notNull(),ownerSubject:text('owner_subject').notNull(),ownerActor:text('owner_actor').notNull(),headSeq:integer('head_seq').notNull().default(0),headDigest:text('head_digest').notNull().default('0000000000000000000000000000000000000000000000000000000000000000'),eventBytes:integer('event_bytes').notNull().default(0),createdAt:integer('created_at').notNull(),lifecycle:text('lifecycle',{enum:['active','deleting']}).notNull().default('active')});
+export const events=sqliteTable('events',{projectKey:text('project_key').notNull().references(()=>projects.key),seq:integer('seq').notNull(),payload:text('payload').notNull(),previous:text('previous').notNull(),digest:text('digest').notNull()},t=>[primaryKey({columns:[t.projectKey,t.seq]})]);
+export const memberships=sqliteTable('memberships',{projectKey:text('project_key').notNull().references(()=>projects.key),subject:text('subject').notNull(),role:text('role',{enum:['worker','reviewer','viewer']}).notNull()},t=>[primaryKey({columns:[t.projectKey,t.subject]})]);
+export const workers=sqliteTable('workers',{id:text('id').primaryKey(),projectKey:text('project_key').notNull().references(()=>projects.key),subject:text('subject').notNull(),actor:text('actor').notNull(),label:text('label').notNull(),expiresAt:integer('expires_at').notNull()});
+export const artifacts=sqliteTable('artifacts',{projectKey:text('project_key').notNull().references(()=>projects.key),digest:text('digest').notNull(),size:integer('size').notNull(),guardWritten:integer('guard_written').notNull().default(0)},t=>[primaryKey({columns:[t.projectKey,t.digest]})]);
+export const browserSessions=sqliteTable('browser_sessions',{idHash:text('id_hash').primaryKey(),subject:text('subject').notNull(),csrfHash:text('csrf_hash').notNull(),expiresAt:integer('expires_at').notNull()});
+export const deletedProjects=sqliteTable('deleted_projects',{key:text('key').primaryKey()});
+// Migration 0001 also installs projects_reject_deleted_key, a custom BEFORE
+// INSERT trigger preventing retired Worker code from reusing deleted keys.
+// Drizzle snapshots do not model triggers; preserve it in future migrations.

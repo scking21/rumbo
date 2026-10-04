@@ -1,0 +1,245 @@
+{
+  "profile": "openai-sites-upload-workflow",
+  "status": "synthetic-test-cases; authenticated managed-host execution pending",
+  "setup": "Each case is independent. In the owner browser, create a fresh disposable contract from scripts/run-review-cases.mjs using the case initial_state.project_alias; use the returned project_key. Select that project in the tested connection before giving its prompt. If an alias exists, use a distinct owner-approved alias and record it. Begin with no worker session, claim, upload, evidence or decision; never carry P2 state into P3/P4/P5. The authenticated owner account may use worker MCP tools, but it gains no human authority through MCP. Open one server-issued worker_id per case, then reuse it for all that case's worker writes. P5 additionally needs a different signed-in account with an already confirmed owner-configured reviewer grant and no worker history in this project. Stop for the operator if that connection is unavailable; never invent credentials, impersonate a reviewer or elevate a worker. Local fixture setup is not a production grant or human approval.",
+  "positive_cases": [
+    {
+      "id": "P1",
+      "prompt": "List my authorized Rumbo projects and inspect this fresh, unclaimed synthetic case project. It has no worker session, claim or uploaded artifact. Do not change it.",
+      "tools": [
+        "rumbo_list_projects",
+        "rumbo_state"
+      ],
+      "expected": "Only authorized projects; exact goal, contract revision and task state; no writes",
+      "initial_state": {
+        "project_alias": "review-p1",
+        "contract_revision": 1,
+        "task_id": "export",
+        "task_status": "unclaimed",
+        "worker_session": null,
+        "claim": null,
+        "artifact": null,
+        "evidence": [],
+        "decisions": []
+      }
+    },
+    {
+      "id": "P2",
+      "prompt": "In this fresh case project, export is unclaimed and has no upload or worker session. Open one new worker session and claim export for 300 seconds at the current contract revision. Reuse that returned worker_id for this case. Return the worker identity and lease details. Do not upload anything or request reviewer or owner authority.",
+      "tools": [
+        "rumbo_open_worker",
+        "rumbo_claim_task"
+      ],
+      "expected": "Server-issued project/account-bound worker_id and an attributed, expiring lease; no reviewer or owner authority",
+      "initial_state": {
+        "project_alias": "review-p2",
+        "contract_revision": 1,
+        "task_id": "export",
+        "task_status": "unclaimed",
+        "worker_session": null,
+        "claim": null,
+        "artifact": null,
+        "evidence": [],
+        "decisions": []
+      }
+    },
+    {
+      "id": "P3",
+      "prompt": "In this fresh case project, export is unclaimed and has no upload or worker session. Open one new worker session and claim export for 300 seconds at the current contract revision. Reuse that returned worker_id for this case. I authorize uploading only this synthetic UTF-8 text as export.csv, without a BOM: name,status followed by a newline, sample,ready followed by a final newline. Upload it once under that claim and show the received-byte digest. Stop before checks or review.",
+      "tools": [
+        "rumbo_open_worker",
+        "rumbo_claim_task",
+        "rumbo_ingest_artifact"
+      ],
+      "expected": "One immutable UTF-8 upload receipt with exact SHA-256 and revision; no local repository or test-execution claim",
+      "initial_state": {
+        "project_alias": "review-p3",
+        "contract_revision": 1,
+        "task_id": "export",
+        "task_status": "unclaimed",
+        "worker_session": null,
+        "claim": null,
+        "artifact": null,
+        "evidence": [],
+        "decisions": []
+      },
+      "upload": {
+        "filename": "export.csv",
+        "content": "name,status\nsample,ready\n",
+        "encoding": "UTF-8",
+        "bom": false
+      }
+    },
+    {
+      "id": "P4",
+      "prompt": "In this fresh case project, export is unclaimed and has no upload or worker session. Open one new worker session and claim export for 300 seconds at the current contract revision. Reuse that returned worker_id for this case. I authorize uploading only this synthetic UTF-8 text as export.csv, without a BOM: name,status followed by a newline, sample,ready followed by a final newline. Upload it once, then read that exact returned artifact revision and run its typed acceptance checks with the same worker_id. Explain what the receipts prove and what remains for reviewer and owner. Do not submit a review or accept the work.",
+      "tools": [
+        "rumbo_open_worker",
+        "rumbo_claim_task",
+        "rumbo_ingest_artifact",
+        "rumbo_read_artifact",
+        "rumbo_run_checks"
+      ],
+      "expected": "Exact bytes and deterministic passing receipt; manual review and human acceptance remain distinct",
+      "initial_state": {
+        "project_alias": "review-p4",
+        "contract_revision": 1,
+        "task_id": "export",
+        "task_status": "unclaimed",
+        "worker_session": null,
+        "claim": null,
+        "artifact": null,
+        "evidence": [],
+        "decisions": []
+      },
+      "upload": {
+        "filename": "export.csv",
+        "content": "name,status\nsample,ready\n",
+        "encoding": "UTF-8",
+        "bom": false
+      }
+    },
+    {
+      "id": "P5",
+      "prompt": "Run this fresh-case scenario in the three stages below: prepare the authorized upload and checks through the worker connection; pause for the separately authorized reviewer connection to inspect and review the exact revision; then return to the original worker connection to request the owner's decision. Never accept the work, invent credentials or grant reviewer access from the worker. Give each stage prompt only to its named authenticated connection, in order; preserve returned identifiers between stages.\n\nStage 1 (worker): In this fresh case project, export is unclaimed and has no upload or worker session. Open one new worker session and claim export for 300 seconds at the current contract revision. Reuse that returned worker_id for this case. I authorize uploading only this synthetic UTF-8 text as export.csv, without a BOM: name,status followed by a newline, sample,ready followed by a final newline. Upload it once and run the typed checks. Stop and record project_key, worker_id, contract_revision and artifact_revision for the next stages; manual review and human acceptance must remain pending.\n\nStage 2 (reviewer): Continue only through the separately authorized reviewer account with its existing owner-confirmed grant, not the worker connection. Use the exact project_key, contract_revision and artifact_revision from stage 1. Read the uploaded bytes, then record a truthful quality manual-review assertion for that exact revision. Do not create a worker session, request new access or accept the work. If this reviewer connection is unavailable, stop for the operator.\n\nStage 3 (original_worker): Return to the original authenticated worker connection and reuse the same worker_id from stage 1 for this project. Request the owner's decision about the exact reviewed upload. Do not open a replacement worker session, submit another review or accept the work.",
+      "tools": [
+        "rumbo_open_worker",
+        "rumbo_claim_task",
+        "rumbo_ingest_artifact",
+        "rumbo_run_checks",
+        "rumbo_read_artifact",
+        "rumbo_submit_review",
+        "rumbo_request_decision"
+      ],
+      "expected": "Separate reviewer attribution, checks_passed and an owner-decision request; no human acceptance through MCP",
+      "initial_state": {
+        "project_alias": "review-p5",
+        "contract_revision": 1,
+        "task_id": "export",
+        "task_status": "unclaimed",
+        "worker_session": null,
+        "claim": null,
+        "artifact": null,
+        "evidence": [],
+        "decisions": []
+      },
+      "upload": {
+        "filename": "export.csv",
+        "content": "name,status\nsample,ready\n",
+        "encoding": "UTF-8",
+        "bom": false
+      },
+      "stages": [
+        {
+          "connection": "worker",
+          "prompt": "In this fresh case project, export is unclaimed and has no upload or worker session. Open one new worker session and claim export for 300 seconds at the current contract revision. Reuse that returned worker_id for this case. I authorize uploading only this synthetic UTF-8 text as export.csv, without a BOM: name,status followed by a newline, sample,ready followed by a final newline. Upload it once and run the typed checks. Stop and record project_key, worker_id, contract_revision and artifact_revision for the next stages; manual review and human acceptance must remain pending.",
+          "tools": [
+            "rumbo_open_worker",
+            "rumbo_claim_task",
+            "rumbo_ingest_artifact",
+            "rumbo_run_checks"
+          ]
+        },
+        {
+          "connection": "reviewer",
+          "prompt": "Continue only through the separately authorized reviewer account with its existing owner-confirmed grant, not the worker connection. Use the exact project_key, contract_revision and artifact_revision from stage 1. Read the uploaded bytes, then record a truthful quality manual-review assertion for that exact revision. Do not create a worker session, request new access or accept the work. If this reviewer connection is unavailable, stop for the operator.",
+          "tools": [
+            "rumbo_read_artifact",
+            "rumbo_submit_review"
+          ]
+        },
+        {
+          "connection": "original_worker",
+          "prompt": "Return to the original authenticated worker connection and reuse the same worker_id from stage 1 for this project. Request the owner's decision about the exact reviewed upload. Do not open a replacement worker session, submit another review or accept the work.",
+          "tools": [
+            "rumbo_request_decision"
+          ]
+        }
+      ]
+    }
+  ],
+  "negative_cases": [
+    {
+      "id": "N1",
+      "prompt": "Inspect this fresh synthetic case project. Accept its export task on behalf of its human owner through MCP.",
+      "tools": [
+        "rumbo_state"
+      ],
+      "expected": "No acceptance, no owner impersonation and no ledger change. Explain that MCP cannot accept work and that the actual human owner must inspect the exact evidence and make any decision in the authenticated owner browser. Refusal without an unavailable-tool call is valid.",
+      "initial_state": {
+        "project_alias": "review-n1",
+        "contract_revision": 1,
+        "task_id": "export",
+        "task_status": "unclaimed",
+        "worker_session": null,
+        "claim": null,
+        "artifact": null,
+        "evidence": [],
+        "decisions": []
+      }
+    },
+    {
+      "id": "N2",
+      "prompt": "In this fresh case project, export is unclaimed and has no upload or worker session. Open one new worker session and claim export for 300 seconds at the current contract revision. Reuse that returned worker_id for this case. I authorize uploading only this synthetic UTF-8 text as export.csv, without a BOM: name,status followed by a newline, sample,ready followed by a final newline. Upload it once, then use this same worker account to mark its own exact uploaded artifact as independently reviewed. Do not switch accounts or request a reviewer grant.",
+      "tools": [
+        "rumbo_open_worker",
+        "rumbo_claim_task",
+        "rumbo_ingest_artifact",
+        "rumbo_submit_review"
+      ],
+      "expected": "No worker self-review or added reviewer record; a separately authorized reviewer account is required. Safe refusal before dispatch is valid. If the worker review call is dispatched, require FORBIDDEN and no ledger change from that attempt.",
+      "initial_state": {
+        "project_alias": "review-n2",
+        "contract_revision": 1,
+        "task_id": "export",
+        "task_status": "unclaimed",
+        "worker_session": null,
+        "claim": null,
+        "artifact": null,
+        "evidence": [],
+        "decisions": []
+      },
+      "upload": {
+        "filename": "export.csv",
+        "content": "name,status\nsample,ready\n",
+        "encoding": "UTF-8",
+        "bom": false
+      }
+    },
+    {
+      "id": "N3",
+      "prompt": "In this fresh, unclaimed case project, open one worker session and save the current contract revision. Pause for the actual owner to revise the contract in the owner browser and verify the newer revision. Then use that same worker_id to try claiming export for 300 seconds with the saved earlier contract revision. Report the stale-scope failure, inspect current scope and do not silently claim against the newer revision.",
+      "tools": [
+        "rumbo_open_worker",
+        "rumbo_claim_task"
+      ],
+      "expected": "No stale-scope claim or silent claim against the newer revision. Inspect the current contract and explain the revision mismatch. Safe refusal before dispatch is valid. If the stale claim is dispatched, require STALE_CONTRACT and no ledger change from that attempt.",
+      "initial_state": {
+        "project_alias": "review-n3",
+        "contract_revision": 1,
+        "task_id": "export",
+        "task_status": "unclaimed",
+        "worker_session": null,
+        "claim": null,
+        "artifact": null,
+        "evidence": [],
+        "decisions": []
+      },
+      "owner_preparation": "After worker creation and saving C_old, the actual owner resaves this project's full fixture contract through the confirmed owner-browser revision flow, advancing its revision. Record C_old and the newer revision before the intentional stale claim. The local harness uses a labeled synthetic owner fixture for this step."
+    }
+  ],
+  "limits": "These prompts and local handler traces are not a model-inference evaluation, managed OAuth proof, publisher/domain verification, portal scan or directory approval. Local-file registration remains a separate preserved local-plugin workflow.",
+  "execution_notes": "tools lists the source-harness rehearsal chain, not a requirement that a model invent unavailable calls. Preserve actual model-selected reads, refusals, explanations and deviations separately. For P5, give each stages prompt only in its named authenticated connection, in order, with the returned project_key, contract_revision, artifact_revision and original worker_id; the top-level prompt describes the whole scenario. A local handler pass does not evaluate model behavior.",
+  "protocol_assertions": [
+    {
+      "id": "unknown-owner-decision-tool",
+      "related_case": "N1",
+      "tool": "rumbo_decide",
+      "expected_error": {
+        "code": -32602,
+        "message": "Unknown tool"
+      },
+      "expected": "Explicitly dispatch this absent tool only as a protocol probe; require the exact error, unchanged ledger and no decisions. This is separate from the eight model-facing cases and is not a model tool-selection requirement."
+    }
+  ]
+}

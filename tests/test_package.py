@@ -2,6 +2,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import shutil
 import sys
 import tempfile
 import unittest
@@ -135,3 +136,160 @@ class PackageTests(unittest.TestCase):
             schema=json.loads((ROOT/'schemas'/f'{name}.schema.json').read_text())
             data=json.loads((ROOT/'openai-plugin/rumbo'/f'{name}.json').read_text())
             jsonschema.Draft202012Validator(schema).validate(data)
+
+
+class PackageCompletenessTests(unittest.TestCase):
+    def copy_source(self, destination):
+        root = Path(destination)/'source'
+        for folder in ('openai-plugin', 'rumbo', 'docs'):
+            shutil.copytree(ROOT/folder, root/folder,
+                            ignore=shutil.ignore_patterns('__pycache__'))
+        shutil.copy(ROOT/'LICENSE', root/'LICENSE')
+        return root
+
+    def test_local_package_rejects_each_missing_required_plugin_input(self):
+        required = ['plugin.json', 'mcp.json', 'README.md',
+                    '.codex-plugin/plugin.json', 'assets/icon.svg',
+                    'scripts/run_mcp.py', 'skills/coordinate-work/SKILL.md',
+                    'skills/review-evidence/SKILL.md']
+        for relative in required:
+            with self.subTest(relative=relative), tempfile.TemporaryDirectory() as tmp:
+                root = self.copy_source(tmp)
+                (root/'openai-plugin/rumbo'/relative).unlink()
+                target = Path(tmp)/'local.zip'
+                with self.assertRaisesRegex(ValueError, 'Missing required plugin input'):
+                    build_local(root, target)
+                self.assertFalse(target.exists())
+
+    def test_local_package_rejects_each_missing_launcher_runtime_module(self):
+        for module in ('__init__.py', 'core.py', 'protocol.py', 'registry.py', 'installed.py'):
+            with self.subTest(module=module), tempfile.TemporaryDirectory() as tmp:
+                root = self.copy_source(tmp)
+                (root/'rumbo'/module).unlink()
+                target = Path(tmp)/'local.zip'
+                with self.assertRaisesRegex(ValueError, 'Missing required local runtime input'):
+                    build_local(root, target)
+                self.assertFalse(target.exists())
+
+    def test_submission_rejects_missing_remote_workflow_files(self):
+        from scripts.package_release import GATES
+        config = {key: 'https://rumbo.company.dev/'+key for key in
+                  ('website_url', 'support_url', 'privacy_url', 'terms_url', 'video_url')}
+        config.update(mcp_url='https://rumbo.company.dev/mcp',
+                      attestations={gate: True for gate in GATES})
+        for relative in ('assets/icon.svg', 'skills/coordinate-work/SKILL.md',
+                         'skills/review-evidence/SKILL.md'):
+            with self.subTest(relative=relative), tempfile.TemporaryDirectory() as tmp:
+                root = self.copy_source(tmp)
+                (root/'openai-plugin/rumbo'/relative).unlink()
+                target = Path(tmp)/'submission.zip'
+                with self.assertRaisesRegex(ValueError, 'Missing required plugin input'):
+                    build_submission(root, target, config)
+                self.assertFalse(target.exists())
+
+
+class DistributionMetadataTests(unittest.TestCase):
+    def test_claude_spec_uses_current_marketplace_source(self):
+        marketplace = json.loads((ROOT/'.claude-plugin/marketplace.json').read_text())
+        plugin = next(item for item in marketplace['plugins'] if item['name'] == 'rumbo')
+        self.assertTrue((ROOT/plugin['source']/'.claude-plugin/plugin.json').is_file())
+        self.assertIn('source `'+plugin['source']+'`',
+                      (ROOT/'claude-plugin/rumbo/SPEC.md').read_text())
+
+    def test_claude_spec_uses_independent_manifest_version(self):
+        manifest = json.loads((ROOT/'claude-plugin/rumbo/.claude-plugin/plugin.json').read_text())
+        self.assertIn('version `'+manifest['version']+'`',
+                      (ROOT/'claude-plugin/rumbo/SPEC.md').read_text())
+
+
+class ExtractedDistributionTests(unittest.TestCase):
+    def test_local_archive_contains_canonical_runtime_bytes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp)/'local.zip'
+            build_local(ROOT, target)
+            with zipfile.ZipFile(target) as archive:
+                runtime = {'rumbo/rumbo/'+path.name: path.read_bytes()
+                           for path in (ROOT/'rumbo').glob('*.py')}
+                runtime['rumbo/rumbo/web/board.html'] = (ROOT/'rumbo/web/board.html').read_bytes()
+                packaged = {name: archive.read(name) for name in archive.namelist()
+                            if name.startswith('rumbo/rumbo/')}
+                self.assertEqual(packaged, runtime)
+                self.assertFalse(any('claude' in name or '/hooks/' in name
+                                     for name in archive.namelist()))
+
+    def test_source_archive_runs_preserved_independent_claude_hooks(self):
+        from scripts.package_release import build_source
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            target = directory/'source.zip'
+            build_source(ROOT, target)
+            with zipfile.ZipFile(target) as archive:
+                archive.extractall(directory/'extracted')
+                root = directory/'extracted'/archive.namelist()[0].split('/')[0]
+                plugin = root/'claude-plugin/rumbo'
+                for script in ('show.sh', 'stop-gate.sh'):
+                    path = plugin/'scripts'/script
+                    member = path.relative_to(directory/'extracted').as_posix()
+                    mode = archive.getinfo(member).external_attr >> 16
+                    self.assertEqual(mode & 0o777, 0o755)
+                    # zipfile does not restore Unix modes; ordinary unzip does.
+                    path.chmod(mode & 0o777)
+                self.assertEqual((plugin/'scripts/record.py').read_bytes(),
+                                 (ROOT/'claude-plugin/rumbo/scripts/record.py').read_bytes())
+                manifest = json.loads((plugin/'.claude-plugin/plugin.json').read_text())
+                self.assertEqual(manifest, json.loads((ROOT/'claude-plugin/rumbo/.claude-plugin/plugin.json').read_text()))
+            project = directory/'synthetic-project'
+            (project/'.rumbo').mkdir(parents=True)
+            shutil.copy(plugin/'tests/fixtures/workshop.json', project/'.rumbo/record.json')
+            env = dict(os.environ, CLAUDE_PLUGIN_ROOT=str(plugin),
+                       CLAUDE_PROJECT_DIR=str(project), RUMBO_STATE_DIR=str(directory/'state'))
+            shown = subprocess.run([str(plugin/'scripts/show.sh')], input='{}',
+                                   text=True, capture_output=True, env=env, cwd=directory, timeout=10)
+            self.assertEqual(shown.returncode, 0, shown.stderr)
+            self.assertIn('CONFLICT C1', shown.stdout)
+            self.assertIn('CONFLICT C2', shown.stdout)
+            stopped = subprocess.run([str(plugin/'scripts/stop-gate.sh')],
+                input=json.dumps({'session_id': 'packaging-smoke',
+                                  'transcript_path': str(plugin/'tests/fixtures/transcript.jsonl')}),
+                text=True, capture_output=True, env=env, cwd=directory, timeout=10)
+            self.assertEqual(stopped.returncode, 0, stopped.stderr)
+            self.assertEqual(json.loads(stopped.stdout)['decision'], 'block')
+
+
+class SitesSourceCompletenessTests(unittest.TestCase):
+    def test_source_archive_preserves_privacy_migration_and_regressions(self):
+        from scripts.package_release import build_source
+        paths = ('drizzle/0001_guarded_project_deletion.sql',
+                 'drizzle/meta/0001_snapshot.json',
+                 'tests/deletion.test.mjs', 'tests/privacy-http.test.mjs')
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)/'source'
+            for name in paths:
+                path = root/'openai-sites'/name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text('Reviewed privacy fixture: '+name+'\n')
+            target = Path(tmp)/'source.zip'
+            try:
+                build_source(root, target)
+            except ValueError as error:
+                self.fail('Reviewed privacy migrations and regressions must be distributable: '+str(error))
+            with zipfile.ZipFile(target) as archive:
+                for name in paths:
+                    self.assertEqual(archive.read('rumbo-0.3.0-source/openai-sites/'+name),
+                                     (root/'openai-sites'/name).read_bytes())
+
+    def test_source_archive_includes_reviewed_sites_workflow_tests(self):
+        from scripts.package_release import build_source
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)/'source'
+            path = root/'openai-sites/tests/workflows.test.mjs'
+            path.parent.mkdir(parents=True)
+            path.write_text('// Reviewed workflow regression fixture.\n')
+            target = Path(tmp)/'source.zip'
+            try:
+                build_source(root, target)
+            except ValueError as error:
+                self.fail('Reviewed Sites workflow tests must be distributable: '+str(error))
+            with zipfile.ZipFile(target) as archive:
+                self.assertEqual(archive.read('rumbo-0.3.0-source/openai-sites/tests/workflows.test.mjs'),
+                                 path.read_bytes())

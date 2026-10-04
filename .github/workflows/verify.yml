@@ -20,7 +20,7 @@ jobs:
           python-version: '3.12'
       - name: Install official registry test dependencies
         run: |
-          python -m pip install -r requirements-authkit.txt 'playwright==1.62.0' 'jsonschema==4.26.0'
+          python -m pip install -r requirements-authkit.txt 'playwright==1.62.0' 'jsonschema==4.26.0' 'setuptools==84.0.0' 'wheel==0.48.0'
           python -m playwright install --with-deps chromium
           node --version
       - name: Run all new tests with real Chromium and no skips
@@ -28,6 +28,8 @@ jobs:
           RUMBO_BROWSER_TESTS: '1'
           RUMBO_SCREENSHOT_DIR: qa-artifacts
         run: python scripts/run_tests.py --strict
+      - name: Verify wheel offline in a clean isolated environment
+        run: python scripts/verify_installed_wheel.py
       - name: Run preserved Claude adapter tests
         working-directory: claude-plugin/rumbo
         run: python -m unittest discover -s tests -v
@@ -61,6 +63,11 @@ jobs:
           python -m unittest discover -s tests -p test_demo.py -v
           python -m unittest discover -s tests -p test_backup.py -v
           python -m unittest discover -s tests -p test_installed.py -v
+          python -m unittest discover -s tests -p test_readonly_verify.py -v
+          python -m unittest discover -s tests -p test_artifact_json_policy.py -v
+          python -m unittest discover -s tests -p test_json_check_cache.py -v
+          python -m unittest discover -s tests -p test_decision_clock.py -v
+          python -m unittest discover -s tests -p test_http_disconnect.py -v
       - name: Verify legacy adapter floor
         working-directory: claude-plugin/rumbo
         run: python -m unittest discover -s tests -v
@@ -96,3 +103,8 @@ jobs:
           python -m unittest discover -s tests -p test_backup.py -v
           python -m unittest discover -s tests -p test_installed.py -v
           python -m unittest discover -s tests -p test_protocol.py -v
+          python -m unittest discover -s tests -p test_readonly_verify.py -v
+          python -m unittest discover -s tests -p test_artifact_json_policy.py -v
+          python -m unittest discover -s tests -p test_json_check_cache.py -v
+          python -m unittest discover -s tests -p test_decision_clock.py -v
+          python -m unittest discover -s tests -p test_http_disconnect.py -v

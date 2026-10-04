@@ -14,5 +14,39 @@ Deliver a real provider-neutral contract/evidence referee, a local acceptance bo
 - Keep Claude adapter; fix legacy source reference scope and missing/unreadable transcript handling with regression coverage. Existing historical benchmark remains old-version evidence only.
 - Submission ZIP excludes lifecycle hooks and registered app references; includes portable plugin manifest, remote MCP configuration template only when endpoint is externally configured, workflow skills, reviewer cases and honest preparation status.
 
+## Decision time and lease expiry
+
+Each mutation uses one finite numeric decision timestamp for lease eligibility,
+prepared mutation metadata, and the ledger event's `at`. In Python it is captured
+only after `BEGIN IMMEDIATE` has acquired the write lock and the ledger has been
+replayed. In Sites it is captured after the asynchronous state read and replay,
+separately for each optimistic compare-and-swap attempt. A failed append discards
+that attempt's eligibility decision; a retry rereads/replays and samples again.
+
+This sample is the lease-eligibility linearization point, not a completion or
+commit timestamp. Artifact reads, checks, hashing, and storage may finish after
+it. Work eligible at that point retains that decision for the attempt; no second
+clock sample retroactively revokes it. A lease expiring at or before the decision
+time is absent, including exact fractional-second boundaries. Expired claims
+cannot authorize artifact submission; existing same-actor renewal and expired
+lease reclamation rules are unchanged. The clock does not add lease requirements
+to actions that previously had none or change actor/role authorization.
+
+Read-only snapshots sample fresh time. A mutation also builds a fresh candidate
+return projection before persistence completes: Python validates it before the
+SQLite transaction commits, and Sites validates it before its CAS append. Each
+Sites retry rebuilds this projection with a new clock sample. The response can
+already show an expired lease while event/artifact metadata retains the earlier
+valid decision time, or show a lease that expires while append/commit completes.
+It describes the projection sample, not elapsed time inside persistence; a later
+snapshot samples again.
+
+Invalid, nonnumeric, boolean, or nonfinite clock values fail with `BAD_CLOCK`.
+An invalid decision or return-projection clock leaves the ledger unchanged;
+there is no stale-projection fallback. Uploaded content-addressed blobs may
+already have been stored and can remain unreferenced after a failed attempt,
+as with other pre-append failures. The host supplies the trusted clock; this does
+not protect against a dishonest or backward-moving host clock.
+
 ## Acceptance
-Run complete legacy and new suites, real stdio and HTTP protocol subprocess tests, concurrent lease contention, persistence/restart, stale revisions, forged role input, malformed data, path confinement and injection rendering. Visually inspect desktop and narrow board. Validate schemas/package, deterministic reproduction and ZIP contents. Deliver artifacts, exact commands/logs and outstanding account/hosting/listing/video gates.
+Run complete legacy and new suites, real stdio and HTTP protocol subprocess tests, concurrent lease contention, persistence/restart, stale revisions, forged role input, malformed data, path confinement and injection rendering. Visually inspect desktop and narrow board. Validate schemas/package, deterministic reproduction and ZIP contents. Deliver artifacts and exact commands/logs. Separate local distribution evidence, optional hosted validation and actual public-review requirements as documented in [current scope](SUBMISSION-REQUIREMENTS.md#current-scope-and-milestones); do not turn unverified checks into universal gates.

@@ -1,0 +1,2 @@
+import {defineConfig} from '@playwright/test';
+export default defineConfig({testDir:'tests/browser',workers:1,retries:0,timeout:30000,use:{baseURL:'http://localhost:8766',browserName:'chromium',headless:true,screenshot:'only-on-failure'},reporter:[['list'],['html',{outputFolder:'qa-artifacts/report',open:'never'}]],webServer:{command:'RUMBO_SYNTHETIC_BROWSER_TESTS=1 node scripts/browser-test-server.mjs',url:'http://localhost:8766/healthz',reuseExistingServer:false,timeout:15000}});

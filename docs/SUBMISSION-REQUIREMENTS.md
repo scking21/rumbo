@@ -1,18 +1,18 @@
 # Rumbo public-plugin readiness checklist
 
-Verified 2026-10-01 against current OpenAI plugin documentation after DevDay, not the retired 2023 plugins model. This is an implementation/review checklist, not a claim of deployment, platform validation, submission, approval, or publication.
+Initial requirements checked 2026-10-01; upload-versus-submission sequencing corrected against the current reference on 2026-10-02. This is a preparation/review checklist. A separate owner-private Sites deployment exists; managed authentication, platform validation, submission, approval and publication remain unverified.
 
 ## 1. Release gates and ownership
 
-**Local development can finish without accounts or deployment. Public review cannot.** Keep separate milestones:
+**Local draft packaging can finish before portal-only checks.** Keep separate milestones:
 
-1. **Local review candidate:** implemented engine, transports, native UI resource, skills, fixtures, reproducible tests, deployment instructions, and an honest readiness report.
-2. **Production preparation, after authorization:** stable public HTTPS service; real authentication and storage; approved public legal/support pages; account/domain setup; safe reviewer account; real host QA and accessible video.
-3. **Upload/scan:** uploads information to OpenAI and creates a draft. This is an external action, distinct from local packaging.
-4. **Submit for review:** selected draft plus policy attestations enters review. Hold for the user's final review/approval.
+1. **Local review draft:** package the actual distribution's manifest, skills and remote endpoint; validate source/case/tool consistency and record missing fields/checks separately. The [Sites draft builder](DRAFT-PACKAGING.md) does this without claiming final readiness.
+2. **Upload to create a draft, after authorization:** select the verified developer identity and upload the ZIP. Account identity is required here, not for local archive creation.
+3. **Portal setup and review preparation:** complete actual HTTPS/authentication/domain verification, scan the MCP tools, inspect findings, finalize legal/support URLs, prepare reviewer access, run the managed-host cases and provide accessible video. These checks must not be marked complete merely to produce a ZIP.
+4. **Submit for review:** selected draft plus required review information and policy attestations enters review. Hold for the user's final review/approval.
 5. **Publish:** separate action after OpenAI approval makes the listing discoverable. Approval alone does not publish it.
 
-Do not relabel localhost, a development tunnel, bearer-token fixtures, example domains, unrun test prompts, or a private Site as production readiness. A release packager should fail closed until real required values are supplied. Build local/demo packages separately from the submission ZIP.
+Do not relabel localhost, fixtures, example domains, unrun test prompts or an owner-private Site as production readiness. The draft builder permits unresolved optional-at-upload metadata to remain absent. Final release validation remains strict. See the [official upload/submission sequence](https://developers.openai.com/plugins/deploy/submission).
 
 ## 2. Package contract
 
@@ -47,6 +47,8 @@ Portable schemas reject unknown root fields; use `extensions`, not arbitrary man
 
 ## 3. Submission materials
 
+These are final public MCP review requirements, not prerequisites to generating or uploading a draft. Optional-at-upload fields can be omitted and recorded in the readiness sidecar; see [draft packaging](DRAFT-PACKAGING.md).
+
 - Include MCP in the first ZIP; later addition to skills-only listings is unsupported
 - No `apps`/`.app.json` references or lifecycle hooks in the public ZIP
 - Only one MCP connection per plugin is currently supported
@@ -62,7 +64,7 @@ Authoritative flow and complete field examples: [Submission](https://developers.
 
 ### Metadata and archive checks
 
-In `extensions.com.openai.interface`, require display name and subtitle ≤30 characters each; description ≤4000; developer name ≤80; category matching dashboard. Add `websiteURL`, `supportURL`, `privacyPolicyURL`, `termsOfServiceURL`, `logo`, `composerIcon`. Include referenced assets. Optional starters: ≤3, ≤128 characters each, no plugin @mentions. Icons: square ≥48px, ≤5 MiB; PNG/JPEG/WebP/SVG; raster ≤4096px. ZIP: ≤100 MB compressed, ≤512 MiB expanded, ≤5000 entries, ≤20 path segments; one plugin root; no symlinks, encrypted files, traversal, collisions, or secrets. [Submission validation reference](https://developers.openai.com/plugins/deploy/submission-errors)
+For final review, in `extensions.com.openai.interface`, provide display name and subtitle ≤30 characters each; description ≤4000; developer name ≤80; category matching dashboard. Add `websiteURL`, `supportURL`, `privacyPolicyURL`, `termsOfServiceURL`, `logo`, `composerIcon`. Include referenced assets. Optional starters: ≤3, ≤128 characters each, no plugin @mentions. Icons: square ≥48px, ≤5 MiB; PNG/JPEG/WebP/SVG; raster ≤4096px. ZIP: ≤100 MB compressed, ≤512 MiB expanded, ≤5000 entries, ≤20 path segments; one plugin root; no symlinks, encrypted files, traversal, collisions, or secrets. [Submission validation reference](https://developers.openai.com/plugins/deploy/submission-errors)
 
 ## 4. Production MCP and authentication
 
@@ -86,7 +88,7 @@ Review uses a dedicated fully featured sample-data account: working login URL an
 
 ## 5. Native interactive project board
 
-UI is optional for directory eligibility, but Rumbo's requested panel needs a real MCP Apps resource. A standalone HTTP board is not evidence of host integration. New UI uses shared MCP Apps `ui/*` JSON-RPC over `postMessage`; feature-detect optional `window.openai` extensions. Tools must remain useful without UI. Prefer separate data tools and a board-opening/render tool. [MCP UI](https://developers.openai.com/plugins/build/chatgpt-ui)
+UI is optional for directory eligibility. No new dashboard work is planned; this section documents the existing optional panel, which needs a real MCP Apps resource to claim native-host integration. A standalone HTTP board is not evidence of host integration. New UI uses shared MCP Apps `ui/*` JSON-RPC over `postMessage`; feature-detect optional `window.openai` extensions. Tools must remain useful without UI. Prefer separate data tools and a board-opening/render tool. [MCP UI](https://developers.openai.com/plugins/build/chatgpt-ui)
 
 Example tool metadata:
 
@@ -138,13 +140,17 @@ Events are not needed for the first useful plugin. Do not claim them until imple
 
 ## 8. Sites hosting caveat
 
-Sites can host stateless HTTP MCP with managed OAuth and site-scoped authenticated identities; its automatic plugin is private. Existing documentation does not establish a supported public-directory promotion route or exemption from public endpoint/domain-verification/reviewer requirements. A public Site audience alone does not publish a directory listing. Do not create another plugin or replace managed OAuth speculatively. Sites also requires a Workers-compatible deployment; current Python/SQLite local implementation would need an explicit compatible adapter/storage plan. No Site was created or deployed for this research. [Sites](https://learn.chatgpt.com/docs/sites), [Public plugin publishing](https://developers.openai.com/plugins/deploy/submission)
+Sites can host stateless HTTP MCP with managed OAuth and site-scoped authenticated identities; its automatic plugin is private. Existing documentation does not establish a supported public-directory promotion route or exemption from public endpoint/domain-verification/reviewer requirements. A public Site audience alone does not publish a directory listing. Do not create another plugin or replace managed OAuth speculatively. Sites requires a Workers-compatible deployment; the separate experimental Worker/D1/R2 candidate is implemented and privately deployed. It is not the canonical Python/SQLite executable. The unresolved item is the supported public-directory route, not the existence of a hosted candidate. [Sites](https://learn.chatgpt.com/docs/sites), [Public plugin publishing](https://developers.openai.com/plugins/deploy/submission)
 
-## Current blockers before claiming submission-ready
+## Current scope and milestones
 
-- Approved production hostname/hosting and deployment have not been established
-- End-user OAuth provider/integration and secure human decision path need production verification
-- Publisher identity/permissions/project residency and domain ownership challenge remain unverified
-- Public product/support/privacy/terms pages need real approved URLs
-- Dedicated safe reviewer account, actual in-host evidence, and accessible walkthrough recording remain to be supplied
-- User must review the finished candidate before submission; no upload, attestations, submission, or publication was performed
+The goal remains a **free public plugin in the OpenAI ecosystem**, with final submission reviewed by the owner. Continue investigating the existing OpenAI Sites candidate and supported OpenAI platform route; no external-hosting fallback or additional-cost service is in scope. No new dashboard work is planned; existing useful UI is retained. The [OpenAI-hosted review materials](https://rumbo-review-materials.aggie-king21.chatgpt.site/) now contain the authorized synthetic film and approved policy review copy. A local package is not a substitute for the public-plugin goal.
+
+- **Local distribution:** the stdio plugin/source packages have reproducible builds and automated installation, workflow and recovery evidence. They do not require hosted OAuth, public legal URLs, a video or an independent security audit merely to be packaged or used locally. Native-host installation has not been proven by package tests.
+- **Review-draft preparation:** the Sites review ZIP can be generated with optional-at-upload fields missing and recorded separately. Missing final-review materials do not block local draft generation. Upload is a separate authorized action requiring portal access.
+- **Optional hosted candidate:** the owner-private Sites deployment exists, but actual managed connection, separate reviewer use and deployed persistence evidence are unverified. These are limits of claims about this candidate, not universal prerequisites for every plugin distribution. Private Sites-to-public-directory support remains an unresolved platform question; no additional paid hosting requirement is established.
+- **Public MCP review:** the current official route requires a reachable supported endpoint, applicable authentication/domain/publisher checks, four HTTPS listing URLs, five positive and three negative cases, an accessible walkthrough recording and the required portal attestations. The published synthetic local-engine film does not establish real managed-host execution. Video remains optional in the draft ZIP. Resolve any route-specific alternatives through official platform guidance rather than inventing an exemption or assigning extra work.
+- **Security evidence:** regression tests and ordinary correctness reviews are available; independent review remains partial. No security clearance is claimed. An independent security audit/approval is not a published mandatory submission gate. Portal tool scanning is a separate platform step.
+- **Owner review:** the finished public candidate remains subject to the owner's final review. No submission or publication is claimed.
+
+The [free-product policy/support drafts](legal/README.md) cover the hosted candidate and local distribution separately. Keep these materials consistent with the actual product and MIT license; do not invent accounts, billing, telemetry, jurisdiction, retention promises or a new legal entity. Public URLs must eventually serve the approved content for public review; local text alone does not establish a deployed page.

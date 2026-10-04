@@ -100,6 +100,16 @@ class CoreTests(unittest.TestCase):
         with self.assertRaisesRegex(RumboError, 'STALE_CONTRACT'):
             self.claim()
 
+    def test_complete_contract_replacement_does_not_inherit_demo_flag(self):
+        synthetic = contract()
+        synthetic['demo'] = True
+        self.owner.execute('revise_contract', dict(contract=synthetic, expected_revision=1, reason='Synthetic fixture'))
+        self.assertTrue(self.owner.snapshot()['demo'])
+        normal = contract()
+        self.owner.execute('revise_contract', dict(contract=normal, expected_revision=2, reason='Replace complete contract'))
+        self.assertFalse(self.owner.snapshot()['demo'])
+        self.assertFalse(Engine(self.root, 'viewer', 'viewer').snapshot()['demo'])
+
     def test_rejected_decision_supersedes_acceptance(self):
         self.accept()
         self.owner.execute('decide', dict(task_id='export', contract_revision=1, artifact_revision=1, outcome='rejected', reason='Found incorrect rows'))
@@ -144,6 +154,14 @@ class CoreTests(unittest.TestCase):
         c = contract(); c['tasks'][0]['dependencies'] = ['export']
         with self.assertRaisesRegex(RumboError, 'DEPENDENCY_CYCLE'):
             self.owner.execute('revise_contract', dict(contract=c, expected_revision=1, reason='edit'))
+
+    def test_check_kind_requires_text_without_changing_contract(self):
+        for kind in ([], {}, None, True, 1):
+            c = contract()
+            c['tasks'][0]['acceptance'][0]['kind'] = kind
+            with self.subTest(kind=kind), self.assertRaisesRegex(RumboError, 'BAD_INPUT'):
+                self.owner.execute('revise_contract', dict(contract=c, expected_revision=1, reason='edit'))
+            self.assertEqual(self.owner.snapshot()['contract_revision'], 1)
 
     def test_dependency_rejection_invalidates_downstream_acceptance(self):
         c = contract(); c['tasks'].append(dict(id='docs', title='Docs', dependencies=['export'], acceptance=[dict(id='doc', kind='file_contains', value='name')]))
@@ -310,6 +328,131 @@ class CoreTests(unittest.TestCase):
             with self.assertRaisesRegex(RumboError,'STORAGE_LIMIT'):
                 self.worker.execute('ingest_artifact',dict(args,content='other bytes'))
         self.assertEqual(len(list((self.root/'.rumbo/artifacts').iterdir())),1)
+
+    def test_full_ledger_rejects_upload_before_storing_uncommitted_bytes(self):
+        from unittest.mock import patch
+        self.claim()
+        before = self.owner.snapshot()
+        with patch('rumbo.core.MAX_LEDGER_BYTES', 1):
+            with self.assertRaisesRegex(RumboError, 'LEDGER_LIMIT'):
+                self.worker.execute('ingest_artifact', dict(task_id='export', contract_revision=1,
+                    filename='uncommitted.txt', content='Unique text rejected by the full ledger'))
+        self.assertEqual(self.owner.snapshot()['ledger_head'], before['ledger_head'])
+        self.assertFalse((self.root/'.rumbo/artifacts').exists())
+
+    def test_abrupt_upload_exit_never_publishes_partial_digest_and_retry_recovers(self):
+        # A digest path must only become visible after complete bytes are durable.
+        import hashlib
+        import subprocess
+        import sys
+        child = r"""
+import json, os, stat, sys
+from pathlib import Path
+from rumbo.core import Engine
+phase = sys.argv[2]
+original_open, original_sync, original_link = os.fdopen, os.fsync, os.link
+class CrashWriter:
+    def __init__(self, handle): self.handle = handle
+    def __enter__(self): return self
+    def __exit__(self, *args): self.handle.close()
+    def write(self, data):
+        self.handle.write(data[:3]); self.handle.flush(); os._exit(77)
+def fdopen(fd, mode, *args, **kwargs):
+    if mode == 'wb' and phase == 'before_write': os._exit(77)
+    handle = original_open(fd, mode, *args, **kwargs)
+    return CrashWriter(handle) if mode == 'wb' and phase == 'partial_write' else handle
+def fsync(fd):
+    original_sync(fd)
+    if phase == 'file_synced' and stat.S_ISREG(os.fstat(fd).st_mode): os._exit(77)
+def link(*args, **kwargs):
+    original_link(*args, **kwargs)
+    if phase == 'published': os._exit(77)
+os.fdopen, os.fsync, os.link = fdopen, fsync, link
+original_store = Engine._store_upload
+def store(self, *args):
+    original_store(self, *args)
+    if phase == 'before_commit': os._exit(77)
+Engine._store_upload = store
+Engine(Path(sys.argv[1]), 'maker', 'worker', clock=lambda:1000).execute('ingest_artifact', json.loads(sys.argv[3]))
+"""
+        content = 'name,amount\nExample,7\n'
+        digest = hashlib.sha256(content.encode()).hexdigest()
+        args = dict(task_id='export', contract_revision=1, filename='export.csv', content=content)
+        for phase in ('before_write', 'partial_write', 'file_synced', 'published', 'before_commit'):
+            with self.subTest(phase=phase), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                owner = Engine(root, 'owner', 'human', clock=lambda:1000)
+                owner.execute('create_contract', contract())
+                worker = Engine(root, 'maker', 'worker', clock=lambda:1000)
+                worker.execute('claim_task', dict(task_id='export', contract_revision=1, lease_seconds=60))
+                before = owner.checkpoint()
+                result = subprocess.run([sys.executable, '-c', child, str(root), phase, json.dumps(args)],
+                                        capture_output=True, text=True, timeout=15)
+                self.assertEqual(result.returncode, 77, result.stderr)
+                final = root/'.rumbo/artifacts'/digest
+                if final.exists(): self.assertEqual(final.read_bytes(), content.encode())
+                restarted = Engine(root, 'maker', 'worker', clock=lambda:1000)
+                self.assertEqual(restarted.checkpoint(), before)
+                self.assertIsNone(restarted.snapshot()['tasks'][0]['artifact'])
+                restarted.execute('ingest_artifact', args)
+                self.assertEqual(restarted.artifact_view(dict(task_id='export', contract_revision=1,
+                    artifact_revision=1))['text'], content)
+                self.assertEqual([p.name for p in final.parent.iterdir()], [digest])
+                self.assertEqual(restarted.snapshot()['events_count'], 3)
+
+    def test_upload_reclaims_reserved_staging_without_changing_complete_blob(self):
+        import hashlib
+        from unittest.mock import patch
+        self.claim()
+        args = dict(task_id='export', contract_revision=1, filename='file.csv', content='name,amount')
+        self.worker.execute('ingest_artifact', args)
+        digest = hashlib.sha256(args['content'].encode()).hexdigest()
+        folder = self.root/'.rumbo/artifacts'
+        final = folder/digest
+        before = (final.stat().st_ino, final.read_bytes())
+        (folder/('.upload-'+'0'*64+'.tmp')).write_bytes(b'incomplete'*100)
+        with patch('rumbo.core.MAX_UPLOAD_TOTAL', len(args['content'])):
+            self.worker.execute('ingest_artifact', args)
+        self.assertEqual((final.stat().st_ino, final.read_bytes()), before)
+        self.assertEqual([p.name for p in folder.iterdir()], [digest])
+        self.assertEqual(self.worker.snapshot()['tasks'][0]['artifact']['revision'], 2)
+
+    def test_upload_does_not_reclaim_symlink_staging(self):
+        self.claim()
+        folder = self.root/'.rumbo/artifacts'; folder.mkdir()
+        target = self.root/'preserve.txt'; target.write_text('preserve')
+        staging = folder/('.upload-'+'0'*64+'.tmp'); staging.symlink_to(target)
+        with self.assertRaisesRegex(RumboError, 'PATH_UNSAFE'):
+            self.worker.execute('ingest_artifact', dict(task_id='export', contract_revision=1,
+                filename='file.csv', content='name,amount'))
+        self.assertTrue(staging.is_symlink())
+        self.assertEqual(target.read_text(), 'preserve')
+        self.assertEqual(self.worker.snapshot()['events_count'], 2)
+
+    def test_upload_directory_sync_failure_after_publish_retains_complete_blob(self):
+        import hashlib
+        import os
+        import stat
+        from unittest.mock import patch
+        self.claim()
+        args = dict(task_id='export', contract_revision=1, filename='file.csv', content='name,amount')
+        digest = hashlib.sha256(args['content'].encode()).hexdigest()
+        original = os.fsync; failed = []
+        def sync(fd):
+            if not failed and stat.S_ISDIR(os.fstat(fd).st_mode) and digest in os.listdir(fd):
+                failed.append(True)
+                raise OSError('synthetic directory sync failure')
+            original(fd)
+        with patch('rumbo.core.os.fsync', side_effect=sync):
+            with self.assertRaisesRegex(RumboError, 'PATH_UNSAFE'):
+                self.worker.execute('ingest_artifact', args)
+        self.assertEqual(failed, [True])
+        final = self.root/'.rumbo/artifacts'/digest
+        self.assertEqual(final.read_bytes(), args['content'].encode())
+        self.assertIsNone(self.worker.snapshot()['tasks'][0]['artifact'])
+        self.worker.execute('ingest_artifact', args)
+        self.assertEqual(self.worker.snapshot()['events_count'], 3)
+        self.assertEqual([p.name for p in final.parent.iterdir()], [digest])
 
     def test_partial_upload_failure_can_be_safely_retried(self):
         from unittest.mock import patch

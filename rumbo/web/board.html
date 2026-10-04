@@ -69,6 +69,12 @@ function matches(task, filter) {
     (filter === 'attention' && attention.has(task.status)) || (filter === 'accepted' && task.status === 'accepted') ||
     (filter === 'active' && ['unclaimed','claimed','produced'].includes(task.status));
 }
+function updateFilterNotice() {
+  const notice = $('filter-notice');
+  if (!notice) return;
+  const task = state.tasks.find(item => item.id === selected);
+  notice.hidden = !task || matches(task, $('status-filter').value);
+}
 function renderList() {
   const tasks = state.tasks.filter(task => matches(task, $('status-filter').value));
   const fragment = document.createDocumentFragment();
@@ -142,6 +148,9 @@ function renderDetail() {
   title.append(element('h2',task.title || task.id), statusNode(task.status));
   const copy = element('button','Copy handoff','small-button'); copy.type = 'button';
   copy.addEventListener('click',() => copyHandoff(task)); head.append(title, copy); frag.append(head);
+  const filterNotice = element('p','This task is outside the current filter. Its details stay open.','surface explanation');
+  filterNotice.id = 'filter-notice'; filterNotice.setAttribute('role','status');
+  frag.append(filterNotice);
   frag.append(element('p','Checks passed is not acceptance. The decision belongs to ' + text(state.decision_owner) + '.','explanation'));
   if (task.stale_reason) frag.append(element('p',task.stale_reason,'notice detail-notice'));
   if (task.lease) frag.append(element('p','Lease: ' + text(task.lease.actor) + ' · expires ' + date(task.lease.expires_at),'metadata'));
@@ -214,7 +223,7 @@ function renderDetail() {
   }
   const message = element('p',null,'message');message.id = 'message';message.setAttribute('aria-live','polite');
   const handoffText = element('textarea',null,'handoff');handoffText.id = 'handoff-text';handoffText.readOnly = true;handoffText.hidden = true;handoffText.setAttribute('aria-label','Handoff summary');
-  frag.append(message,handoffText);root.replaceChildren(frag);
+  frag.append(message,handoffText);root.replaceChildren(frag);updateFilterNotice();
 }
 function render(snapshot) {
   if (!snapshot || snapshot.version !== 1 || !Array.isArray(snapshot.tasks) || typeof snapshot.goal !== 'string' || snapshot.tasks.some(t => !t || typeof t.id !== 'string')) throw new Error('Unsupported or malformed project snapshot');
@@ -329,7 +338,7 @@ async function refresh() {
     }
   } catch (err) {error(err.name === 'AbortError' ? 'The local request timed out.' : err.message);}
 }
-$('status-filter').addEventListener('change',() => { if (state) renderList(); });
+$('status-filter').addEventListener('change',() => { if (state) {renderList();updateFilterNotice();} });
 $('refresh').addEventListener('click',refresh);
 let observer = null;
 if (embedded) {

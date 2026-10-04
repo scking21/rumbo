@@ -1,6 +1,10 @@
 # Deployment and public review gates
 
-The repository is a locally tested implementation candidate. This document is a setup plan, not evidence that a live service, provider account, domain, publisher or directory submission exists. No deployment, credentials, paid service, upload or publication was performed while preparing the release.
+This document describes the **Python remote deployment profile** and its final release checks. The separate [Sites candidate](../openai-sites/README.md) now has an owner-private deployment, with managed authentication/reviewer access unverified. The historical Python setup plan is not evidence that a Python service, provider account, verified domain/publisher or public-directory submission exists.
+
+This optional Python deployment profile is reference material, not the selected release work. The current goal is the free OpenAI-hosted route; no external hosting or new dashboard is in scope. The authorized synthetic film is published separately and does not establish this Python deployment profile. Its implementation-specific attestations are not universal plugin requirements.
+
+Local ZIP creation must not wait on portal-only checks. Use [Sites review-draft packaging](DRAFT-PACKAGING.md) to prepare the actual hosted candidate without marking those checks complete; upload, external verification, final review and publication are separate steps.
 
 The repository now includes an optional [WorkOS Connect adapter](WORKOS.md), [deployment kit and operational checks](OPERATIONS.md), a separate [Render recipe](RENDER.md), and [SQLite-consistent backup/restore](BACKUP.md). Those locally testable components do not substitute for real deployment/provider approval and verification.
 
@@ -69,18 +73,18 @@ Owner login uses the separate browser client, code exchange and PKCE verifier, s
 
 Verify real provider scopes/audiences, consent, callback registration, cookie behavior under HTTPS, logout, revoked access, expired tokens and inaccessible project subjects. Local fixture tests are not a substitute for those checks. Inspect [owner portal details](OWNER-PORTAL.md).
 
-## Public package configuration
+## Final-gated Python package configuration
 
-The public-package generator requires these top-level values:
+The legacy `--kind submission` Python-profile generator retains these final release requirements. They are not prerequisites for `--kind review-draft` or a statement of the portal upload sequence:
 
 - `mcp_url`, `website_url`, `support_url`, `privacy_url`, `terms_url`, `video_url`: actual approved public HTTPS DNS URLs
 - `attestations`: every named gate below is literally true only after its real verification
 
 Required gates: `https_endpoint_verified`, `oauth_verified`, `domain_verified`, `publisher_verified`, `reviewer_account_verified`, `host_qa_verified`, `legal_pages_reviewed`, `video_access_verified`.
 
-These are explicit operator attestations, not network checks performed by the packager. They must not be set merely to get a ZIP. IP literals, localhost, malformed/numeric hostnames and reserved placeholder domains are rejected. The generator never uploads or submits anything.
+These are explicit operator attestations, not network checks performed by the packager. They must not be set merely to get a ZIP. IP literals, localhost, malformed/numeric hostnames and reserved placeholder domains are rejected. The generator never uploads or submits anything. The Sites draft uses a different tool contract; do not point this Python-profile package at the Sites endpoint.
 
-## Public review sequence still to finish
+## Python final release checks still to finish
 
 1. Approve and deploy the real HTTPS service and persistent storage with separately configured issuer/owner client
 2. Provision safe demo/reviewer subjects and an isolated sample-data workspace; no MFA/email/SMS/magic-link dependence for review access
@@ -89,7 +93,7 @@ These are explicit operator attestations, not network checks performed by the pa
 5. Exercise five positive and three negative cases in a fresh real ChatGPT/Codex host, including owner creation → upload → exact-byte review → evidence → acceptance → changed artifact invalidation
 6. Check desktop/mobile layout, keyboard flow, owner login/CSRF, panel global/thread entrypoints and refresh without browser console errors
 7. Record a walkthrough on an accessible approved URL using only synthetic data
-8. Generate the public review ZIP from verified values; inspect its contents, then obtain final owner review before any upload/submission
+8. Generate this final-gated Python-profile ZIP only from verified values; inspect its contents and obtain final owner review before submission. A Sites review-draft upload is an earlier, separate step and does not require this final-gated generator
 9. Upload/scan, submit for review and eventually publish are separate external actions. None is performed by the build script
 
 The source includes tests, security rationale, privacy text and draft case metadata. Listing legal text/identity must be reviewed for the actual operating service; the local policy file alone is not a live-service legal commitment.
