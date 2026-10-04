@@ -1,8 +1,8 @@
 # Hosted walkthrough recording plan
 
-**Reference only; no new recording work is planned.** Video production and further dashboard work are out of scope. This previously prepared guide is retained for accuracy, not as an assigned task or a prerequisite to local/draft packaging.
+**Synthetic film available; managed-host recording remains separate.** The user-authorized [synthetic demonstration film](https://rumbo-review-materials.aggie-king21.chatgpt.site/) has been completed, with a clarity revision requested. It illustrates the workflow with synthetic material; it is not evidence of managed OAuth, real reviewer access or native-host execution. This guide describes a distinct authenticated-host recording and is not a prerequisite to local/draft packaging.
 
-**Plan only. No video, authenticated hosted run, native-host rendering or managed OAuth proof is supplied by this document.** Use this after an owner authorizes the recording target and test actions. Follow [draft packaging](DRAFT-PACKAGING.md) and [submission requirements](SUBMISSION-REQUIREMENTS.md) for release sequencing; this guide does not resolve private Sites-to-public-directory eligibility.
+**Managed-host plan only. No authenticated hosted run, native-host rendering or managed OAuth proof is supplied by this document or the synthetic film.** Use this after an owner authorizes the recording target and test actions. Follow [draft packaging](DRAFT-PACKAGING.md) and [submission requirements](SUBMISSION-REQUIREMENTS.md) for release sequencing; this guide does not resolve private Sites-to-public-directory eligibility.
 
 ## 1. Pin the target before recording
 
@@ -34,9 +34,9 @@ Create a fresh project for each source case, using `review-p1` through `review-p
 }
 ```
 
-Copy the real authorized `project_key` returned by the owner flow or `rumbo_list_projects`. The alias is not a tool `project_key`. Open a distinct server-issued `worker_id` per worker/case; a label does not create an identity or reviewer role.
+Copy the real authorized `project_key` returned by the owner flow or `rumbo_list_projects`. The alias is not a tool `project_key`. Select that project before giving its case prompt. Each case starts with an **unclaimed** `export` task, contract revision 1, no worker session, no claim, no artifact, no evidence and no decisions, as recorded by its `initial_state`. The authenticated owner account may use the worker MCP connection, but MCP does not give it human-action authority. Open a distinct server-issued `worker_id` per worker/case, then reuse it for every worker write in that case; a label does not create an identity or reviewer role. P3/P4/P5 each prepare their own claim and upload. Never reuse the active P2 project or silently open a replacement worker against its lease.
 
-For P5, use a **different, actually signed-in reviewer account** that already has authorized Site access and has no worker history in this project. The reviewer supplies their own displayed **Site user ID**. The owner selects the P5 project, opens **Manage a project's reviewer or worker access**, enters that verified ID, selects **Reviewer**, then uses **Review access grant**. The actual owner must confirm the recipient, role and persistent access to project records/uploaded bytes. Do not grant access as part of preparing this document or impersonate a reviewer with a worker session. Confirm the reviewer can read this project under their own connection before the assertion.
+For P5, use a **different, actually signed-in reviewer account** that already has authorized Site access and has no worker history in this project. The reviewer supplies their own displayed **Site user ID**. The owner selects the P5 project, opens **Manage a project's reviewer or worker access**, enters that verified ID, selects **Reviewer**, then uses **Review access grant**. The actual owner must confirm the recipient, role and persistent access to project records/uploaded bytes. Do not grant access as part of preparing this document or impersonate a reviewer with a worker session. Confirm the reviewer can read this project under their own connection before the assertion. Complete any separately authorized grant before running P5. If the reviewer account or connection is unavailable, pause for the operator; never invent credentials, elevate the worker, or use the reviewer account for worker preparation.
 
 ## 3. Keep bytes, revisions and retries exact
 
@@ -69,11 +69,13 @@ These are input field sets from [`toolDefinitions()`](../openai-sites/worker/pro
 | `rumbo_request_decision` | `project_key: K`, `worker_id: W`, `task_id: "export"`, `question: "Please inspect the exact bytes and decide"` |
 | `open_project_board` | `{}` for authorized project selection, or `project_key: K` |
 
-`rumbo_submit_review` has **no `worker_id`**: the separately authenticated reviewer connection supplies its authority. The deliberately invalid N1 call is `rumbo_decide` with `project_key: K`, `task_id: "export"`, `outcome: "accepted"`; it is absent from the catalog, not an owner tool to enable.
+`rumbo_submit_review` has **no `worker_id`**: the separately authenticated reviewer connection supplies its authority. `rumbo_decide` is absent from the catalog, not an owner tool to enable. Its deliberate dispatch belongs only to the separate protocol assertion below; N1 does not require a model to invent that call.
 
 ## 4. Record the exact five positive and three negative cases
 
-Use each prompt **verbatim** from [`reviewer-cases.json`](../openai-sites/reviewer-cases.json), in its own fresh project. The chains below reproduce the source harness. Capture each actual call, arguments, result/error and subsequent state; setup reads are allowed and should remain visible. Do not combine P2–P5 into one advancing project and call that eight independent case runs.
+Use each prompt **verbatim** from [`reviewer-cases.json`](../openai-sites/reviewer-cases.json), in its own fresh project. For P5, give its three `stages` prompts separately, in order, only in the specified authenticated connections. Its top-level packaged prompt preserves all three stages for the operator; it is not an instruction to carry out all stages with one account. Pass the actual returned project key, contract/artifact revisions and original worker ID between stages without sharing credentials.
+
+The chains below reproduce the source harness. The `tools` arrays describe those rehearsal chains, not a requirement to call unavailable tools or ignore a safe refusal. Capture each actual model-selected call, arguments, result/error, explanation and subsequent state; setup reads are allowed and should remain visible. Do not combine P2–P5 into one advancing project and call that eight independent case runs.
 
 | Case | Sequence and pass evidence |
 | --- | --- |
@@ -82,9 +84,13 @@ Use each prompt **verbatim** from [`reviewer-cases.json`](../openai-sites/review
 | P3 | Open worker → claim → `rumbo_ingest_artifact`. Exactly one upload receipt: filename `export.csv`, 25 bytes, digest above, current contract revision and returned artifact revision |
 | P4 | Open worker → claim → upload → `rumbo_read_artifact` → `rumbo_run_checks`. Readback matches all 25 bytes; `csv` has a passing deterministic receipt. `quality` still lacks a reviewer assertion: status is `produced`, not accepted |
 | P5 | Open worker → claim → upload → checks; switch to the authorized reviewer account, inspect the exact revision, then `rumbo_submit_review`; switch back to the worker for `rumbo_request_decision`. Reviewer attribution is separate; status is `checks_passed`, one owner request is recorded and `decisions` remains empty |
-| N1 | Attempt the absent `rumbo_decide`. Expected server response: JSON-RPC `-32602`, `Unknown tool`; no ledger change. If the host blocks an unavailable tool before dispatch, record that as host refusal, not an observed server response |
-| N2 | Open worker → claim → upload; attempt `rumbo_submit_review` through the same owner/worker account, without a reviewer grant. Expect tool error `FORBIDDEN`, no reviewer assertion and no ledger change from that attempt |
-| N3 | Open worker; save the current revision as `C_old`. In the actual owner browser, paste this project's full fixture contract, enter a revision reason, choose **Revise selected contract**, review the expected revision and have the owner **Confirm**. The harness resaves the same contract body to advance its revision. Read back the newer revision. Attempt `rumbo_claim_task` with `contract_revision: C_old` and `lease_seconds: 300`: expect `STALE_CONTRACT` and no ledger change from the failed claim. Inspect current scope; do not silently claim against the new revision |
+| N1 | Inspect with `rumbo_state` if needed. Require no acceptance, no owner impersonation and no ledger change, plus an explanation that the actual human owner decides in the authenticated owner browser. Refusing without an unavailable-tool call is valid. The local harness checks only the read-only/catalog boundary; it does not evaluate that explanation |
+| N2 | Open worker → claim → upload; attempt `rumbo_submit_review` through the same owner/worker account, without a reviewer grant. Require no worker self-review or added reviewer assertion. Safe refusal before dispatch is valid; if the call is dispatched, require `FORBIDDEN` and no ledger change from that attempt |
+| N3 | Open worker; save the current revision as `C_old`. In the actual owner browser, paste this project's full fixture contract, enter a revision reason, choose **Revise selected contract**, review the expected revision and have the owner **Confirm**. The harness resaves the same contract body to advance its revision. Read back the newer revision. Attempt `rumbo_claim_task` with `contract_revision: C_old` and `lease_seconds: 300`: if dispatched, require `STALE_CONTRACT` and no ledger change from the failed claim. Safe refusal before dispatch is valid. Inspect current scope; do not silently claim against the new revision |
+
+### Separate unknown-tool protocol assertion (outside the eight cases)
+
+If an approved protocol-test client can dispatch an arbitrary tool name, explicitly call the absent `rumbo_decide` with `project_key: K`, `task_id: "export"`, `outcome: "accepted"`. Require JSON-RPC `-32602`, exact message `Unknown tool`, unchanged `events_count`/`ledger_head` and no decisions. This is the `unknown-owner-decision-tool` entry under `protocol_assertions` in the source and a separate `protocol_results` record in local output. It is not a ninth model-facing case or an N1 model-selection requirement. If a host prevents the unavailable call, record that boundary; do not claim the server error was observed.
 
 ### Supplemental UI and owner scene (outside the eight cases)
 
@@ -108,4 +114,4 @@ node scripts/run-review-cases.mjs /tmp/rumbo-local-review-traces.json
 node --test tests/review-cases.test.mjs
 ```
 
-These use synthetic handler calls with in-memory SQLite/R2 fixtures. A local 8/8 result checks the prepared scenarios against source; it is not an authenticated managed-host run, model-inference evaluation, native-host test, OAuth validation or submission approval.
+These use synthetic handler calls with in-memory SQLite/R2 fixtures. A local 8/8 result checks the prepared handler scenarios against source, with a separately reported unknown-tool protocol assertion. Every case records initial/final state and marks its model outcome `not evaluated`; N1's natural-language refusal and owner-flow explanation still need an actual model run. Neither these results nor the synthetic film establish an authenticated managed-host run, model-inference evaluation, native-host test, OAuth validation or submission approval.

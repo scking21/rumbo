@@ -34,7 +34,7 @@ These commands use the existing local dependency tree; they do not install missi
 - For public MCP review, satisfy the actual portal requirements for the selected supported route, including public listing/legal URLs and final owner review. The checks above describe this optional hosted candidate; do not present every managed-host check as a universal plugin requirement
 - Preserve the local distribution for project-file registration, local file staleness and local backup/restore
 
-The goal remains a free public plugin hosted within the OpenAI ecosystem, with no external-hosting fallback or additional-cost services. The private Sites-to-public-directory route is unresolved; that is a platform question to investigate, not a requirement for the owner to buy hosting. No new dashboard or video work is planned. Existing useful UI is retained. See [submission scope](../docs/SUBMISSION-REQUIREMENTS.md#current-scope-and-milestones).
+The goal remains a free public plugin hosted within the OpenAI ecosystem, with no external-hosting fallback or additional-cost services. The private Sites-to-public-directory route is unresolved; that is a platform question to investigate, not a requirement for the owner to buy hosting. No new dashboard work is planned. The [OpenAI-hosted review materials](https://rumbo-review-materials.aggie-king21.chatgpt.site/) include the authorized synthetic local-engine walkthrough; they do not establish managed-host execution. Existing useful UI is retained. See [submission scope](../docs/SUBMISSION-REQUIREMENTS.md#current-scope-and-milestones).
 
 No automatic final submission, public audience change, merge or reviewer grant is authorized by this candidate's build/test process.
 

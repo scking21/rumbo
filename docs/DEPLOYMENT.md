@@ -2,7 +2,7 @@
 
 This document describes the **Python remote deployment profile** and its final release checks. The separate [Sites candidate](../openai-sites/README.md) now has an owner-private deployment, with managed authentication/reviewer access unverified. The historical Python setup plan is not evidence that a Python service, provider account, verified domain/publisher or public-directory submission exists.
 
-This optional Python deployment profile is reference material, not the selected release work. The current goal is the free OpenAI-hosted route; no external hosting, new dashboard or video production is in scope. Its implementation-specific attestations are not universal plugin requirements.
+This optional Python deployment profile is reference material, not the selected release work. The current goal is the free OpenAI-hosted route; no external hosting or new dashboard is in scope. The authorized synthetic film is published separately and does not establish this Python deployment profile. Its implementation-specific attestations are not universal plugin requirements.
 
 Local ZIP creation must not wait on portal-only checks. Use [Sites review-draft packaging](DRAFT-PACKAGING.md) to prepare the actual hosted candidate without marking those checks complete; upload, external verification, final review and publication are separate steps.
 

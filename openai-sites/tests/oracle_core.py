@@ -349,7 +349,9 @@ class Engine:
             statefd=os.open(str(self.root/'.rumbo'),os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW)
             try:
                 if create:
-                    try:os.mkdir('artifacts',mode=0o700,dir_fd=statefd)
+                    try:
+                        os.mkdir('artifacts',mode=0o700,dir_fd=statefd)
+                        os.fsync(statefd)
                     except FileExistsError:pass
                 return os.open('artifacts',os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW,dir_fd=statefd)
             finally:os.close(statefd)
@@ -357,10 +359,23 @@ class Engine:
             fail('PATH_UNSAFE','Uploaded artifact storage is unavailable or unsafe')
 
     def _store_upload(self,digest,data):
+        """Publish complete blobs only, while execute holds the SQLite write lock."""
         import stat
         fd=self._upload_dir(create=True)
-        created=False
+        staging='.upload-'+digest+'.tmp'
+        staged=False
         try:
+            # No other supported writer can own staging while we hold the lock.
+            # Reclaim only our reserved regular staging files after abrupt exits.
+            cleaned=False
+            for name in os.listdir(fd):
+                if re.fullmatch(r'\.upload-[a-f0-9]{64}\.tmp',name):
+                    info=os.stat(name,dir_fd=fd,follow_symlinks=False)
+                    if not stat.S_ISREG(info.st_mode):
+                        fail('PATH_UNSAFE','Unsafe upload staging file')
+                    os.unlink(name,dir_fd=fd)
+                    cleaned=True
+            if cleaned:os.fsync(fd)
             try:
                 existing=os.open(digest,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK,dir_fd=fd)
             except FileNotFoundError:
@@ -369,6 +384,7 @@ class Engine:
                 with os.fdopen(existing,'rb') as handle:
                     if not stat.S_ISREG(os.fstat(handle.fileno()).st_mode) or handle.read(MAX_INGEST+1)!=data:
                         fail('ARTIFACT_CORRUPT','Existing uploaded digest path does not match its bytes')
+                os.fsync(fd)
                 return
             total=0
             for name in os.listdir(fd):
@@ -378,15 +394,21 @@ class Engine:
                 total+=info.st_size
             if total+len(data)>MAX_UPLOAD_TOTAL:
                 fail('STORAGE_LIMIT','Uploaded artifacts are limited to 64 MiB per project; ask its owner to manage retention')
-            output=os.open(digest,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600,dir_fd=fd)
-            created=True
+            output=os.open(staging,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600,dir_fd=fd)
+            staged=True
             with os.fdopen(output,'wb') as handle:
                 handle.write(data);handle.flush();os.fsync(handle.fileno())
+            # link is atomic and refuses an existing target, unlike replace/rename.
+            os.link(staging,digest,src_dir_fd=fd,dst_dir_fd=fd,follow_symlinks=False)
+            os.fsync(fd)
+            os.unlink(staging,dir_fd=fd)
+            staged=False
             os.fsync(fd)
         except OSError:
-            if created:
-                try:os.unlink(digest,dir_fd=fd);os.fsync(fd)
+            if staged:
+                try:os.unlink(staging,dir_fd=fd);os.fsync(fd)
                 except OSError:pass
+            # A published complete blob stays immutable even if the event rolls back.
             fail('PATH_UNSAFE','Could not safely store uploaded bytes')
         finally:os.close(fd)
 
