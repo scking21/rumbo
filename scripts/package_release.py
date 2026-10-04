@@ -61,6 +61,14 @@ def read_plugin(root, review_profile):
                 if relative not in allowed:
                     raise ValueError('Unrecognized plugin input: '+relative+'; review the explicit package allowlist')
                 files[relative]=path.read_bytes()
+    required={'plugin.json','mcp.json','assets/icon.svg'}
+    if review_profile=='local':
+        required=allowed
+    elif review_profile=='hosted':
+        required=required|{'skills/coordinate-work/SKILL.md','skills/review-evidence/SKILL.md'}
+    missing=required-files.keys()
+    if missing:
+        raise ValueError('Missing required plugin input: '+', '.join(sorted(missing)))
     manifest=json.loads(files['plugin.json'])
     def inspect_keys(value):
         if isinstance(value,dict):
@@ -112,6 +120,10 @@ def write_zip(target,files,prefix='rumbo'):
 
 def build_local(root,target):
     root=Path(root);files=read_plugin(root, review_profile='local')
+    required={'__init__.py','core.py','protocol.py','registry.py','installed.py','web/board.html'}
+    missing={name for name in required if not (root/'rumbo'/name).is_file()}
+    if missing:
+        raise ValueError('Missing required local runtime input: '+', '.join(sorted(missing)))
     for path in (root/'rumbo').glob('*.py'):
         files['rumbo/'+path.name]=path.read_bytes()
     files['rumbo/web/board.html']=(root/'rumbo/web/board.html').read_bytes()
@@ -268,7 +280,9 @@ SITES_SOURCE_FILES={
     'db/schema.ts',
     'drizzle.config.ts',
     'drizzle/0000_initial.sql',
+    'drizzle/0001_guarded_project_deletion.sql',
     'drizzle/meta/0000_snapshot.json',
+    'drizzle/meta/0001_snapshot.json',
     'drizzle/meta/_journal.json',
     'package-lock.json',
     'package.json',
@@ -282,17 +296,39 @@ SITES_SOURCE_FILES={
     'scripts/verify-export.py',
     'scripts/verify-oracle.mjs',
     'tests/browser/owner.spec.mjs',
+    'tests/board-dom.test.mjs',
     'tests/codec.test.mjs',
+    'tests/decision-clock.test.mjs',
+    'tests/deletion.test.mjs',
     'tests/engine.test.mjs',
     'tests/export.test.mjs',
     'tests/http.test.mjs',
+    'tests/json-check-cache.test.mjs',
     'tests/oracle.py',
     'tests/oracle_core.py',
     'tests/owner-dom.test.mjs',
+    'tests/privacy-http.test.mjs',
     'tests/review-cases.test.mjs',
     'tests/runtime.test.mjs',
+    'tests/offline-runtime.mjs',
+    'tests/offline-runtime.test.mjs',
+    'WORKFLOW-VERIFICATION-2026-10-03.md',
     'tests/storage.test.mjs',
     'tests/support.mjs',
+    'tests/workflows.test.mjs',
+    'SEMANTIC-STRESS-2026-10-03.md',
+    'scripts/measure-state-size.mjs',
+    'scripts/run-semantic-stress.mjs',
+    'tests/artifact-byte-codec.test.mjs',
+    'tests/artifact-codec-oracle.py',
+    'tests/semantic-boundaries.test.mjs',
+    'tests/semantic-oracle-standalone.test.mjs',
+    'tests/semantic-depth-regression.test.mjs',
+    'tests/semantic-partial-failures.test.mjs',
+    'tests/semantic-stress-oracle.py',
+    'tests/semantic-stress-support.mjs',
+    'tests/semantic-stress.test.mjs',
+    'tests/state-size-oracle.py',
     'web/board.html',
     'web/owner.css',
     'web/owner.html',

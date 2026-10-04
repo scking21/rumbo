@@ -1,4 +1,5 @@
 import contextlib
+import concurrent.futures
 import http.client
 import io
 import json
@@ -7,6 +8,7 @@ from pathlib import Path
 import sqlite3
 import tempfile
 import threading
+import time
 import unittest
 from unittest.mock import patch
 
@@ -41,16 +43,49 @@ class OperationsTests(unittest.TestCase):
         self.assertEqual(json.loads(raw),{'status':'unavailable'})
         self.assertNotIn(b'LEDGER',raw)
     def test_structural_logs_never_include_request_secrets_or_queries(self):
-        output=io.StringIO()
+        logged=threading.Event()
+        class CapturedLogs(io.StringIO):
+            def write(self,value):
+                count=super().write(value)
+                if self.getvalue().count('\n')>=2:logged.set()
+                return count
+        output=CapturedLogs()
         with contextlib.redirect_stderr(output):
             self.request('/owner/callback?code=TOP_SECRET&state=ALSO_SECRET',headers={'Authorization':'Bearer PRIVATE_TOKEN','Cookie':'PRIVATE_COOKIE'})
             self.request('/mcp','POST',dict(jsonrpc='2.0',id=1,method='tools/call',params=dict(name='rumbo_state',arguments={})),{'Authorization':'Bearer synthetic-token'})
+            # The handler logs after writing the response: reading the body is
+            # not a synchronization barrier for the server thread's stderr.
+            self.assertTrue(logged.wait(5),'Both completed requests must be logged')
         lines=[json.loads(line) for line in output.getvalue().splitlines()]
         self.assertEqual(len(lines),2)
         self.assertEqual({line['route'] for line in lines},{'owner','mcp'})
         self.assertEqual(set(lines[0]),{'event','method','route','status','duration_ms'})
         for private in ['TOP_SECRET','ALSO_SECRET','PRIVATE_TOKEN','PRIVATE_COOKIE','sample','Ship CSV']:
             self.assertNotIn(private,output.getvalue())
+    def test_concurrent_request_logs_remain_complete_json_records(self):
+        logged = threading.Event()
+        count = 24
+        class SlowCapture(io.StringIO):
+            def write(self, value):
+                result = super().write(value)
+                if value != '\n':
+                    # A slow destination can switch threads between print's
+                    # JSON write and its separate newline write.
+                    time.sleep(0.002)
+                if self.getvalue().count('\n') == count:
+                    logged.set()
+                return result
+        output = SlowCapture()
+        with contextlib.redirect_stderr(output):
+            with concurrent.futures.ThreadPoolExecutor(max_workers=12) as pool:
+                results = list(pool.map(lambda _: self.request('/health/live')[0], range(count)))
+            self.assertTrue(logged.wait(5), 'All request logs must finish')
+        self.assertEqual(results, [200]*count)
+        lines = output.getvalue().splitlines()
+        self.assertEqual(len(lines), count)
+        for line in lines:
+            self.assertEqual(json.loads(line)['event'], 'http_request')
+
     def test_domain_challenge_requires_explicit_bounded_regular_public_file(self):
         self.assertEqual(self.request('/.well-known/openai-apps-challenge')[0],404)
         token=self.root/'openai-apps-challenge';token.write_text('synthetic-public-domain-proof')

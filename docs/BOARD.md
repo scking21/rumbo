@@ -9,7 +9,8 @@ returns it as `text/html;profile=mcp-app` to capable MCP hosts.
 The board follows goal → task → artifact → evidence → human decision. It includes:
 
 - Original request, constraints, contract revision, and named decision owner
-- Filterable task states with keyboard-operable selection
+- Filterable task states with keyboard-operable selection; filtering keeps the
+  selected detail open and labels it when it is outside the current filter
 - Exact acceptance check values, keys, and manual-review prompts
 - Artifact path, revision, maker, size, and SHA-256
 - Deterministic receipts separated from attributed reviewer assertions
@@ -108,4 +109,4 @@ The first GitHub Actions run on commit `a279ca480b6c879ee99dc60a5f2d76f240b95476
 
 A sixth browser case now creates the deterministic demo with the real Engine, serves it through the actual Rumbo HTTP handler, verifies real acceptance criteria, artifacts, failed receipts and reviewer assertions, then changes a real backing artifact and verifies stale acceptance through Refresh. It saves `actual-engine-board.png`; the fixture-host bridge cases remain separate simulated-host evidence. That added path subsequently passed on baseline commit `cf61658517f41471f0a3617c6948cc4d2ba5a2ae`: all114 new tests (including6 Chromium cases) and95 legacy tests were green. Later readiness changes require another exact-head CI run.
 
-Neither fixture screenshots nor real local-backend CI establish actual ChatGPT host behavior, live OAuth sign-in, a full screen-reader audit or production deployment. Those remain explicit release gates.
+Neither fixture screenshots nor real local-backend CI establish actual ChatGPT host behavior, live OAuth sign-in, a full screen-reader audit or production deployment. These are coverage limits, not universal release gates; a full screen-reader audit is not a published prerequisite to plugin submission. No new dashboard work is planned. Existing useful UI remains supported.

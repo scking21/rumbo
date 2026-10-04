@@ -200,6 +200,12 @@ class HttpTests(ProtocolTests):
             create_server('0.0.0.0',0,self.config)
 
     def test_demo_anonymous_view_closes_if_project_becomes_private(self):
+        self.assert_demo_view_closes(dict(demo=False))
+
+    def test_demo_anonymous_view_closes_if_replacement_omits_demo(self):
+        self.assert_demo_view_closes({})
+
+    def assert_demo_view_closes(self, flags):
         from rumbo.demo import create_demo
         folder=self.root/'demo';folder.mkdir();create_demo(folder)
         server=create_server('127.0.0.1',0,dict(mode='demo',demo_root=str(folder)))
@@ -208,7 +214,7 @@ class HttpTests(ProtocolTests):
         try:
             with urllib.request.urlopen(url) as response:
                 self.assertTrue(json.load(response)['demo'])
-            c=contract();c['project_id']='synthetic-csv-demo';c['decision_owner']='demo-owner';c['demo']=False;c['goal']='Private replacement'
+            c=contract();c['project_id']='synthetic-csv-demo';c['decision_owner']='demo-owner';c['goal']='Private replacement';c.update(flags)
             Engine(folder,'demo-owner','human').execute('revise_contract',dict(contract=c,expected_revision=1,reason='Private now'))
             with self.assertRaises(urllib.error.HTTPError) as e:
                 urllib.request.urlopen(url)

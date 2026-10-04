@@ -15,7 +15,7 @@ def main(argv=None):
     parser.add_argument('--role',choices=['worker','reviewer','viewer'],default='worker')
     sub=parser.add_subparsers(dest='command',required=True)
     sub.add_parser('state',help='Read project state and hash-chain integrity')
-    sub.add_parser('verify',help='Verify event chain and show its current checkpoint')
+    sub.add_parser('verify',help='Read-only verification of an existing event chain and its current checkpoint')
     call=sub.add_parser('call',help='Invoke an agent-safe action with a JSON object')
     call.add_argument('action',choices=['claim_task','submit_artifact','ingest_artifact','run_checks','submit_review','request_decision']);call.add_argument('--json',required=True)
     operator=sub.add_parser('operator',help='Trusted local human operator flow; interactive confirmation required')
@@ -47,15 +47,13 @@ def main(argv=None):
                 raise RumboError('CANCELLED')
             result=Engine(args.root,args.owner,'human').execute(args.action,payload)
         else:
-            engine=Engine(args.root,args.actor,args.role)
+            engine=Engine(args.root,args.actor,'viewer' if args.command=='verify' else args.role,read_only=args.command=='verify')
             if args.command=='mcp':
                 serve_stdio(engine);return 0
             if args.command=='call':
                 result=engine.execute(args.action,safe_json(args.json))
             else:
-                result=engine.snapshot()
-                if args.command=='verify':
-                    result={k:result[k] for k in ['project_id','events_count','ledger_head','integrity']}
+                result=engine.checkpoint() if args.command=='verify' else engine.snapshot()
         print(json.dumps(result,indent=2,ensure_ascii=False,allow_nan=False))
         return 0
     except (RumboError,OSError,ValueError,RecursionError) as e:

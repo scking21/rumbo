@@ -1,12 +1,16 @@
 """Verify an owner-downloaded hosted backup; stdin input, no writes or network."""
 import base64,hashlib,json,sys
 
+# Each committed event can reference one immutable upload, plus header/footer.
+MAX_EVENTS=10000
+MAX_RECORDS=2*MAX_EVENTS+2
+
 def verify(source):
     records=[]
     for raw in source:
         if len(raw)>2*1024*1024:raise ValueError('Oversized export record')
         records.append(json.loads(raw))
-        if len(records)>12000:raise ValueError('Too many export records')
+        if len(records)>MAX_RECORDS:raise ValueError('Too many export records')
     if not records or records[0].get('format')!='rumbo-sites-export-v1':raise ValueError('Unsupported export')
     head='0'*64;events=0;artifacts={};required=set()
     for row in records[1:-1]:

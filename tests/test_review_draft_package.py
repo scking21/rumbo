@@ -154,6 +154,8 @@ class ReviewDraftPackageTests(unittest.TestCase):
             package_release.build_source(ROOT, source)
             with zipfile.ZipFile(source) as archive:
                 self.assertIn('rumbo-0.3.0-source/openai-sites/worker/protocol.js', archive.namelist())
+                for name in ('tests/test_json_check_cache.py', 'openai-sites/tests/json-check-cache.test.mjs'):
+                    self.assertEqual(archive.read('rumbo-0.3.0-source/'+name), (ROOT/name).read_bytes())
                 self.assertFalse(any('/node_modules/' in name or '/dist/' in name for name in archive.namelist()))
                 archive.extractall(Path(tmp)/'extracted')
             extracted = Path(tmp)/'extracted/rumbo-0.3.0-source'

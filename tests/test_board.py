@@ -112,7 +112,14 @@ setImmediate(async()=>{
   if(input.action==='spoof')listener({source:window,origin:'https://host.test',data:{jsonrpc:'2.0',method:'ui/notifications/tool-result',params:{structuredContent:{version:1,goal:'FORGED',tasks:[]}}}});
   if(input.action==='copy') {const seek=n=>n.tagName==='button'&&n.textContent==='Copy handoff'?n:n.children.map(seek).find(Boolean);await seek(nodes['task-detail']).handlers.click();}
   if(input.action==='refresh_error'){context.fetch=async()=>({ok:false,status:503});await nodes.refresh.handlers.click();}
-  const out={texts:Object.fromEntries(Object.entries(nodes).map(([k,v])=>[k,v.textContent])),demoHidden:nodes.demo.hidden,errorHidden:nodes.error.hidden,messages,fetches,copied:context.copied};
+  const stages=[];
+  for(const step of input.steps || []) {
+    if(step.filter) {nodes['status-filter'].value=step.filter;nodes['status-filter'].handlers.change();}
+    if(step.select) {const seek=n=>n.tagName==='button'&&n.textContent.includes(step.select)?n:n.children.map(seek).find(Boolean);seek(nodes['task-list']).handlers.click();}
+    if(step.state) {input.state=step.state;await nodes.refresh.handlers.click();}
+    stages.push({list:nodes['task-list'].textContent,detail:nodes['task-detail'].textContent,emptyHidden:nodes['list-empty'].hidden,noticeHidden:document.getElementById('filter-notice')?.hidden});
+  }
+  const out={stages,texts:Object.fromEntries(Object.entries(nodes).map(([k,v])=>[k,v.textContent])),demoHidden:nodes.demo.hidden,errorHidden:nodes.error.hidden,messages,fetches,copied:context.copied};
   process.stdout.write(JSON.stringify(out));
 });
 """
@@ -180,6 +187,26 @@ class BoardRuntimeTests(unittest.TestCase):
         result=self.run_ui(action='refresh_error')
         self.assertIn('Showing the last snapshot',result['texts']['error'])
         self.assertEqual(result['texts']['goal'],STATE['goal'])
+
+    def test_filter_notice_preserves_selection_and_tracks_refresh(self):
+        changed=copy.deepcopy(STATE)
+        changed['tasks'][1]['status']='produced'
+        result=self.run_ui(steps=[{'filter':'attention'}, {'filter':'active'},
+            {'filter':'review'}, {'filter':'accepted'}, {'select':'Publish purchase receipt'},
+            {'state':changed}, {'state':copy.deepcopy(STATE)}])
+        stages=result['stages']
+        self.assertEqual([stage.get('noticeHidden') for stage in stages],
+                         [False, False, True, False, True, False, True])
+        self.assertIn('Harden retry behavior',stages[0]['list'])
+        self.assertIn('Validate checkout totals',stages[0]['detail'])
+        self.assertEqual(stages[1]['list'],'')
+        self.assertFalse(stages[1]['emptyHidden'])
+        self.assertIn('This task is outside the current filter. Its details stay open.',stages[1]['detail'])
+        for stage in stages[4:]:
+            self.assertIn('Publish purchase receipt',stage['detail'])
+        self.assertEqual(stages[5]['list'],'')
+        self.assertIn('Publish purchase receipt',stages[6]['list'])
+        self.assertEqual(result['fetches'],['/api/state']*3)
 
     def test_runtime_marks_changed_digests_and_superseded_records(self):
         state=copy.deepcopy(STATE)
@@ -368,15 +395,62 @@ class BoardBrowserTests(unittest.TestCase):
                 worker.join()
 
     def test_filter_selection_and_copy_summary(self):
+        # Force the supported copy fallback so filtering must preserve its DOM state.
+        self.page.add_init_script("Object.defineProperty(navigator,'clipboard',{value:{writeText:async()=>{throw new Error('Synthetic unavailable clipboard')}}});")
         self.open_board()
-        self.page.get_by_label('Filter tasks').select_option('attention')
-        self.assertEqual(self.page.locator('#task-list button').count(), 1)
-        self.page.locator('#task-list button').click()
-        self.assertIn('Contract changed after prior review', self.page.locator('#task-detail').inner_text())
+        notice=self.page.locator('#filter-notice')
+        detail_title=self.page.locator('#task-detail h2')
+        expect(notice).to_be_hidden()
         self.page.get_by_role('button', name='Copy handoff').click()
-        # click waits for dispatch, not the async clipboard promise. Assert the
-        # same visible success/fallback result once that operation completes.
-        from playwright.sync_api import expect
+        fallback=self.page.locator('#handoff-text')
+        expect(fallback).to_be_visible()
+        handoff=fallback.input_value()
+        self.page.locator('#contract-context summary').click()
+        self.page.evaluate("window.originalDetail=document.querySelector('#task-detail h2');window.originalHandoff=document.querySelector('#handoff-text')")
+        control=self.page.get_by_label('Filter tasks')
+        control.focus()
+        control.select_option('attention')
+        expect(self.page.locator('#task-list button')).to_have_count(1)
+        expect(detail_title).to_have_text('Validate checkout totals')
+        expect(notice).to_be_visible()
+        expect(notice).to_have_text('This task is outside the current filter. Its details stay open.')
+        control.select_option('active')
+        expect(self.page.locator('#task-list button')).to_have_count(0)
+        expect(self.page.locator('#list-empty')).to_be_visible()
+        expect(self.page.locator('#list-empty')).to_have_text('No tasks match this filter')
+        expect(notice).to_be_visible()
+        expect(detail_title).to_have_text('Validate checkout totals')
+        expect(fallback).to_be_visible()
+        expect(fallback).to_have_value(handoff)
+        self.assertTrue(self.page.evaluate("window.originalDetail===document.querySelector('#task-detail h2') && window.originalHandoff===document.querySelector('#handoff-text')"))
+        expect(self.page.locator('#contract-context')).to_have_attribute('open','')
+        expect(control).to_be_focused()
+        control.select_option('review')
+        expect(notice).to_be_hidden()
+        expect(self.page.locator('#task-list button')).to_have_attribute('aria-pressed','true')
+        control.select_option('accepted')
+        expect(notice).to_be_visible()
+        self.page.locator('#task-list button').click()
+        expect(detail_title).to_have_text('Publish purchase receipt')
+        expect(notice).to_be_hidden()
+        type(self).current_state['tasks'][1]['status']='produced'
+        self.page.get_by_role('button', name='Refresh', exact=True).click()
+        expect(notice).to_be_visible()
+        expect(detail_title).to_have_text('Publish purchase receipt')
+        expect(control).to_have_value('accepted')
+        expect(self.page.locator('#list-empty')).to_be_visible()
+        type(self).current_state['tasks'][1]['status']='accepted'
+        self.page.get_by_role('button', name='Refresh', exact=True).click()
+        expect(notice).to_be_hidden()
+        expect(self.page.locator('#task-list button')).to_have_attribute('aria-pressed','true')
+        control.select_option('all')
+        expect(notice).to_be_hidden()
+        expect(detail_title).to_have_text('Publish purchase receipt')
+        control.select_option('attention')
+        self.page.locator('#task-list button').click()
+        expect(notice).to_be_hidden()
+        expect(self.page.locator('#task-detail')).to_contain_text('Contract changed after prior review')
+        self.page.get_by_role('button', name='Copy handoff').click()
         expect(self.page.locator('#message')).to_have_text(re.compile('.*(?:Copied|copy).*'))
 
     def test_injection_is_literal_and_narrow_layout_does_not_overflow(self):

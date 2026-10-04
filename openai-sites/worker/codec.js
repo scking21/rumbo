@@ -23,6 +23,10 @@ function compareUnicode(a,b) {
   for(let i=0;i<Math.min(aa.length,bb.length);i++)if(aa[i]!==bb[i])return aa[i]-bb[i];
   return aa.length-bb.length;
 }
+function scalarString(value) {
+  for(const char of value){const point=char.codePointAt(0);if(point>=0xd800&&point<=0xdfff)return false;}
+  return true;
+}
 export function canonical(value, depth=0) {
   if(depth>128)throw new Error('JSON nesting exceeds limit');
   if(value===null)return 'null';
@@ -49,7 +53,7 @@ export function parseJSON(raw, maxDepth=64, options={}) {
     const ch=raw[i];
     if(ch==='"') {
       const start=i++; let escaped=false;
-      while(i<raw.length){const c=raw[i++];if(!escaped&&c==='"')return JSON.parse(raw.slice(start,i));if(!escaped&&c==='\\')escaped=true;else escaped=false;}
+      while(i<raw.length){const c=raw[i++];if(!escaped&&c==='"'){const text=JSON.parse(raw.slice(start,i));if(options.scalarStrings&&!scalarString(text))throw new Error('JSON strings must be Unicode scalars');return text;}if(!escaped&&c==='\\')escaped=true;else escaped=false;}
       throw new Error('Unterminated string');
     }
     if(ch==='['||ch==='{') {
@@ -68,6 +72,7 @@ export function parseJSON(raw, maxDepth=64, options={}) {
     if(!match)throw new Error('Invalid JSON');
     const token=match[0];i+=token.length;
     if(/[.eE]/.test(token)){const v=Number(token);if(!Number.isFinite(v)&&!options.nonfinite)throw new Error('Nonfinite JSON');return new FloatValue(v);}
+    if(options.maxIntegerDigits&&token.replace(/^-/,'').length>options.maxIntegerDigits)throw new Error('JSON integer exceeds digit limit');
     const big=BigInt(token);return big>=BigInt(Number.MIN_SAFE_INTEGER)&&big<=BigInt(Number.MAX_SAFE_INTEGER)?Number(big):big;
   }
   const result=value(0);space();if(i!==raw.length)throw new Error('Trailing JSON input');return result;
@@ -77,4 +82,32 @@ export async function sha256(value) {
   const bytes=typeof value==='string'?utf8(value):value;
   const hash=await crypto.subtle.digest('SHA-256',bytes);
   return Array.from(new Uint8Array(hash),v=>v.toString(16).padStart(2,'0')).join('');
+}
+
+/** Match canonical artifact JSON encoding detection with strict scalar decoding. */
+export function decodeJSONBytes(bytes) {
+  const starts = prefix => prefix.every((value,index)=>bytes[index]===value);
+  let encoding='utf8',start=0;
+  if(starts([0,0,254,255])){encoding='utf32be';start=4;}
+  else if(starts([255,254,0,0])){encoding='utf32le';start=4;}
+  else if(starts([254,255])){encoding='utf16be';start=2;}
+  else if(starts([255,254])){encoding='utf16le';start=2;}
+  else if(starts([239,187,191]))start=3;
+  else if(bytes.length>=4){
+    if(!bytes[0])encoding=bytes[1]?'utf16be':'utf32be';
+    else if(!bytes[1])encoding=bytes[2]||bytes[3]?'utf16le':'utf32le';
+  }else if(bytes.length===2){
+    if(!bytes[0])encoding='utf16be';else if(!bytes[1])encoding='utf16le';
+  }
+  if(encoding==='utf8')return new TextDecoder('utf-8',{fatal:true,ignoreBOM:true}).decode(bytes.subarray(start));
+  const width=encoding.startsWith('utf16')?2:4,little=encoding.endsWith('le');
+  if((bytes.length-start)%width)throw new Error('Incomplete JSON character encoding');
+  const chars=[];
+  for(let i=start;i<bytes.length;i+=width){
+    let value=0;
+    for(let j=0;j<width;j++)value=value*256+bytes[i+(little?width-1-j:j)];
+    if(value>0x10ffff||(width===4&&value>=0xd800&&value<=0xdfff))throw new Error('Invalid JSON character encoding');
+    chars.push(String.fromCodePoint(value));
+  }
+  const text=chars.join('');if(!scalarString(text))throw new Error('Invalid JSON character encoding');return text;
 }

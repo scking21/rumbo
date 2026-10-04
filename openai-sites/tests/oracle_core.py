@@ -19,6 +19,8 @@ MAX_INGEST = 128 * 1024
 MAX_UPLOAD_TOTAL = 64 * 1024 * 1024
 MAX_EVENTS = 10000
 MAX_LEDGER_BYTES = 16 * 1024 * 1024
+MAX_ARTIFACT_JSON_DEPTH = 512
+MAX_ARTIFACT_JSON_INTEGER_DIGITS = 4300
 ROLES = {'human', 'worker', 'reviewer', 'viewer'}
 IDENTIFIER = re.compile(r'^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$')
 ACTION_FIELDS = {
@@ -50,6 +52,54 @@ def canonical(value):
         return json.dumps(value, sort_keys=True, separators=(',', ':'), ensure_ascii=True, allow_nan=False)
     except (TypeError, ValueError, RecursionError):
         fail('BAD_INPUT', 'Use finite, JSON-compatible values')
+
+
+def artifact_json(raw):
+    """Decode artifact JSON with stable limits independent of transport policy.
+
+    Preserve byte-encoding detection and last-key-wins for scalar strings.
+    Nonfinite values cannot themselves become passing canonical evidence.
+    """
+    text = raw.decode(json.detect_encoding(raw), 'strict')
+    depth = 0
+    quoted = escaped = False
+    token_start = 0
+    for offset, char in enumerate(text):
+        if quoted:
+            if escaped:
+                escaped = False
+            elif char == '\\':
+                escaped = True
+            elif char == '"':
+                quoted = False
+                token = text[token_start:offset+1]
+                # Strict byte decoding already excludes literal surrogates.
+                # Validate escaped strings before duplicate keys discard values.
+                if '\\u' in token and any(0xD800 <= ord(value) <= 0xDFFF for value in json.loads(token)):
+                    raise ValueError('Artifact JSON strings must be Unicode scalars')
+        elif char == '"':
+            quoted = True
+            token_start = offset
+        elif char in '[{':
+            depth += 1
+            if depth > MAX_ARTIFACT_JSON_DEPTH:
+                raise ValueError('Artifact JSON nesting exceeds limit')
+        elif char in ']}':
+            depth -= 1
+
+    def parse_integer(token):
+        negative = token.startswith('-')
+        digits = token[1:] if negative else token
+        if len(digits) > MAX_ARTIFACT_JSON_INTEGER_DIGITS:
+            raise ValueError('Artifact JSON integer exceeds digit limit')
+        # Chunk conversion avoids interpreter-global integer-string settings.
+        value = 0
+        for start in range(0, len(digits), 500):
+            chunk = digits[start:start+500]
+            value = value * (10 ** len(chunk)) + int(chunk)
+        return -value if negative else value
+
+    return json.loads(text, parse_int=parse_integer)
 
 
 def fields(value, required, optional=()):
@@ -119,7 +169,7 @@ def validate_contract(data, actor):
             kind = check.get('kind')
             required = {'id','kind'}
             extras = {'file_contains': {'value'}, 'json_equals': {'key','value'}, 'sha256': {'value'}, 'manual_review': {'prompt'}}
-            if kind not in extras:
+            if not isinstance(kind, str) or kind not in extras:
                 fail('BAD_INPUT', 'Unsupported check kind')
             fields(check, required | extras[kind])
             identifier(check['id'], 'check id')
@@ -156,31 +206,48 @@ def validate_contract(data, actor):
 
 
 class Engine:
-    def __init__(self, root, actor, role, clock=None):
+    def __init__(self, root, actor, role, clock=None, read_only=False):
         self.root = Path(root).resolve()
         if not self.root.is_dir():
             fail('PATH_INVALID', 'Project root must exist')
         self.actor = identifier(actor, 'host actor')
         if role not in ROLES:
             fail('FORBIDDEN', 'Unknown host role')
+        if type(read_only) is not bool:
+            fail('BAD_INPUT', 'read_only must be boolean')
+        if read_only and role != 'viewer':
+            fail('FORBIDDEN', 'Read-only storage requires a viewer principal')
         self.role = role
+        self.read_only = read_only
         self.clock = clock or time.time
         state = self.root / '.rumbo'
         if state.is_symlink():
             fail('PATH_UNSAFE', 'State directory may not be a symlink')
-        state.mkdir(mode=0o700, exist_ok=True)
+        if read_only:
+            if not state.is_dir():
+                fail('NO_CONTRACT', 'No existing project ledger; initialize an owner-approved contract first')
+        else:
+            state.mkdir(mode=0o700, exist_ok=True)
         self.db_path = state / 'state.sqlite3'
         if self.db_path.is_symlink():
             fail('PATH_UNSAFE', 'State database may not be a symlink')
-        with self._db() as db:
-            db.execute('CREATE TABLE IF NOT EXISTS events(seq INTEGER PRIMARY KEY, payload TEXT NOT NULL, previous TEXT NOT NULL, digest TEXT NOT NULL)')
-        os.chmod(self.db_path, 0o600)
+        if read_only:
+            if not self.db_path.is_file():
+                fail('NO_CONTRACT', 'No existing project ledger; initialize an owner-approved contract first')
+        else:
+            with self._db() as db:
+                db.execute('CREATE TABLE IF NOT EXISTS events(seq INTEGER PRIMARY KEY, payload TEXT NOT NULL, previous TEXT NOT NULL, digest TEXT NOT NULL)')
+            os.chmod(self.db_path, 0o600)
 
     @contextmanager
     def _db(self):
         db=None
         try:
-            db=sqlite3.connect(str(self.db_path),timeout=15)
+            if self.read_only:
+                db=sqlite3.connect(self.db_path.as_uri()+'?mode=ro',uri=True,timeout=15)
+                db.execute('PRAGMA query_only=ON')
+            else:
+                db=sqlite3.connect(str(self.db_path),timeout=15)
             db.execute('PRAGMA busy_timeout=15000')
             with db:
                 yield db
@@ -282,7 +349,9 @@ class Engine:
             statefd=os.open(str(self.root/'.rumbo'),os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW)
             try:
                 if create:
-                    try:os.mkdir('artifacts',mode=0o700,dir_fd=statefd)
+                    try:
+                        os.mkdir('artifacts',mode=0o700,dir_fd=statefd)
+                        os.fsync(statefd)
                     except FileExistsError:pass
                 return os.open('artifacts',os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW,dir_fd=statefd)
             finally:os.close(statefd)
@@ -290,10 +359,23 @@ class Engine:
             fail('PATH_UNSAFE','Uploaded artifact storage is unavailable or unsafe')
 
     def _store_upload(self,digest,data):
+        """Publish complete blobs only, while execute holds the SQLite write lock."""
         import stat
         fd=self._upload_dir(create=True)
-        created=False
+        staging='.upload-'+digest+'.tmp'
+        staged=False
         try:
+            # No other supported writer can own staging while we hold the lock.
+            # Reclaim only our reserved regular staging files after abrupt exits.
+            cleaned=False
+            for name in os.listdir(fd):
+                if re.fullmatch(r'\.upload-[a-f0-9]{64}\.tmp',name):
+                    info=os.stat(name,dir_fd=fd,follow_symlinks=False)
+                    if not stat.S_ISREG(info.st_mode):
+                        fail('PATH_UNSAFE','Unsafe upload staging file')
+                    os.unlink(name,dir_fd=fd)
+                    cleaned=True
+            if cleaned:os.fsync(fd)
             try:
                 existing=os.open(digest,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK,dir_fd=fd)
             except FileNotFoundError:
@@ -302,6 +384,7 @@ class Engine:
                 with os.fdopen(existing,'rb') as handle:
                     if not stat.S_ISREG(os.fstat(handle.fileno()).st_mode) or handle.read(MAX_INGEST+1)!=data:
                         fail('ARTIFACT_CORRUPT','Existing uploaded digest path does not match its bytes')
+                os.fsync(fd)
                 return
             total=0
             for name in os.listdir(fd):
@@ -311,15 +394,21 @@ class Engine:
                 total+=info.st_size
             if total+len(data)>MAX_UPLOAD_TOTAL:
                 fail('STORAGE_LIMIT','Uploaded artifacts are limited to 64 MiB per project; ask its owner to manage retention')
-            output=os.open(digest,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600,dir_fd=fd)
-            created=True
+            output=os.open(staging,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600,dir_fd=fd)
+            staged=True
             with os.fdopen(output,'wb') as handle:
                 handle.write(data);handle.flush();os.fsync(handle.fileno())
+            # link is atomic and refuses an existing target, unlike replace/rename.
+            os.link(staging,digest,src_dir_fd=fd,dst_dir_fd=fd,follow_symlinks=False)
+            os.fsync(fd)
+            os.unlink(staging,dir_fd=fd)
+            staged=False
             os.fsync(fd)
         except OSError:
-            if created:
-                try:os.unlink(digest,dir_fd=fd);os.fsync(fd)
+            if staged:
+                try:os.unlink(staging,dir_fd=fd);os.fsync(fd)
                 except OSError:pass
+            # A published complete blob stays immutable even if the event rolls back.
             fail('PATH_UNSAFE','Could not safely store uploaded bytes')
         finally:os.close(fd)
 
@@ -355,10 +444,21 @@ class Engine:
     def _dependency_stamp(task, tasks):
         return {dep: {'artifact': tasks[dep]['artifact']['sha256'], 'decision': tasks[dep]['decisions'][-1]['id']} for dep in task['dependencies'] if tasks[dep].get('artifact') and tasks[dep]['decisions']}
 
-    def _project(self, state):
+    def _now(self):
+        now = self.clock()
+        try:
+            valid = type(now) in (int, float) and math.isfinite(now)
+        except OverflowError:
+            valid = False
+        if not valid:
+            fail('BAD_CLOCK', 'Clock must return finite numeric seconds')
+        return now
+
+    def _project(self, state, now=None):
+        if now is None:
+            now = self._now()
         tasks = {t['id']: t for t in state['tasks']}
         done = set()
-        now = self.clock()
         def status(task):
             if task['id'] in done:
                 return
@@ -410,6 +510,14 @@ class Engine:
         with self._db() as db:
             return self._project(self._replay(db))
 
+    def checkpoint(self):
+        """Verify existing ledger history without reading mutable artifact files."""
+        with self._db() as db:
+            state = self._replay(db)
+        if not state['contract_revision']:
+            fail('NO_CONTRACT', 'The existing ledger has no owner-approved contract')
+        return {key: state[key] for key in ('project_id', 'events_count', 'ledger_head', 'integrity')}
+
     def artifact_view(self,arguments):
         fields(arguments,{'task_id','contract_revision','artifact_revision'})
         identifier(arguments['task_id'],'task_id')
@@ -443,17 +551,20 @@ class Engine:
             fail('BAD_INPUT', 'Action too large')
         with self._db() as db:
             db.execute('BEGIN IMMEDIATE')
-            state = self._project(self._replay(db))
+            state = self._replay(db)
+            # Linearize eligibility after lock acquisition and replay. Metadata
+            # uses this same decision time even if artifact work takes longer.
+            now = self._now()
+            state = self._project(state, now)
             if state['events_count'] >= MAX_EVENTS:
                 fail('LEDGER_LIMIT')
-            now = self.clock()
-            if not math.isfinite(now):
-                fail('BAD_CLOCK')
             data = self._prepare(action, arguments, state, now)
             event = dict(action=action, data=data, actor=self.actor, role=self.role, at=now)
             raw = canonical(event); prev = state['ledger_head']
             total=db.execute('SELECT COALESCE(SUM(length(payload)),0) FROM events').fetchone()[0]
             if total+len(raw)>MAX_LEDGER_BYTES:fail('LEDGER_LIMIT','Event payloads are limited to 16 MiB per project; ask its owner to archive or manage retention')
+            if action == 'ingest_artifact':
+                self._store_upload(data['artifact']['sha256'], arguments['content'].encode('utf-8'))
             digest = hashlib.sha256((prev+'\n'+raw).encode()).hexdigest()
             db.execute('INSERT INTO events VALUES(?,?,?,?)', (state['events_count']+1,raw,prev,digest))
             return self._project(self._replay(db))
@@ -478,7 +589,7 @@ class Engine:
             validate_contract(args['contract'], self.actor)
             if args['contract']['project_id'] != state['project_id']:
                 fail('BAD_INPUT', 'Project id is immutable')
-            return dict(copy.deepcopy(args['contract']), contract_revision=rev+1, contract_change_reason=args['reason'])
+            return dict(copy.deepcopy(args['contract']), demo=args['contract'].get('demo', False), contract_revision=rev+1, contract_change_reason=args['reason'])
         identifier(args['task_id'], 'task_id')
         task = next((t for t in state['tasks'] if t['id'] == args['task_id']), None)
         if task is None:
@@ -515,7 +626,6 @@ class Engine:
                 if len(data)>MAX_INGEST:
                     fail('PATH_TOO_LARGE','Uploaded text is limited to 128 KiB of UTF-8 bytes')
                 digest=hashlib.sha256(data).hexdigest();size=len(data)
-                self._store_upload(digest,data)
                 metadata=dict(path='uploaded:'+filename,filename=filename,source='uploaded_text')
             else:
                 digest, size, _ = self._digest(args['path'])
@@ -534,6 +644,8 @@ class Engine:
         common = dict(actor=self.actor, role=self.role, contract_revision=rev, artifact_revision=artifact['revision'], artifact_sha256=digest, at=now)
         if action == 'run_checks':
             evidence = []
+            json_parsed = False
+            json_value = None
             for check in task['acceptance']:
                 kind = check['kind']
                 if kind == 'manual_review':
@@ -545,7 +657,11 @@ class Engine:
                     elif kind == 'file_contains':
                         passed = check['value'] in raw.decode('utf-8')
                     elif kind == 'json_equals':
-                        value = json.loads(raw)
+                        if not json_parsed:
+                            # Cache failed parses too, only for these exact bytes in this action.
+                            json_parsed = True
+                            json_value = artifact_json(raw)
+                        value = json_value
                         passed = isinstance(value, dict) and check['key'] in value and canonical(value[check['key']]) == canonical(check['value'])
                 except (ValueError, UnicodeError, RumboError, RecursionError):
                     passed = False
