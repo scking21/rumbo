@@ -29,7 +29,7 @@ class DistributionReviewCasesTests(unittest.TestCase):
     def test_local_cases_start_with_real_installed_discovery_and_binding(self):
         # Regresses if local packaging again embeds the generic remote cases.
         with tempfile.TemporaryDirectory() as tmp:
-            root=Path(tmp); target=root/'local.zip'; build_local(ROOT,target)
+            root=Path(tmp).resolve(); target=root/'local.zip'; build_local(ROOT,target)
             cases=cases_from_zip(target)
             self.assertEqual(expected_tools(cases['positive'][0]),
                              {'rumbo_list_projects','rumbo_connect_project','rumbo_state'})
@@ -68,7 +68,7 @@ class DistributionReviewCasesTests(unittest.TestCase):
     def test_local_negative_case_cannot_gain_reviewer_or_human_authority(self):
         # Exercise real dispatcher rejection, not just presence of safety wording.
         with tempfile.TemporaryDirectory() as tmp:
-            protocol=InstalledProtocol(tmp)
+            protocol=InstalledProtocol(Path(tmp).resolve())
             listed=protocol.dispatch({'jsonrpc':'2.0','id':1,'method':'tools/list'})
             names={tool['name'] for tool in listed['result']['tools']}
             for name in ('rumbo_submit_review','rumbo_decide','rumbo_create_contract','rumbo_revise_contract'):
