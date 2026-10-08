@@ -372,6 +372,22 @@ class BackupTests(unittest.TestCase):
         self.assertEqual(self.destination.stat().st_ino, original)
         self.assertEqual(list(self.destination.iterdir()), [])
 
+    def test_backup_keeps_a_same_process_writer_lock(self):
+        # POSIX drops every lock this process holds on a file when any descriptor for it closes.
+        probe = ("import sqlite3,sys\n"
+                 "db=sqlite3.connect(sys.argv[1],timeout=0,isolation_level=None)\n"
+                 "try:db.execute('BEGIN IMMEDIATE');print('ACQUIRED')\n"
+                 "except sqlite3.OperationalError:print('BUSY')\n")
+        def other_process():
+            return subprocess.run([sys.executable, '-c', probe, str(self.root / '.rumbo/state.sqlite3')],
+                                  capture_output=True, text=True).stdout.strip()
+        writer = sqlite3.connect(self.root / '.rumbo/state.sqlite3', isolation_level=None)
+        self.addCleanup(writer.close)
+        writer.execute('BEGIN IMMEDIATE')
+        self.assertEqual(other_process(), 'BUSY')
+        self.backup()
+        self.assertEqual(other_process(), 'BUSY', 'Backup released a lock owned by another connection')
+
     def test_cli_prints_json_and_failure_has_nonzero_status(self):
         self.api()
         result = subprocess.run([sys.executable, '-m', 'rumbo.backup', 'backup', '--root', str(self.root), '--destination', str(self.archive)], capture_output=True, text=True)
