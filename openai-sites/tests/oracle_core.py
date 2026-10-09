@@ -219,6 +219,7 @@ class Engine:
             fail('FORBIDDEN', 'Read-only storage requires a viewer principal')
         self.role = role
         self.read_only = read_only
+        self.create = create
         self.clock = clock or time.time
         state = self.root / '.rumbo'
         if state.is_symlink():
@@ -248,8 +249,11 @@ class Engine:
             if self.read_only:
                 db=sqlite3.connect(self.db_path.as_uri()+'?mode=ro',uri=True,timeout=15)
                 db.execute('PRAGMA query_only=ON')
-            else:
+            elif self.create:
                 db=sqlite3.connect(str(self.db_path),timeout=15)
+            else:
+                # mode=rw never creates a database that vanished after construction.
+                db=sqlite3.connect(self.db_path.as_uri()+'?mode=rw',uri=True,timeout=15)
             db.execute('PRAGMA busy_timeout=15000')
             with db:
                 yield db

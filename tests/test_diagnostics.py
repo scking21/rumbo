@@ -136,6 +136,31 @@ class RecoveryMessageTests(unittest.TestCase):
         self.assertIn('STALE_CONTRACT: Contract is at revision 1, not 4', response['result']['content'][0]['text'])
 
 
+class NonCreatingEngineTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+
+    def test_uninitialized_root_is_refused_and_left_untouched(self):
+        with self.assertRaises(RumboError) as caught:
+            Engine(self.root, 'maker', 'worker', create=False)
+        self.assertEqual(caught.exception.code, 'NO_CONTRACT')
+        self.assertEqual(list(self.root.iterdir()), [])
+
+    def test_ledger_removed_after_construction_is_not_recreated(self):
+        Engine(self.root, 'owner', 'human').execute('create_contract', contract())
+        database = self.root / '.rumbo' / 'state.sqlite3'
+        engine = Engine(self.root, 'maker', 'worker', create=False)
+        self.assertEqual(engine.snapshot()['project_id'], 'sample')
+        database.unlink()
+        for attempt in (engine.snapshot, lambda: engine.execute('claim_task', dict(task_id='export', contract_revision=1, lease_seconds=60))):
+            with self.assertRaises(RumboError) as caught:
+                attempt()
+            self.assertEqual(caught.exception.code, 'LEDGER_UNREADABLE')
+            self.assertEqual([entry.name for entry in database.parent.iterdir()], [])
+
+
 class CommandLineTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
