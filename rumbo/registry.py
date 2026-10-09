@@ -196,7 +196,7 @@ class ExistingProjectEngine(Engine):
                 self._pins = self._identities('PROJECT_UNINITIALIZED')
                 self._acquire_pins()
                 if expected and self._pins[0] != (expected['device'], expected['inode']):
-                    fail('PROJECT_CHANGED', 'Registered project directory was replaced; owner re-registration is required')
+                    fail('PROJECT_CHANGED', 'Registered project directory was replaced; the owner must remove this alias and register the project again')
                 with self._db() as db:
                     self._validate_schema(db)
                     state = self._replay(db)
@@ -383,7 +383,7 @@ def register_project(plugin_data, alias, root):
 def _register_project_locked(plugin_data, alias, root):
     registry = ProjectRegistry(plugin_data)
     if alias in registry.document['projects']:
-        fail('ALIAS_EXISTS', 'Alias already exists; owner must review existing configuration rather than silently replace it')
+        fail('ALIAS_EXISTS', 'Alias already exists; review it with python -m rumbo.registry list and remove it first if it should point elsewhere')
     if len(registry.document['projects']) >= MAX_PROJECTS:
         fail('REGISTRY_LIMIT', 'At most 100 projects can be registered')
     with closing(ExistingProjectEngine(root, 'registry-validator')) as engine:
@@ -391,30 +391,62 @@ def _register_project_locked(plugin_data, alias, root):
         entry = dict(root=str(engine.root), project_id=engine.project_id, device=info.st_dev, inode=info.st_ino)
         document = copy.deepcopy(registry.document)
         document['projects'][alias] = entry
-        raw = (json.dumps(document, indent=2, sort_keys=True) + '\n').encode('utf-8')
-        if len(raw) > MAX_REGISTRY_BYTES:
-            fail('REGISTRY_LIMIT', 'Registry exceeds 128 KiB')
-        temporary = None
-        try:
-            fd, temporary = tempfile.mkstemp(prefix='.projects-', suffix='.tmp', dir=registry.directory)
-            with os.fdopen(fd, 'wb') as handle:
-                os.fchmod(handle.fileno(), 0o600)
-                handle.write(raw)
-                handle.flush()
-                os.fsync(handle.fileno())
-            registry.verify()
-            engine.verify()
-            os.replace(temporary, registry.path)
-            temporary = None
-            directory_fd = os.open(str(registry.directory), os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
-            try:
-                os.fsync(directory_fd)
-            finally:
-                os.close(directory_fd)
-        finally:
-            if temporary is not None:
-                os.unlink(temporary)
+        _replace_registry(registry, document, engine.verify)
         return dict(alias=alias, project_id=engine.project_id, registry=str(registry.path))
+
+
+def _replace_registry(registry, document, before_publish=None):
+    raw = (json.dumps(document, indent=2, sort_keys=True) + '\n').encode('utf-8')
+    if len(raw) > MAX_REGISTRY_BYTES:
+        fail('REGISTRY_LIMIT', 'Registry exceeds 128 KiB')
+    temporary = None
+    try:
+        fd, temporary = tempfile.mkstemp(prefix='.projects-', suffix='.tmp', dir=registry.directory)
+        with os.fdopen(fd, 'wb') as handle:
+            os.fchmod(handle.fileno(), 0o600)
+            handle.write(raw)
+            handle.flush()
+            os.fsync(handle.fileno())
+        registry.verify()
+        if before_publish:
+            before_publish()
+        os.replace(temporary, registry.path)
+        temporary = None
+        directory_fd = os.open(str(registry.directory), os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
+    finally:
+        if temporary is not None:
+            os.unlink(temporary)
+
+
+def remove_project(plugin_data, alias):
+    """Trusted owner CLI helper: forget an alias. The project and its ledger are not touched."""
+    identifier(alias, 'project alias')
+    with _registration_lock(plugin_data):
+        registry = ProjectRegistry(plugin_data)
+        if alias not in registry.document['projects']:
+            fail('UNKNOWN_PROJECT', 'No such alias; run python -m rumbo.registry list to see the registered ones')
+        document = copy.deepcopy(registry.document)
+        entry = document['projects'].pop(alias)
+        _replace_registry(registry, document)
+        return dict(removed=alias, project_id=entry['project_id'], root=entry['root'], registry=str(registry.path))
+
+
+def list_registered(plugin_data):
+    """Trusted owner CLI helper: every alias with its root and whether it would still connect."""
+    registry = ProjectRegistry(plugin_data)
+    projects = []
+    for alias, entry in sorted(registry.document['projects'].items()):
+        try:
+            with closing(ExistingProjectEngine(entry['root'], 'registry-validator', expected=entry)):
+                status = 'ok'
+        except RumboError as error:
+            status = str(error)
+        projects.append(dict(alias=alias, project_id=entry['project_id'], root=entry['root'], status=status))
+    return dict(registry=str(registry.path), projects=projects)
 
 
 def main(argv=None):
@@ -424,9 +456,17 @@ def main(argv=None):
     add = commands.add_parser('add', help='Register an initialized project under a new alias; never initializes its ledger')
     add.add_argument('alias')
     add.add_argument('--root', required=True, help='Absolute canonical directory of the initialized project')
+    commands.add_parser('list', help='Show every alias, its project root, and whether it would still connect')
+    remove = commands.add_parser('remove', help='Forget an alias, for example before re-registering a moved project; never touches the project')
+    remove.add_argument('alias')
     args = parser.parse_args(argv)
     try:
-        result = register_project(args.plugin_data, args.alias, args.root)
+        if args.command == 'list':
+            result = list_registered(args.plugin_data)
+        elif args.command == 'remove':
+            result = remove_project(args.plugin_data, args.alias)
+        else:
+            result = register_project(args.plugin_data, args.alias, args.root)
         print(json.dumps(result))
         return 0
     except (RumboError, OSError, ValueError) as error:
