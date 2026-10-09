@@ -31,6 +31,34 @@ class HttpDisconnectTests(unittest.TestCase):
         ]))
         self.addCleanup(self.server.server_close)
 
+    def test_incomplete_request_body_never_commits_even_when_received_json_is_valid(self):
+        body = json.dumps(dict(jsonrpc='2.0', id=75, method='tools/call', params=dict(
+            name='rumbo_ingest_artifact', arguments=dict(task_id='export', contract_revision=1,
+                                                       filename='proof.csv', content='name,amount\nSynthetic,7')))).encode()
+        before = self.worker.snapshot()
+        thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            for missing in (1, 5):
+                with self.subTest(missing=missing), socket.create_connection(
+                        ('127.0.0.1', self.server.server_port), timeout=5) as client:
+                    headers = (f'POST /mcp HTTP/1.1\r\nHost: 127.0.0.1:{self.server.server_port}\r\n'
+                               'Authorization: Bearer synthetic-disconnect-token\r\nContent-Type: application/json\r\n'
+                               f'Content-Length: {len(body) + missing}\r\nConnection: close\r\n\r\n').encode()
+                    client.sendall(headers + body)
+                    client.shutdown(socket.SHUT_WR)
+                    with http.client.HTTPResponse(client) as response:
+                        response.begin()
+                        self.assertEqual(response.status, 400)
+                        response.read()
+                    after = self.worker.snapshot()
+                    self.assertEqual(after['events_count'], before['events_count'])
+                    self.assertEqual(after['ledger_head'], before['ledger_head'])
+                    self.assertIsNone(next(task for task in after['tasks'] if task['id'] == 'export')['artifact'])
+        finally:
+            self.server.shutdown()
+            thread.join(5)
+
     def test_reset_after_commit_preserves_upload_and_next_request_without_traceback(self):
         response_ready, client_closed, request_finished = (threading.Event() for _ in range(3))
         handler_class = self.server.RequestHandlerClass

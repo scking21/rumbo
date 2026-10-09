@@ -76,6 +76,8 @@ function updateFilterNotice() {
   notice.hidden = !task || matches(task, $('status-filter').value);
 }
 function renderList() {
+  const focusedTask = document.activeElement?.dataset?.taskId;
+  let focusTarget = null;
   const tasks = state.tasks.filter(task => matches(task, $('status-filter').value));
   const fragment = document.createDocumentFragment();
   for (const task of tasks) {
@@ -83,12 +85,16 @@ function renderList() {
     const button = element('button',null,'task-button');
     button.type = 'button';
     button.setAttribute('aria-pressed', String(selected === task.id));
+    button.dataset.taskId = task.id;
+    if (task.id === focusedTask) focusTarget = button;
     button.append(element('span',task.title || task.id,'task-title'),statusNode(task.status));
     if (task.lease && task.status === 'claimed') button.append(element('span','Claimed by ' + text(task.lease.actor),'task-meta'));
     button.addEventListener('click', () => { selected = task.id; renderList(); renderDetail(); });
     li.append(button); fragment.append(li);
   }
   $('task-list').replaceChildren(fragment);
+  // Rebuilding the list must not strand keyboard focus on the document body.
+  if (focusedTask !== undefined) (focusTarget || $('status-filter')).focus({preventScroll:true});
   $('list-empty').hidden = tasks.length > 0;
   $('list-empty').textContent = state.tasks.length ? 'No tasks match this filter' : 'No tasks yet';
 }
@@ -127,16 +133,21 @@ function handoff(task) {
     'Ledger head: ' + text(state.ledger_head), 'Ledger integrity: ' + (state.integrity?.valid === true ? 'verified by hosted runtime' : 'not verified'));
   return lines.join('\n');
 }
+let copySequence = 0;
 async function copyHandoff(task) {
-  const summary = handoff(task);
+  const summary = handoff(task), sequence = ++copySequence;
+  const feedback = $('message'), fallback = $('handoff-text'), previousFocus = document.activeElement;
+  // A clipboard permission prompt can finish after navigation or another copy.
+  const current = () => sequence === copySequence && $('message') === feedback && $('handoff-text') === fallback;
   try {
     if (!navigator.clipboard?.writeText) throw new Error('Clipboard unavailable');
     await navigator.clipboard.writeText(summary);
-    $('message').textContent = 'Copied handoff summary';
+    if (current()) feedback.textContent = 'Copied handoff summary';
   } catch (_) {
-    $('handoff-text').value = summary; $('handoff-text').hidden = false;
-    $('handoff-text').focus(); $('handoff-text').select();
-    $('message').textContent = 'Select and copy the handoff summary below';
+    if (!current()) return;
+    fallback.value = summary; fallback.hidden = false;
+    if (document.activeElement === previousFocus) {fallback.focus(); fallback.select();}
+    feedback.textContent = 'Select and copy the handoff summary below';
   }
 }
 function renderDetail() {
