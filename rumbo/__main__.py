@@ -31,7 +31,7 @@ def main(argv=None):
     sub.add_parser('mcp',help='MCP stdio server, no human-authority tools')
     serve=sub.add_parser('serve',help='Run Streamable HTTP behind your approved TLS/OAuth deployment')
     serve.add_argument('--config',required=True);serve.add_argument('--host',default='127.0.0.1');serve.add_argument('--port',type=int,default=8765)
-    demo=sub.add_parser('demo',help='Create an isolated synthetic sample project; refuses existing contract')
+    sub.add_parser('demo',help='Create an isolated synthetic sample project; refuses existing contract')
     args=parser.parse_args(argv)
     try:
         if args.command=='serve':

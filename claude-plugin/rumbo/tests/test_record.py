@@ -1014,7 +1014,7 @@ class RecordTest(unittest.TestCase):
             self.assertEqual(out6.strip(), "", f"Expected silent with stop_hook_active true, got: {out6}")
             self.assertEqual(err6, "", f"Unexpected stderr: {err6}")
             # Marker should still exist (not renamed).
-            self.assertTrue(os.path.exists(marker_s3), f"Marker for s3 was incorrectly removed or renamed")
+            self.assertTrue(os.path.exists(marker_s3), "Marker for s3 was incorrectly removed or renamed")
 
             # 6. A non-planning prompt writes no marker.
             prompt_s4 = json.dumps({"prompt": "fix the typo", "session_id": "s4"})

@@ -272,7 +272,8 @@ def _is_date_sourced(date_str, source_text):
     if date is None:
         return (False, False)
     name = MONTHS[date.month - 1]
-    month = rf"(?:{name}|{name[:3]}\.?{'|Sept\\.?' if date.month == 9 else ''})"
+    sept = r"|Sept\.?" if date.month == 9 else ""
+    month = rf"(?:{name}|{name[:3]}\.?{sept})"
     day = rf"0?{date.day}(?:st|nd|rd|th)?"
     patterns = [
         rf"\b{month}\s+{day}\b",
