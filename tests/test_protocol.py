@@ -245,6 +245,16 @@ class OAuthTests(unittest.TestCase):
             bad=OAuthVerifier(self.config(),clock=lambda:1000,introspect=lambda token:claims)
             self.assertIsNone(bad.verify('test-token'))
 
+    def test_oversized_numeric_dates_fail_closed_without_overflow(self):
+        for field in ('exp', 'nbf'):
+            for value in (10 ** 1000, -(10 ** 1000)):
+                with self.subTest(field=field, sign=1 if value > 0 else -1):
+                    claims = self.claims()
+                    claims[field] = value
+                    verifier = OAuthVerifier(self.config(), clock=lambda: 1000,
+                                             introspect=lambda token: claims)
+                    self.assertIsNone(verifier.verify('synthetic-token'))
+
     def test_owner_routes_are_integrated_and_fail_closed_without_setup(self):
         config=self.config()
         server=create_server('127.0.0.1',0,config)

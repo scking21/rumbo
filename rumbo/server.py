@@ -120,7 +120,7 @@ class OAuthVerifier:
             if 'rumbo:write' not in scopes.split():
                 principal['role']='viewer'
             return principal
-        except (OSError,ValueError,TypeError,KeyError,RecursionError):
+        except (OSError,ValueError,TypeError,KeyError,RecursionError,OverflowError):
             return None
 
 
@@ -309,6 +309,9 @@ def create_server(host,port,config):
                 if not 0<=length<=MAX_MESSAGE:
                     return self.send(413,{'error':'Request exceeds limit'})
                 raw=self.rfile.read(length)
+                if len(raw)!=length:
+                    self.close_connection=True
+                    return self.send(400,{'error':'Incomplete request body'})
                 request=safe_json(raw)
             except (ValueError,UnicodeError,RecursionError):
                 return self.send(400,rpc_error(None,-32700,'Invalid JSON'))
