@@ -3,6 +3,7 @@
 
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -2112,6 +2113,7 @@ class RecordTest(unittest.TestCase):
                 code, out, err = self._check_with(words, dict(window, segments_min=[minutes]))
                 self.assertEqual((code, out.strip()), (0, "C1: PASS fits_window"), out + err)
         for words, minutes in (("9:00 to 17:00 with 12 hours of prep", 120), ("9:00 to 17:00, 1-2 hours", 120),
+                               ("9:00 to 17:00, 1e2 hours", 120), ("9:00 to 17:00, \u22122 hours", 120), ("9:00 to 17:00, v2 hours", 120),
                                ("9:00 to 17:00, 2.5 hourly rate", 150)):
             with self.subTest(words=words):
                 code, out, err = self._check_with(words, dict(window, segments_min=[minutes]))
@@ -2136,7 +2138,7 @@ class RecordTest(unittest.TestCase):
         pairs = (("I don't want a cake", "Honestly I don\u2019t want a cake."),
                  ("I don\u2019t want a cake", "Honestly I don't want a cake."),
                  ('call it "alpha" for now', "Let\u2019s call it \u201calpha\u201d for now"),
-                 ("wait... ok, ship it", "wait\u2026 ok, ship it"))
+                 ("wait... ok, ship it", "wait\u2026 ok, ship it"), ("wait\u2026 ok, ship it", "wait.... ok, ship it"))
         for quote, said in pairs:
             with self.subTest(quote=quote):
                 code, out, err = self._check_with(quote, {"kind": "within_budget", "amounts": [], "total_cap": 0}, said)
@@ -2147,7 +2149,8 @@ class RecordTest(unittest.TestCase):
         for said in ("Don\u2019t spend $900 on catering.", "We shouldn't spend $900 on catering.",
                      "We shouldn\u2019t spend $900 on catering.", "I wouldn't spend $900 on catering.",
                      "We aren\u2019t going to spend $900 on catering.", "Nobody should spend $900 on catering.",
-                     "Neither of us will spend $900 on catering."):
+                     "Neither of us will spend $900 on catering.", "Do not \u2026 spend $900 on catering.",
+                     "Do not ... spend $900 on catering.", "Never.. spend $900 on catering."):
             with self.subTest(said=said):
                 code, out, err = self._check_with("spend $900 on catering", {"kind": "within_budget", "amounts": [], "total_cap": 0}, said)
                 self.assertEqual(code, 1)
@@ -2192,11 +2195,20 @@ class RecordTest(unittest.TestCase):
 
     def test_own_state_directory_open_to_others_is_closed_and_still_counts(self):
         state = os.path.join(self.dir, "state")
-        os.mkdir(state)
-        os.chmod(state, 0o777)
-        outs = [self._workshop_gate(state, chained=call > 0) for call in range(5)]
-        self.assertEqual(os.stat(state).st_mode & 0o777, 0o700)
-        self.assertEqual([bool(out) for out in outs], [True, True, True, False, False])
+        for mode in (0o777, 0o755):
+            with self.subTest(mode=oct(mode)):
+                shutil.rmtree(state, ignore_errors=True)
+                os.mkdir(state)
+                os.chmod(state, mode)
+                # A marker an earlier version left readable by others.
+                old = marker(state, "s1", ".blocks")
+                with open(old, "w", encoding="utf-8") as handle:
+                    handle.write("0")
+                os.chmod(old, 0o644)
+                outs = [self._workshop_gate(state, chained=call > 0) for call in range(5)]
+                self.assertEqual(os.stat(state).st_mode & 0o777, 0o700)
+                self.assertEqual({os.stat(os.path.join(state, name)).st_mode & 0o777 for name in os.listdir(state)}, {0o600})
+                self.assertEqual([bool(out) for out in outs], [True, True, True, False, False])
 
     def test_marker_symlink_is_never_followed(self):
         state = os.path.join(self.dir, "state")

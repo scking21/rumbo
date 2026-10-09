@@ -206,7 +206,7 @@ def validate_contract(data, actor):
 
 
 class Engine:
-    def __init__(self, root, actor, role, clock=None, read_only=False):
+    def __init__(self, root, actor, role, clock=None, read_only=False, create=True):
         self.root = Path(root).resolve()
         if not self.root.is_dir():
             fail('PATH_INVALID', 'Project root must exist')
@@ -223,17 +223,19 @@ class Engine:
         state = self.root / '.rumbo'
         if state.is_symlink():
             fail('PATH_UNSAFE', 'State directory may not be a symlink')
-        if read_only:
+        # Only a caller that may start a project creates storage; a lost or mistyped root must not gain an empty ledger.
+        existing = read_only or not create
+        if existing:
             if not state.is_dir():
-                fail('NO_CONTRACT', 'No existing project ledger; initialize an owner-approved contract first')
+                fail('NO_CONTRACT', 'No project ledger in this root; check the root, or have its owner initialize a contract first')
         else:
             state.mkdir(mode=0o700, exist_ok=True)
         self.db_path = state / 'state.sqlite3'
         if self.db_path.is_symlink():
             fail('PATH_UNSAFE', 'State database may not be a symlink')
-        if read_only:
+        if existing:
             if not self.db_path.is_file():
-                fail('NO_CONTRACT', 'No existing project ledger; initialize an owner-approved contract first')
+                fail('NO_CONTRACT', 'No project ledger in this root; check the root, or have its owner initialize a contract first')
         else:
             with self._db() as db:
                 db.execute('CREATE TABLE IF NOT EXISTS events(seq INTEGER PRIMARY KEY, payload TEXT NOT NULL, previous TEXT NOT NULL, digest TEXT NOT NULL)')

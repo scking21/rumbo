@@ -49,9 +49,25 @@ class HttpDisconnectTests(unittest.TestCase):
             database.chmod(0)
             stderr = io.StringIO()
             with contextlib.redirect_stderr(stderr):
-                self.assertEqual(post(), (503, {'error': 'Project storage unavailable'}))
+                # An unreadable ledger is the tool's own refusal; a missing or inaccessible project is the server's.
+                status, unreadable = post()
+                self.assertEqual((status, unreadable['result']['isError']), (200, True))
+                self.assertIn('LEDGER_UNREADABLE', unreadable['result']['content'][0]['text'])
                 database.chmod(0o600)
                 self.assertEqual(post()[0], 200)
+                self.root.chmod(0)
+                try:
+                    self.assertEqual(post(), (503, {'error': 'Project storage unavailable'}))
+                finally:
+                    self.root.chmod(0o700)
+                self.assertEqual(post()[0], 200)
+                # A ledger that disappears is lost storage, never a fresh empty project.
+                saved = database.read_bytes()
+                database.unlink()
+                self.assertEqual(post(), (503, {'error': 'Project storage unavailable'}))
+                self.assertFalse(database.exists())
+                database.write_bytes(saved)
+                self.assertEqual(post()[1]['result']['structuredContent']['project_id'], 'sample')
                 shutil.rmtree(self.root)
                 self.assertEqual(post(), (503, {'error': 'Project storage unavailable'}))
             self.assertNotIn('Traceback', stderr.getvalue())

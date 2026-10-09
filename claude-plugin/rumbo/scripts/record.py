@@ -184,7 +184,7 @@ def _is_minutes_sourced(minutes, source_text):
     """True when a duration in minutes is stated in minutes or as hours ("2-hour", "1.5 hours")."""
     if _is_number_sourced(minutes, source_text):
         return True
-    for match in re.finditer(r"(?<![\d.:,-])(\d+(?:\.\d+)?)[\s-]*(?:hours?|hrs?)\b", source_text, re.IGNORECASE):
+    for match in re.finditer(r"(?<![\w.:,\u2212-])(\d+(?:\.\d+)?)[\s-]*(?:hours?|hrs?)\b", source_text, re.IGNORECASE):
         if decimal.Decimal(match.group(1)) * 60 == minutes:
             return True
     return False
@@ -440,15 +440,17 @@ def _normalize(text):
     return re.sub(r"\s+", " ", text).strip()
 
 
-TYPOGRAPHY = str.maketrans({"\u2018": "'", "\u2019": "'", "\u02bc": "'", "\u201c": '"', "\u201d": '"', "\u2026": "..."})
+TYPOGRAPHY = str.maketrans({"\u2018": "'", "\u2019": "'", "\u02bc": "'", "\u201c": '"', "\u201d": '"'})
 
 
 def _fold(text):
-    """_normalize, plus typographic quotes, apostrophes and ellipses as their ASCII forms.
+    """_normalize, with typographic quotes and apostrophes as ASCII and runs of dots as one ellipsis.
 
     Editors and chat apps swap these silently; none of them changes what was said.
+    Dots fold toward the ellipsis character because a pause does not end a
+    clause: "Do not ... spend $900" stays negated.
     """
-    return _normalize(text.translate(TYPOGRAPHY))
+    return _normalize(re.sub(r"\.{2,}", "\u2026", text.translate(TYPOGRAPHY)))
 
 
 NEGATION = re.compile(r"\b(?:not|no|never|\w+n't|dont|cannot|without|avoid|neither|nor|nobody|none|nothing)\b", re.IGNORECASE)
@@ -1040,10 +1042,18 @@ def _open_marker(path, mode="r"):
     if hasattr(os, "geteuid"):
         if info.st_uid != os.geteuid():
             raise OSError("state directory belongs to another user")
-        if info.st_mode & 0o022:
+        if info.st_mode & 0o077:
             os.chmod(directory, 0o700)
     flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC if mode == "w" else os.O_RDONLY
-    return os.fdopen(os.open(path, flags | getattr(os, "O_NOFOLLOW", 0), 0o600), mode, encoding="utf-8")
+    fd = os.open(path, flags | getattr(os, "O_NOFOLLOW", 0), 0o600)
+    try:
+        # A marker left by an earlier version may be readable by others.
+        if hasattr(os, "fchmod"):
+            os.fchmod(fd, 0o600)
+        return os.fdopen(fd, mode, encoding="utf-8")
+    except BaseException:
+        os.close(fd)
+        raise
 
 
 def _planning_prompts(session_id):

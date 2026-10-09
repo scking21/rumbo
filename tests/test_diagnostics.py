@@ -151,8 +151,7 @@ class CommandLineTests(unittest.TestCase):
             with self.subTest(command=command[0]):
                 result = self.cli('--root', self.root, *command)
                 self.assertEqual(result.returncode, 2)
-                self.assertIn('NO_CONTRACT: No Rumbo project in', result.stderr)
-                self.assertIn('check --root', result.stderr)
+                self.assertIn('NO_CONTRACT: No project ledger in this root; check the root', result.stderr)
                 self.assertEqual(list(self.root.iterdir()), [])
 
     def test_agent_commands_still_work_on_an_initialized_project(self):

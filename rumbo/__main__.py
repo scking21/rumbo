@@ -55,10 +55,8 @@ def main(argv=None):
                 raise RumboError('CANCELLED')
             result=Engine(args.root,args.owner,'human').execute(args.action,payload)
         else:
-            # Only the owner's create_contract or demo may start a ledger; a mistyped --root must not leave one behind.
-            if args.command!='verify' and Path(args.root).is_dir() and not (Path(args.root)/'.rumbo'/'state.sqlite3').is_file():
-                raise RumboError('NO_CONTRACT','No Rumbo project in '+str(Path(args.root).resolve())+'; check --root, or have the owner run operator create_contract there')
-            engine=Engine(args.root,args.actor,'viewer' if args.command=='verify' else args.role,read_only=args.command=='verify')
+            # Only the owner's create_contract or demo may start a ledger.
+            engine=Engine(args.root,args.actor,'viewer' if args.command=='verify' else args.role,read_only=args.command=='verify',create=False)
             if args.command=='mcp':
                 serve_stdio(engine);return 0
             if args.command=='call':
