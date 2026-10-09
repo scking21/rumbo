@@ -1105,6 +1105,27 @@ def cmd_show(args):
     return 0
 
 
+def _publish_new(path, text):
+    """Create path holding text, or raise FileExistsError: never overwrites; appears whole where hard links work."""
+    fd, temp = tempfile.mkstemp(dir=os.path.dirname(os.path.abspath(path)), prefix=".record-")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(text)
+        try:
+            os.link(temp, path)
+        except FileExistsError:
+            raise
+        except OSError:
+            # No hard links here (exFAT, some network mounts): still exclusive, not atomic.
+            with open(path, "x", encoding="utf-8") as handle:
+                handle.write(text)
+    finally:
+        try:
+            os.unlink(temp)
+        except OSError:
+            pass
+
+
 def cmd_init(args):
     if os.path.exists(args.record):
         print("RECORD_EXISTS", file=sys.stderr)
@@ -1128,9 +1149,10 @@ def cmd_init(args):
     try:
         if parent and not os.path.isdir(parent):
             os.makedirs(parent, exist_ok=True)
-        with open(args.record, "w", encoding="utf-8") as handle:
-            json.dump(record, handle, indent=2)
-            handle.write("\n")
+        _publish_new(args.record, json.dumps(record, indent=2) + "\n")
+    except FileExistsError:
+        print("RECORD_EXISTS", file=sys.stderr)
+        return 1
     except OSError as error:
         print(str(error), file=sys.stderr)
         return 2
@@ -1173,24 +1195,26 @@ def cmd_stop_gate(args):
     except Exception:
         # Fail closed: a non-zero exit without block JSON would let the stop through.
         session_id = hook_input.get("session_id") if isinstance(hook_input, dict) else None
-        if isinstance(hook_input, dict) and hook_input.get("stop_hook_active") is True and not session_id:
+        chained = isinstance(hook_input, dict) and hook_input.get("stop_hook_active") is True
+        if chained and not session_id:
             return 0
-        return _block_bounded(session_id, [GATE_ERROR], GATE_ERROR_TAIL)
+        return _block_bounded(session_id, [GATE_ERROR], GATE_ERROR_TAIL, chained=chained)
 
 
 def _stop_gate(args, hook_input):
     session_id = hook_input.get("session_id") if isinstance(hook_input, dict) else None
+    chained = isinstance(hook_input, dict) and hook_input.get("stop_hook_active") is True
     # Without a session the harness flag is the only loop guard; with one, the
     # per-session block counter bounds the loop instead.
-    if isinstance(hook_input, dict) and hook_input.get("stop_hook_active") is True and not session_id:
+    if chained and not session_id:
         return 0
 
     try:
         record = load_record(args.record)
     except LoadError as error:
         if error.code != "RECORD_NOT_FOUND":
-            return _block_bounded(session_id, [BROKEN_RECORD, error.code], BROKEN_TAIL)
-        if isinstance(hook_input, dict) and hook_input.get("stop_hook_active") is True:
+            return _block_bounded(session_id, [BROKEN_RECORD, error.code], BROKEN_TAIL, chained=chained)
+        if chained:
             return 0
         # No record yet: enforce the nudge once per session if a marker exists.
         marker_path = _marker_path(session_id, ".nudged")
@@ -1221,7 +1245,7 @@ def _stop_gate(args, hook_input):
 
     faults = validate_record(record)
     if faults:
-        return _block_bounded(session_id, [BROKEN_RECORD] + faults[:5], BROKEN_TAIL)
+        return _block_bounded(session_id, [BROKEN_RECORD] + faults[:5], BROKEN_TAIL, chained=chained)
 
     parts, problem_ids = record_problems(record)
     for check_id in _read_failed_ids(session_id):
@@ -1275,7 +1299,7 @@ def _stop_gate(args, hook_input):
         return 0
     present = {c.get("id") for c in record.get("checks") or []}
     remembered = problem_ids + [i for i in _read_failed_ids(session_id) if i not in present]
-    return _block_bounded(session_id, parts, CONFLICT_TAIL, remembered)
+    return _block_bounded(session_id, parts, CONFLICT_TAIL, remembered, chained)
 
 
 BROKEN_RECORD = "rumbo: the decision record is unreadable or invalid"
@@ -1290,6 +1314,8 @@ CONFLICT_TAIL = ("Before finishing, resolve each conflict in your answer or stat
                  "plainly to the user; say which values are your assumptions and ask "
                  "the user to confirm them; do not delete or weaken a check to pass; "
                  "then update the record.")
+STATE_UNAVAILABLE = ("rumbo: STATE_UNAVAILABLE: the block counter could not be saved, so this "
+                     "is the only block for this stop; the problems above are still open.")
 MAX_BLOCKS = 3
 
 
@@ -1327,8 +1353,12 @@ def _read_failed_ids(session_id):
     return [i for i in ids if isinstance(i, str)] if isinstance(ids, list) else []
 
 
-def _block_bounded(session_id, parts, tail, problem_ids=None):
-    """Print a Stop-hook block, at most MAX_BLOCKS times per session; always exit 0."""
+def _block_bounded(session_id, parts, tail, problem_ids=None, chained=False):
+    """Print a Stop-hook block, at most MAX_BLOCKS times per session; always exit 0.
+
+    chained is the harness's stop_hook_active flag: the only loop guard left
+    when the per-session counter cannot be saved.
+    """
     reason = "\n".join(parts) + "\n" + tail
     blocks_path = _marker_path(session_id, ".blocks")
     if blocks_path:
@@ -1339,7 +1369,7 @@ def _block_bounded(session_id, parts, tail, problem_ids=None):
         try:
             with open(last_path, encoding="utf-8") as handle:
                 repeat = handle.read() == reason
-        except OSError:
+        except (OSError, ValueError):
             pass
         try:
             with open(blocks_path, encoding="utf-8") as handle:
@@ -1352,6 +1382,12 @@ def _block_bounded(session_id, parts, tail, problem_ids=None):
             os.makedirs(os.path.dirname(blocks_path), exist_ok=True)
             with open(blocks_path, "w", encoding="utf-8") as handle:
                 handle.write(str(count + 1))
+        except OSError:
+            if chained:
+                return 0
+            print(json.dumps({"decision": "block", "reason": reason + "\n" + STATE_UNAVAILABLE}))
+            return 0
+        try:
             with open(last_path, "w", encoding="utf-8") as handle:
                 handle.write(reason)
             if problem_ids is not None:

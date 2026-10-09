@@ -507,6 +507,23 @@ class RecordTest(unittest.TestCase):
             data = json.load(handle)
         self.assertEqual(data, {"version": 1})
 
+    def test_concurrent_inits_leave_exactly_one_winner(self):
+        import concurrent.futures
+        os.rmdir(os.path.dirname(self.record_path))
+
+        def init(n):
+            return run_record(["init", "--objective", "o%d" % n, "--quote", "q%d" % n, "--record", self.record_path])
+
+        for _ in range(15):
+            if os.path.exists(self.record_path):
+                os.remove(self.record_path)
+            with concurrent.futures.ThreadPoolExecutor(4) as pool:
+                results = list(pool.map(init, range(4)))
+            winners = [n for n, (code, _out, _err) in enumerate(results) if code == 0]
+            self.assertEqual(len(winners), 1, results)
+            with open(self.record_path, encoding="utf-8") as handle:
+                self.assertEqual(json.load(handle)["objective"]["text"], "o%d" % winners[0])
+
     def test_init_quote_from_stdin_preserves_dollar_and_backtick(self):
         code, out, err = run_record(
             ["init", "--objective", "text", "--quote", "-", "--record", self.record_path],
@@ -1975,6 +1992,58 @@ class RecordTest(unittest.TestCase):
                 self.assertIn("GATE_ERROR", decision["reason"])
             else:
                 self.assertEqual(out.getvalue(), "")
+
+    def test_stop_gate_blocks_when_a_session_marker_is_not_text(self):
+        with open(self.record_path, "w", encoding="utf-8") as handle:
+            handle.write("{not json")
+        with tempfile.TemporaryDirectory() as state:
+            env = dict(os.environ, RUMBO_STATE_DIR=state)
+            run_record(["stop-gate", "--record", self.record_path], json.dumps({"session_id": "s1"}), env=env)
+            with open(marker(state, "s1", ".lastreason"), "wb") as handle:
+                handle.write(b"\xff\xfe\xfa")
+            code, out, err = run_record(["stop-gate", "--record", self.record_path],
+                                        json.dumps({"session_id": "s1", "stop_hook_active": True}), env=env)
+        self.assertEqual((code, err), (0, ""))
+        self.assertEqual(json.loads(out)["decision"], "block")
+
+    def test_stop_gate_stays_bounded_when_markers_cannot_be_saved(self):
+        with open(self.record_path, "w", encoding="utf-8") as handle:
+            handle.write("{not json")
+
+        def gate(state, chained):
+            code, out, err = run_record(["stop-gate", "--record", self.record_path],
+                                        json.dumps({"session_id": "s1", "stop_hook_active": chained}),
+                                        env=dict(os.environ, RUMBO_STATE_DIR=state))
+            self.assertEqual((code, err), (0, ""))
+            return json.loads(out)["reason"] if out.strip() else None
+
+        with tempfile.TemporaryDirectory() as folder:
+            state = os.path.join(folder, "state")
+            with open(state, "w", encoding="utf-8") as handle:
+                handle.write("a file where the marker directory should be")
+            # Each new stop blocks once and says why it will not repeat; the chained stop passes.
+            for _turn in range(2):
+                self.assertIn("STATE_UNAVAILABLE", gate(state, False))
+                self.assertIsNone(gate(state, True))
+            # Once markers can be saved again the per-session count applies, chained or not.
+            os.remove(state)
+            reasons = [gate(state, True) for _ in range(4)]
+            self.assertTrue(all(reason and "STATE_UNAVAILABLE" not in reason for reason in reasons[:3]), reasons)
+            self.assertIsNone(reasons[3])
+
+    def test_init_without_hard_links_is_still_exclusive(self):
+        import contextlib, io
+        from unittest import mock
+        os.rmdir(os.path.dirname(self.record_path))
+        args = record.build_parser().parse_args(
+            ["init", "--objective", "o", "--quote", "q", "--record", self.record_path])
+        with mock.patch.object(os, "link", side_effect=OSError("links unsupported")), \
+                contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(record.cmd_init(args), 0)
+            self.assertEqual(record.cmd_init(args), 1)
+        self.assertEqual(os.listdir(os.path.dirname(self.record_path)), ["record.json"])
+        with open(self.record_path, encoding="utf-8") as handle:
+            self.assertEqual(json.load(handle)["objective"], {"text": "o", "quote": "q"})
 
 if __name__ == "__main__":
     unittest.main()

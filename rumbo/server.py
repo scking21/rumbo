@@ -126,8 +126,9 @@ class OAuthVerifier:
 
 class BoundedServer(ThreadingHTTPServer):
     daemon_threads=True
+    request_queue_size=32 # socketserver's backlog of 5 resets a burst the 32 slots could serve
     def __init__(self,*args,**kwargs):
-        self.slots=threading.BoundedSemaphore(32)
+        self.slots=threading.BoundedSemaphore(self.request_queue_size)
         self.log_lock=threading.Lock()
         super().__init__(*args,**kwargs)
     def process_request(self,request,address):

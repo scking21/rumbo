@@ -115,10 +115,18 @@ def _readonly(path):
     return db
 
 
+def _bounded_database(path):
+    """Check by name: closing any descriptor on a SQLite file drops this process's locks on it."""
+    info = path.lstat()
+    if not stat.S_ISREG(info.st_mode):
+        _fail('PATH_UNSAFE', 'Expected a regular file')
+    if info.st_size > MAX_DATABASE_BYTES:
+        _fail('BACKUP_LIMIT', 'File exceeds the bounded backup size')
+
+
 def _snapshot(source, target):
     """Dedicated read-only connection: never call backup inside a write transaction."""
-    with _regular(source, MAX_DATABASE_BYTES):
-        pass
+    _bounded_database(source)
     deadline = time.monotonic() + BACKUP_TIMEOUT_SECONDS
     def progress(status, remaining, total):
         if total * page_size > MAX_DATABASE_BYTES:
@@ -146,8 +154,7 @@ def _snapshot(source, target):
 def _database_info(root):
     """Bound the database before replay; collect references from ALL history."""
     path = root / DATABASE
-    with _regular(path, MAX_DATABASE_BYTES):
-        pass
+    _bounded_database(path)
     db = _readonly(path)
     try:
         objects = db.execute("SELECT type,name FROM sqlite_master").fetchall()
