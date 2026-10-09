@@ -275,7 +275,7 @@ class SitesSourceCompletenessTests(unittest.TestCase):
                 self.fail('Reviewed privacy migrations and regressions must be distributable: '+str(error))
             with zipfile.ZipFile(target) as archive:
                 for name in paths:
-                    self.assertEqual(archive.read('rumbo-0.3.1-source/openai-sites/'+name),
+                    self.assertEqual(archive.read('rumbo-0.3.2-source/openai-sites/'+name),
                                      (root/'openai-sites'/name).read_bytes())
 
     def test_source_archive_includes_reviewed_sites_workflow_tests(self):
@@ -291,5 +291,5 @@ class SitesSourceCompletenessTests(unittest.TestCase):
             except ValueError as error:
                 self.fail('Reviewed Sites workflow tests must be distributable: '+str(error))
             with zipfile.ZipFile(target) as archive:
-                self.assertEqual(archive.read('rumbo-0.3.1-source/openai-sites/tests/workflows.test.mjs'),
+                self.assertEqual(archive.read('rumbo-0.3.2-source/openai-sites/tests/workflows.test.mjs'),
                                  path.read_bytes())

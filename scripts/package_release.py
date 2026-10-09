@@ -365,7 +365,7 @@ def build_source(root,target):
                 if dirname=='deploy' and path.relative_to(root/'deploy').as_posix() not in {'Dockerfile','compose.yml','nginx.conf.template','render.py','entrypoint.py','healthcheck.py','server-config.template.json','ci_smoke.py','render.yaml.template'}:
                     raise ValueError('Unexpected deployment input; never package live configuration or credentials: '+relative)
                 files[relative]=path.read_bytes()
-    return write_zip(target,files,prefix='rumbo-0.3.1-source')
+    return write_zip(target,files,prefix='rumbo-0.3.2-source')
 
 
 def main():

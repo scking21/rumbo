@@ -1,7 +1,7 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "rumbo",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "description": "Keep agreed work connected to its artifacts, evidence and human decisions.",
   "author": {
     "name": "Corby King"
@@ -36,7 +36,7 @@
         ]
       },
       "publication": {
-        "release_notes": "0.3.2 local review candidate: bundles shared engine 0.3.1 with incomplete-request rejection, bounded OAuth date validation, current board clipboard/focus handling and prior backup fixes. Owner-provisioned aliases and worker-only authority are unchanged. Actual host installation and reviewer connection remain separate verification gates."
+        "release_notes": "0.3.3 local review candidate: bundles shared engine 0.3.2, whose refusals name the current revision or next step, which no longer creates an empty ledger for agent commands or a lost project, and whose owner registry gains list and remove. Owner-provisioned aliases and worker-only authority are unchanged. Actual host installation and reviewer connection remain separate verification gates."
       }
     }
   }

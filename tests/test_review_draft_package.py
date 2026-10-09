@@ -153,12 +153,12 @@ class ReviewDraftPackageTests(unittest.TestCase):
             source = Path(tmp)/'source.zip'
             package_release.build_source(ROOT, source)
             with zipfile.ZipFile(source) as archive:
-                self.assertIn('rumbo-0.3.1-source/openai-sites/worker/protocol.js', archive.namelist())
+                self.assertIn('rumbo-0.3.2-source/openai-sites/worker/protocol.js', archive.namelist())
                 for name in ('tests/test_json_check_cache.py', 'openai-sites/tests/json-check-cache.test.mjs'):
-                    self.assertEqual(archive.read('rumbo-0.3.1-source/'+name), (ROOT/name).read_bytes())
+                    self.assertEqual(archive.read('rumbo-0.3.2-source/'+name), (ROOT/name).read_bytes())
                 self.assertFalse(any('/node_modules/' in name or '/dist/' in name for name in archive.namelist()))
                 archive.extractall(Path(tmp)/'extracted')
-            extracted = Path(tmp)/'extracted/rumbo-0.3.1-source'
+            extracted = Path(tmp)/'extracted/rumbo-0.3.2-source'
             self.draft(extracted, Path(tmp)/'draft.zip', {'mcp_url': ENDPOINT})
 
     def test_cli_rejects_mcp_url_for_other_kinds(self):

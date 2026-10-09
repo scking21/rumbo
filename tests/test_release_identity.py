@@ -18,14 +18,14 @@ class ReleaseIdentityTests(unittest.TestCase):
     def test_changed_distributions_have_new_consistent_identities(self):
         project = (ROOT/'pyproject.toml').read_text()
         self.assertEqual(re.search(r'^version = "([^"]+)"$', project, re.M).group(1), __version__)
-        self.assertEqual(__version__, '0.3.1')
+        self.assertEqual(__version__, '0.3.2')
         portable = json.loads((ROOT/'openai-plugin/rumbo/plugin.json').read_text())
         codex = json.loads((ROOT/'openai-plugin/rumbo/.codex-plugin/plugin.json').read_text())
         claude = json.loads((ROOT/'claude-plugin/rumbo/.claude-plugin/plugin.json').read_text())
-        self.assertEqual(portable['version'], '0.3.2')
+        self.assertEqual(portable['version'], '0.3.3')
         self.assertEqual(codex['version'], portable['version'])
-        self.assertEqual(claude['version'], '0.3.3')
-        self.assertTrue(portable['extensions']['com.openai']['publication']['release_notes'].startswith('0.3.2 '))
+        self.assertEqual(claude['version'], '0.3.4')
+        self.assertTrue(portable['extensions']['com.openai']['publication']['release_notes'].startswith('0.3.3 '))
 
     def test_source_archive_version_and_claude_hook_execution(self):
         with tempfile.TemporaryDirectory(prefix='rumbo release ') as temp:

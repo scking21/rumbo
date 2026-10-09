@@ -75,7 +75,7 @@ Per-session markers (`.nudged`, `.enforced`, `.prompts`, `.blocks`, `.failed`, `
 
 ## Packaging
 
-- `.claude-plugin/plugin.json`: name `rumbo`, version `0.3.3`, MIT; `.claude-plugin/icon.svg` is the listing icon.
+- `.claude-plugin/plugin.json`: name `rumbo`, version `0.3.4`, MIT; `.claude-plugin/icon.svg` is the listing icon.
 - `hooks/hooks.json`: `UserPromptSubmit` runs `"${CLAUDE_PLUGIN_ROOT}"/scripts/show.sh` and `Stop` runs `"${CLAUDE_PLUGIN_ROOT}"/scripts/stop-gate.sh`. Each is a two-line shell script that runs `record.py` against `${CLAUDE_PROJECT_DIR}/.rumbo/record.json`; the hook command itself names only a literal path inside the plugin, as the directory validator requires.
 - `skills/commitments/SKILL.md`: when and how the agent maintains the record.
 - The repository root's `.claude-plugin/marketplace.json` lists `rumbo` with source `./claude-plugin/rumbo`.
