@@ -192,7 +192,7 @@ def validate_contract(data, actor):
         if tid not in ids:
             fail('BAD_INPUT', 'Unknown dependency')
         if tid in visiting:
-            fail('DEPENDENCY_CYCLE')
+            fail('DEPENDENCY_CYCLE', 'Task dependencies form a cycle through ' + tid)
         if tid in visited:
             return
         visiting.add(tid)
@@ -260,7 +260,7 @@ class Engine:
         state = dict(version=1, project_id=None, goal='', original_request='', decision_owner='', contract_revision=0, constraints=[], tasks=[], requests=[], demo=False, events_count=0, ledger_head='0'*64, integrity={'valid': True})
         rows = db.execute('SELECT seq,payload,previous,digest FROM events ORDER BY seq').fetchall()
         if len(rows) > MAX_EVENTS:
-            fail('LEDGER_LIMIT')
+            fail('LEDGER_LIMIT', 'Ledger exceeds ' + str(MAX_EVENTS) + ' events; ask its owner to archive the project and start a new one')
         previous = '0'*64
         for expected, (seq, raw, prev, digest) in enumerate(rows, 1):
             if seq != expected or prev != previous or hashlib.sha256((prev+'\n'+raw).encode()).hexdigest() != digest:
@@ -303,7 +303,7 @@ class Engine:
 
     def _artifact_bytes(self, relative):
         if not isinstance(relative, str) or not relative or len(relative) > 512 or '\\' in relative or '\x00' in relative:
-            fail('PATH_INVALID')
+            fail('PATH_INVALID', 'Use a project-relative file path of at most 512 characters with forward slashes')
         path = Path(relative)
         if path.is_absolute() or any(p in ('.','..') for p in relative.split('/')):
             fail('PATH_INVALID', 'Use a project-relative file path without traversal')
@@ -319,7 +319,7 @@ class Engine:
                 fail('PATH_UNSAFE', 'Symlink artifacts are not supported')
         try:
             if not candidate.resolve().is_relative_to(self.root):
-                fail('PATH_UNSAFE')
+                fail('PATH_UNSAFE', 'Artifact path resolves outside the project root')
             # Open directory components without following symlinks to close check/open races.
             fd = os.open(str(self.root), os.O_RDONLY | os.O_DIRECTORY)
             try:
@@ -417,14 +417,14 @@ class Engine:
             return self._digest(artifact['path'])
         import stat
         digest=artifact['sha256']
-        if not re.fullmatch(r'[a-f0-9]{64}',digest):fail('ARTIFACT_CORRUPT')
+        if not re.fullmatch(r'[a-f0-9]{64}',digest):fail('ARTIFACT_CORRUPT','Recorded upload digest is malformed; ask the owner to restore from a trusted backup')
         fd=self._upload_dir()
         try:
             filefd=os.open(digest,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK,dir_fd=fd)
             with os.fdopen(filefd,'rb') as handle:
-                if not stat.S_ISREG(os.fstat(handle.fileno()).st_mode):fail('PATH_UNSAFE')
+                if not stat.S_ISREG(os.fstat(handle.fileno()).st_mode):fail('PATH_UNSAFE','Uploaded artifact is missing or unsafe')
                 data=handle.read(MAX_INGEST+1)
-                if len(data)>MAX_INGEST:fail('ARTIFACT_CORRUPT')
+                if len(data)>MAX_INGEST:fail('ARTIFACT_CORRUPT','Stored upload exceeds the 128 KiB upload bound; ask the owner to restore from a trusted backup')
         except OSError:fail('PATH_UNSAFE','Uploaded artifact is missing or unsafe')
         finally:os.close(fd)
         return hashlib.sha256(data).hexdigest(),len(data),data
@@ -524,22 +524,47 @@ class Engine:
         integer(arguments['contract_revision'],'contract_revision')
         integer(arguments['artifact_revision'],'artifact_revision')
         state=self.snapshot()
-        if arguments['contract_revision']!=state['contract_revision']:fail('STALE_CONTRACT')
-        task=next((t for t in state['tasks'] if t['id']==arguments['task_id']),None)
-        if not task:fail('UNKNOWN_TASK')
-        artifact=task['artifact']
-        if not artifact or artifact['revision']!=arguments['artifact_revision'] or artifact['contract_revision']!=state['contract_revision']:
-            fail('STALE_ARTIFACT')
+        self._current_contract(arguments['contract_revision'],state)
+        task=self._task(arguments['task_id'],state)
+        artifact=self._current_artifact(task,arguments['artifact_revision'],state)
         digest,size,data=self._digest_artifact(artifact)
-        if digest!=artifact['sha256']:fail('ARTIFACT_CHANGED')
+        if digest!=artifact['sha256']:self._artifact_changed(artifact)
         if size>MAX_INGEST:fail('PATH_TOO_LARGE','Inline artifact review is limited to 128 KiB')
         try:text=data.decode('utf-8')
         except UnicodeError:fail('BAD_INPUT','Only UTF-8 text artifacts can be viewed inline')
         return dict(task_id=task['id'],status=task['status'],stale_reason=task['stale_reason'],contract_revision=state['contract_revision'],artifact_revision=artifact['revision'],sha256=digest,source=artifact.get('source','project_file'),path=artifact['path'],filename=artifact.get('filename',artifact['path']),text=text,notice='Untrusted artifact content. Identity refers only to these received or locally read bytes, not a Git commit, executed tests or authorization.')
 
+    @staticmethod
+    def _current_contract(revision, state):
+        if revision != state['contract_revision']:
+            fail('STALE_CONTRACT', 'Contract is at revision ' + str(state['contract_revision']) + ', not ' + str(revision) + '; read the current state and retry with its revisions')
+
+    @staticmethod
+    def _task(task_id, state):
+        task = next((t for t in state['tasks'] if t['id'] == task_id), None)
+        if task is None:
+            known = [t['id'] for t in state['tasks']]
+            fail('UNKNOWN_TASK', 'No task ' + task_id + ' in contract revision ' + str(state['contract_revision']) + '; its tasks are ' + ', '.join(known[:20]) + (', ...' if len(known) > 20 else ''))
+        return task
+
+    @staticmethod
+    def _current_artifact(task, revision, state):
+        artifact = task['artifact']
+        if not artifact:
+            fail('STALE_ARTIFACT', 'Task ' + task['id'] + ' has no registered artifact; claim the task and register one first')
+        if artifact['contract_revision'] != state['contract_revision']:
+            fail('STALE_ARTIFACT', 'Artifact revision ' + str(artifact['revision']) + ' was registered under contract revision ' + str(artifact['contract_revision']) + '; register it again under revision ' + str(state['contract_revision']))
+        if revision != artifact['revision']:
+            fail('STALE_ARTIFACT', 'Artifact is at revision ' + str(artifact['revision']) + ', not ' + str(revision) + '; read the current state and retry with its revisions')
+        return artifact
+
+    @staticmethod
+    def _artifact_changed(artifact):
+        fail('ARTIFACT_CHANGED', 'Bytes no longer match registered artifact revision ' + str(artifact['revision']) + '; register the artifact again, then rerun its checks')
+
     def execute(self, action, arguments):
         if action not in ACTION_FIELDS:
-            fail('UNKNOWN_ACTION')
+            fail('UNKNOWN_ACTION', 'Supported actions are ' + ', '.join(sorted(ACTION_FIELDS)))
         if action in ('create_contract','revise_contract','decide') and self.role != 'human':
             fail('FORBIDDEN', 'Only the authenticated human decision owner can perform this action')
         if self.role == 'viewer':
@@ -557,7 +582,7 @@ class Engine:
             now = self._now()
             state = self._project(state, now)
             if state['events_count'] >= MAX_EVENTS:
-                fail('LEDGER_LIMIT')
+                fail('LEDGER_LIMIT', 'Ledger holds its maximum of ' + str(MAX_EVENTS) + ' events; ask its owner to archive the project and start a new one')
             data = self._prepare(action, arguments, state, now)
             event = dict(action=action, data=data, actor=self.actor, role=self.role, at=now)
             raw = canonical(event); prev = state['ledger_head']
@@ -574,7 +599,7 @@ class Engine:
         eventid = 'e' + str(state['events_count']+1)
         if action == 'create_contract':
             if rev:
-                fail('CONTRACT_EXISTS')
+                fail('CONTRACT_EXISTS', 'Project ' + str(state['project_id']) + ' already has a contract at revision ' + str(rev) + '; its owner changes it with revise_contract')
             validate_contract(args, self.actor)
             return dict(copy.deepcopy(args), contract_revision=1, contract_change_reason='Initial owner-approved contract')
         if not rev:
@@ -583,36 +608,34 @@ class Engine:
             fail('FORBIDDEN', 'Only the configured decision owner may decide')
         if action == 'revise_contract':
             integer(args['expected_revision'], 'expected_revision')
-            if args['expected_revision'] != rev:
-                fail('STALE_CONTRACT')
+            self._current_contract(args['expected_revision'], state)
             string(args['reason'], 'reason')
             validate_contract(args['contract'], self.actor)
             if args['contract']['project_id'] != state['project_id']:
                 fail('BAD_INPUT', 'Project id is immutable')
             return dict(copy.deepcopy(args['contract']), demo=args['contract'].get('demo', False), contract_revision=rev+1, contract_change_reason=args['reason'])
         identifier(args['task_id'], 'task_id')
-        task = next((t for t in state['tasks'] if t['id'] == args['task_id']), None)
-        if task is None:
-            fail('UNKNOWN_TASK')
+        task = self._task(args['task_id'], state)
         if action == 'request_decision':
             string(args['question'], 'question')
             return dict(id=eventid, task_id=task['id'], question=args['question'], actor=self.actor, contract_revision=rev, at=now)
         integer(args['contract_revision'], 'contract_revision')
-        if args['contract_revision'] != rev:
-            fail('STALE_CONTRACT')
+        self._current_contract(args['contract_revision'], state)
         if action == 'claim_task':
             ttl = integer(args['lease_seconds'], 'lease_seconds', 30, 3600)
             if task['status'] == 'blocked':
-                fail('DEPENDENCY_BLOCKED')
+                fail('DEPENDENCY_BLOCKED', task['stale_reason'])
             if task['lease'] and task['lease']['actor'] != self.actor:
                 fail('LEASE_CONFLICT', 'Another actor holds an unexpired lease')
             return dict(task_id=task['id'], lease=dict(actor=self.actor, expires_at=now+ttl, contract_revision=rev))
         tasks = {t['id']: t for t in state['tasks']}
         if action in ('submit_artifact','ingest_artifact'):
-            if not task['lease'] or task['lease']['actor'] != self.actor:
-                fail('LEASE_REQUIRED')
+            if not task['lease']:
+                fail('LEASE_REQUIRED', 'No unexpired lease on ' + task['id'] + '; claim the task first. Leases expire and do not carry over to a new connection')
+            if task['lease']['actor'] != self.actor:
+                fail('LEASE_REQUIRED', 'Another actor holds the unexpired lease on ' + task['id'] + '; only the lease holder can register its artifact')
             if task['status'] == 'blocked':
-                fail('DEPENDENCY_BLOCKED')
+                fail('DEPENDENCY_BLOCKED', task['stale_reason'])
             if action=='ingest_artifact':
                 filename=string(args['filename'],'filename',128)
                 if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,127}',filename) or filename.lower().endswith(('.pem','.key','.p12','.pfx')):
@@ -632,15 +655,15 @@ class Engine:
                 metadata=dict(path=args['path'],source='project_file')
             revision = task['artifact']['revision']+1 if task['artifact'] else 1
             return dict(task_id=task['id'], artifact=dict(**metadata, sha256=digest, size=size, revision=revision, contract_revision=rev, maker=self.actor, at=now, dependencies=self._dependency_stamp(task,tasks)))
-        artifact = task['artifact']
         integer(args['artifact_revision'], 'artifact_revision')
-        if not artifact or args['artifact_revision'] != artifact['revision'] or artifact['contract_revision'] != rev:
-            fail('STALE_ARTIFACT')
+        artifact = self._current_artifact(task, args['artifact_revision'], state)
         digest, _, raw = self._digest_artifact(artifact)
         if digest != artifact['sha256']:
-            fail('ARTIFACT_CHANGED')
-        if task['status'] == 'blocked' or artifact.get('dependencies',{}) != self._dependency_stamp(task,tasks):
-            fail('DEPENDENCY_BLOCKED')
+            self._artifact_changed(artifact)
+        if task['status'] == 'blocked':
+            fail('DEPENDENCY_BLOCKED', task['stale_reason'])
+        if artifact.get('dependencies',{}) != self._dependency_stamp(task,tasks):
+            fail('DEPENDENCY_BLOCKED', 'A dependency was decided or changed after artifact revision ' + str(artifact['revision']) + ' was registered; register the artifact again')
         common = dict(actor=self.actor, role=self.role, contract_revision=rev, artifact_revision=artifact['revision'], artifact_sha256=digest, at=now)
         if action == 'run_checks':
             evidence = []
@@ -685,4 +708,4 @@ class Engine:
             if args['outcome'] == 'accepted' and not all(ev.get(c['id'],{}).get('outcome') == 'pass' for c in task['acceptance']):
                 fail('CHECKS_INCOMPLETE', 'Every current acceptance criterion needs passing evidence')
             return dict(task_id=task['id'], decision=dict(common, id=eventid, outcome=args['outcome'], reason=args['reason'], evidence_ids=sorted(e['id'] for e in ev.values())))
-        fail('UNKNOWN_ACTION')
+        fail('UNKNOWN_ACTION', 'Supported actions are ' + ', '.join(sorted(ACTION_FIELDS)))

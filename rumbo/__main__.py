@@ -3,13 +3,21 @@ import argparse
 import json
 from pathlib import Path
 import sys
+from . import __version__
 from .core import Engine, RumboError
 from .protocol import safe_json, serve_stdio
 from .server import create_server
 
 
+def _json(text,source):
+    try:return safe_json(text)
+    except (ValueError,RecursionError) as e:
+        raise RumboError('BAD_INPUT',source+' is not one valid JSON value: '+str(e))
+
+
 def main(argv=None):
     parser=argparse.ArgumentParser(description='Rumbo local contract and evidence referee')
+    parser.add_argument('--version',action='version',version='rumbo '+__version__)
     parser.add_argument('--root',default='.',help='Trusted project root (not a tool argument)')
     parser.add_argument('--actor',default='local-worker',help='Local host principal identity')
     parser.add_argument('--role',choices=['worker','reviewer','viewer'],default='worker')
@@ -40,18 +48,21 @@ def main(argv=None):
         elif args.command=='operator':
             if not sys.stdin.isatty():
                 raise RumboError('HUMAN_CONFIRMATION_REQUIRED','Noninteractive invocation refused; use the trusted local operator flow. A terminal is not proof of human identity')
-            payload=safe_json(Path(args.file).read_text())
+            payload=_json(Path(args.file).read_text(),args.file)
             print(json.dumps(payload,indent=2,ensure_ascii=False))
             phrase='CONFIRM '+args.action
             if input('As the human decision owner, type '+phrase+': ')!=phrase:
                 raise RumboError('CANCELLED')
             result=Engine(args.root,args.owner,'human').execute(args.action,payload)
         else:
+            # Only the owner's create_contract or demo may start a ledger; a mistyped --root must not leave one behind.
+            if args.command!='verify' and Path(args.root).is_dir() and not (Path(args.root)/'.rumbo'/'state.sqlite3').is_file():
+                raise RumboError('NO_CONTRACT','No Rumbo project in '+str(Path(args.root).resolve())+'; check --root, or have the owner run operator create_contract there')
             engine=Engine(args.root,args.actor,'viewer' if args.command=='verify' else args.role,read_only=args.command=='verify')
             if args.command=='mcp':
                 serve_stdio(engine);return 0
             if args.command=='call':
-                result=engine.execute(args.action,safe_json(args.json))
+                result=engine.execute(args.action,_json(args.json,'--json'))
             else:
                 result=engine.checkpoint() if args.command=='verify' else engine.snapshot()
         print(json.dumps(result,indent=2,ensure_ascii=False,allow_nan=False))
