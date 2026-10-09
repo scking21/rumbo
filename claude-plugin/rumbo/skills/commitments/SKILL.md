@@ -88,6 +88,10 @@ budget cap, add a check:
 Run `check` before delivering any plan, schedule or summary. A FAIL line is a
 conflict: resolve it, or state it plainly to the user.
 
+A value is sourced however the user wrote it: "March 20th", "20 March" or "3/20"
+for `03-20`; "9am" or "noon" for `09:00` or `12:00`; "2-hour" for 120 minutes;
+"$1.5k" for 1500. A bare "at 9" does not say morning or evening: ask.
+
 Write dates as MM-DD unless the user stated the year; never add a year the user
 did not say; if the dates cross a year boundary, you need the user's years.
 
