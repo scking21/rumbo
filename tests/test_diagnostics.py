@@ -128,7 +128,7 @@ class RecoveryMessageTests(unittest.TestCase):
         cyclic['tasks'][0]['dependencies'] = ['doc']
         error = self.refusal(self.owner, 'revise_contract', contract=cyclic, expected_revision=1, reason='Loop')
         self.assertEqual(error.code, 'DEPENDENCY_CYCLE')
-        self.assertRegex(error.message, 'cycle through (export|doc)')
+        self.assertIn('cycle through export', error.message)
 
     def test_mcp_tool_errors_carry_the_recovery_text(self):
         response = Protocol(self.worker).dispatch(dict(jsonrpc='2.0', id=1, method='tools/call', params=dict(name='rumbo_run_checks', arguments=dict(task_id='export', contract_revision=4, artifact_revision=1))))

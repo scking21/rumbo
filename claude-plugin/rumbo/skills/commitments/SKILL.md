@@ -121,6 +121,10 @@ Resolve each conflict or disclose it, update
 the record, then finish. Never delete or weaken a check to get past the gate, and
 copy quotes exactly from the user's messages or they will be reported as unverified.
 
+A quote is also unverified when it starts just after a negation in the same
+clause ("We don't have a venue yet, so let's book the library" does not verify
+"let's book the library"). If the user did say it, quote the whole sentence.
+
 ## Authority boundary
 
 The record never creates permission the user did not give. A summary field in

@@ -199,8 +199,8 @@ def validate_contract(data, actor):
         for dep in by_id[tid]['dependencies']:
             visit(dep)
         visiting.remove(tid); visited.add(tid)
-    for tid in ids:
-        visit(tid)
+    for task in tasks:
+        visit(task['id'])
     if len(canonical(data).encode()) > 256000:
         fail('BAD_INPUT', 'Contract too large')
 

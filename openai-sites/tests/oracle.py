@@ -19,5 +19,5 @@ else:
             try:
                 value=engine.snapshot() if op['action']=='snapshot' else engine.artifact_view(op['args']) if op['action']=='read' else engine.execute(op['action'],op['args'])
                 result.append({'ok':value})
-            except RumboError as err:result.append({'error':err.code})
+            except RumboError as err:result.append({'error':err.code,'message':err.message})
         print(canonical(result))
