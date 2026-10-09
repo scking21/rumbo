@@ -315,7 +315,11 @@ def create_server(host,port,config):
                 request=safe_json(raw)
             except (ValueError,UnicodeError,RecursionError):
                 return self.send(400,rpc_error(None,-32700,'Invalid JSON'))
-            engine=Engine(principal['root'],principal['actor'],principal['role'])
+            try:
+                engine=Engine(principal['root'],principal['actor'],principal['role'])
+            except RumboError:
+                # Storage that was valid at startup can vanish or lose permissions; answer instead of dropping the connection.
+                return self.send(503,{'error':'Project storage unavailable'})
             response=Protocol(engine,oauth=bool(verifier),owner_url=portal.resource if portal and portal.enabled else None).dispatch(request)
             self.send(202 if response is None else 200,response)
         def do_DELETE(self):

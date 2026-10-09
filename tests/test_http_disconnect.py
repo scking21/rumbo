@@ -31,6 +31,34 @@ class HttpDisconnectTests(unittest.TestCase):
         ]))
         self.addCleanup(self.server.server_close)
 
+    def test_storage_lost_after_startup_gets_a_response_instead_of_a_dropped_connection(self):
+        import shutil
+        body = json.dumps(dict(jsonrpc='2.0', id=1, method='tools/call', params=dict(name='rumbo_state', arguments={})))
+        headers = {'Authorization': 'Bearer synthetic-disconnect-token', 'Content-Type': 'application/json'}
+        thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            def post():
+                client = http.client.HTTPConnection('127.0.0.1', self.server.server_port, timeout=5)
+                self.addCleanup(client.close)
+                client.request('POST', '/mcp', body=body, headers=headers)
+                response = client.getresponse()
+                return response.status, json.loads(response.read())
+            self.assertEqual(post()[0], 200)
+            database = self.root/'.rumbo'/'state.sqlite3'
+            database.chmod(0)
+            stderr = io.StringIO()
+            with contextlib.redirect_stderr(stderr):
+                self.assertEqual(post(), (503, {'error': 'Project storage unavailable'}))
+                database.chmod(0o600)
+                self.assertEqual(post()[0], 200)
+                shutil.rmtree(self.root)
+                self.assertEqual(post(), (503, {'error': 'Project storage unavailable'}))
+            self.assertNotIn('Traceback', stderr.getvalue())
+        finally:
+            self.server.shutdown()
+            thread.join(5)
+
     def test_incomplete_request_body_never_commits_even_when_received_json_is_valid(self):
         body = json.dumps(dict(jsonrpc='2.0', id=75, method='tools/call', params=dict(
             name='rumbo_ingest_artifact', arguments=dict(task_id='export', contract_revision=1,
