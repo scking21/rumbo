@@ -21,7 +21,7 @@ class ReleaseIdentityTests(unittest.TestCase):
         self.assertEqual(__version__, '0.3.2')
         portable = json.loads((ROOT/'openai-plugin/rumbo/plugin.json').read_text())
         codex = json.loads((ROOT/'openai-plugin/rumbo/.codex-plugin/plugin.json').read_text())
-        claude = json.loads((ROOT/'claude-plugin/rumbo/.claude-plugin/plugin.json').read_text())
+        claude = json.loads((ROOT/'rumbo/.claude-plugin/plugin.json').read_text())
         self.assertEqual(portable['version'], '0.3.3')
         self.assertEqual(codex['version'], portable['version'])
         self.assertEqual(claude['version'], '0.3.4')
@@ -37,7 +37,7 @@ class ReleaseIdentityTests(unittest.TestCase):
                 self.assertTrue(all(name.startswith(prefix) for name in archive.namelist()))
                 archive.extractall(folder/'unpacked')
                 for name in ('show.sh', 'stop-gate.sh'):
-                    member = archive.getinfo(prefix+'claude-plugin/rumbo/scripts/'+name)
+                    member = archive.getinfo(prefix+'rumbo/scripts/'+name)
                     self.assertEqual((member.external_attr >> 16) & 0o777, 0o755)
                     (folder/'unpacked'/member.filename).chmod(0o755)
             source = folder/'unpacked'/prefix

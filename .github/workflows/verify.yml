@@ -31,11 +31,11 @@ jobs:
       - name: Verify wheel offline in a clean isolated environment
         run: python scripts/verify_installed_wheel.py
       - name: Run preserved Claude adapter tests
-        working-directory: claude-plugin/rumbo
+        working-directory: rumbo
         run: python -m unittest discover -s tests -v
       - name: Compile and verify clean whitespace
         run: |
-          python -m compileall -q rumbo scripts claude-plugin
+          python -m compileall -q rumbo scripts
           git diff --check
       - name: Save synthetic browser screenshots
         if: always()
@@ -70,7 +70,7 @@ jobs:
           python -m unittest discover -s tests -p test_http_disconnect.py -v
           python -m unittest discover -s tests -p test_diagnostics.py -v
       - name: Verify legacy adapter floor
-        working-directory: claude-plugin/rumbo
+        working-directory: rumbo
         run: python -m unittest discover -s tests -v
   deployment-smoke:
     runs-on: ubuntu-24.04

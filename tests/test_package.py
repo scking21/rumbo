@@ -194,12 +194,12 @@ class DistributionMetadataTests(unittest.TestCase):
         plugin = next(item for item in marketplace['plugins'] if item['name'] == 'rumbo')
         self.assertTrue((ROOT/plugin['source']/'.claude-plugin/plugin.json').is_file())
         self.assertIn('source `'+plugin['source']+'`',
-                      (ROOT/'claude-plugin/rumbo/SPEC.md').read_text())
+                      (ROOT/'rumbo/SPEC.md').read_text())
 
     def test_claude_spec_uses_independent_manifest_version(self):
-        manifest = json.loads((ROOT/'claude-plugin/rumbo/.claude-plugin/plugin.json').read_text())
+        manifest = json.loads((ROOT/'rumbo/.claude-plugin/plugin.json').read_text())
         self.assertIn('version `'+manifest['version']+'`',
-                      (ROOT/'claude-plugin/rumbo/SPEC.md').read_text())
+                      (ROOT/'rumbo/SPEC.md').read_text())
 
 
 class ExtractedDistributionTests(unittest.TestCase):
@@ -226,7 +226,7 @@ class ExtractedDistributionTests(unittest.TestCase):
             with zipfile.ZipFile(target) as archive:
                 archive.extractall(directory/'extracted')
                 root = directory/'extracted'/archive.namelist()[0].split('/')[0]
-                plugin = root/'claude-plugin/rumbo'
+                plugin = root/'rumbo'
                 for script in ('show.sh', 'stop-gate.sh'):
                     path = plugin/'scripts'/script
                     member = path.relative_to(directory/'extracted').as_posix()
@@ -235,9 +235,9 @@ class ExtractedDistributionTests(unittest.TestCase):
                     # zipfile does not restore Unix modes; ordinary unzip does.
                     path.chmod(mode & 0o777)
                 self.assertEqual((plugin/'scripts/record.py').read_bytes(),
-                                 (ROOT/'claude-plugin/rumbo/scripts/record.py').read_bytes())
+                                 (ROOT/'rumbo/scripts/record.py').read_bytes())
                 manifest = json.loads((plugin/'.claude-plugin/plugin.json').read_text())
-                self.assertEqual(manifest, json.loads((ROOT/'claude-plugin/rumbo/.claude-plugin/plugin.json').read_text()))
+                self.assertEqual(manifest, json.loads((ROOT/'rumbo/.claude-plugin/plugin.json').read_text()))
             project = directory/'synthetic-project'
             (project/'.rumbo').mkdir(parents=True)
             shutil.copy(plugin/'tests/fixtures/workshop.json', project/'.rumbo/record.json')

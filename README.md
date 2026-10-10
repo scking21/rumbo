@@ -107,7 +107,7 @@ The script never uploads. Local packaging does not establish public eligibility.
 
 ## Claude Code adapter and migration
 
-The Claude adapter lives in `claude-plugin/rumbo/` with its existing hook layout and `scripts/record.py`, separate from the engine package in `rumbo/`. It is versioned independently of the engine and the OpenAI plugin. Its installation remains:
+The Claude adapter lives in `rumbo/` beside the engine modules (`.claude-plugin/`, `hooks/`, `skills/`, `scripts/record.py`), because the Claude directory submission reads the plugin from that path. It uses none of the engine code. It is versioned independently of the engine and the OpenAI plugin. Its installation remains:
 
 ```text
 /plugin marketplace add scking21/rumbo
@@ -116,14 +116,14 @@ The Claude adapter lives in `claude-plugin/rumbo/` with its existing hook layout
 
 Those commands access the revision actually on the remote; verify its branch/version before relying on candidate behavior. New engine state lives in `.rumbo/state.sqlite3`; legacy planning records remain `.rumbo/record.json`. Nothing is silently converted or deleted.
 
-In 0.3, missing or unreadable transcripts now trigger the existing bounded Stop provenance warning/block behavior rather than silently skipping verification. Source checks respect `refs` and exclude done/rejected/replaced items. Missing/null refs use active items plus the objective; explicit `[]` uses only the objective. Historical records may need corrected refs. Read [migration details](docs/MIGRATION.md) and the [legacy specification](claude-plugin/rumbo/SPEC.md).
+In 0.3, missing or unreadable transcripts now trigger the existing bounded Stop provenance warning/block behavior rather than silently skipping verification. Source checks respect `refs` and exclude done/rejected/replaced items. Missing/null refs use active items plus the objective; explicit `[]` uses only the objective. Historical records may need corrected refs. Read [migration details](docs/MIGRATION.md) and the [legacy specification](rumbo/SPEC.md).
 
 ## Verify
 
 ```sh
 python3 -m unittest discover -s tests -v
-(cd claude-plugin/rumbo && python3 -m unittest discover -s tests -v)
-python3 -m compileall -q rumbo scripts claude-plugin
+(cd rumbo && python3 -m unittest discover -s tests -v)
+python3 -m compileall -q rumbo scripts
 ```
 
 The new tests cover real stdio and HTTP execution, restart, concurrent claims, stale evidence, principal isolation, malformed inputs, confined files, deterministic demo reproduction and extracted ZIP execution. Board source/Node runtime checks are separate from browser checks. Browser coverage and actual ChatGPT host integration are separate claims. The Sites candidate has its own synthetic Chromium suite and exact-commit CI; managed host authentication remains unverified. A read-only GitHub Actions workflow is included to run all tests with Chromium and fail on any skipped test; that CI run must be checked on the exact review commit, not assumed to have passed; [exact limits](docs/BOARD.md).

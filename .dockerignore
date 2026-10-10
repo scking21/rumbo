@@ -18,3 +18,11 @@ rumbo/**/.rumbo/
 **/.env*
 **/*.pem
 **/*.key
+rumbo/.claude-plugin/
+rumbo/hooks/
+rumbo/skills/
+rumbo/scripts/
+rumbo/tests/
+rumbo/evals/
+rumbo/SPEC.md
+rumbo/LICENSE
