@@ -12,6 +12,7 @@ import hashlib
 import json
 import os
 import re
+import stat
 import sys
 import tempfile
 
@@ -168,10 +169,23 @@ def _is_number_sourced(num, source_text):
     target = decimal.Decimal(str(num))
     for match in re.finditer(r"(?<![\d.:])(\d+(?:\.\d+)?(?:[eE][-+]?\d+)?)(?![\d:]|\.\d)", no_commas):
         value = decimal.Decimal(match.group(1))
+        # "$1.5k" is 1500, never 1.5.
+        if re.match(r"[kK]\b", no_commas[match.end():]):
+            value *= 1000
         # A minus sign (or "-$") not preceded by a digit negates; "30-50" stays a range.
         if re.search(r"(?:^|[^\d])[-\u2212]\$?$", no_commas[:match.start()]):
             value = -value
         if value == target:
+            return True
+    return False
+
+
+def _is_minutes_sourced(minutes, source_text):
+    """True when a duration in minutes is stated in minutes or as hours ("2-hour", "1.5 hours")."""
+    if _is_number_sourced(minutes, source_text):
+        return True
+    for match in re.finditer(r"(?<![\w.:,\u2212-])(\d+(?:\.\d+)?)[\s-]*(?:hours?|hrs?)\b", source_text, re.IGNORECASE):
+        if decimal.Decimal(match.group(1)) * 60 == minutes:
             return True
     return False
 
@@ -226,6 +240,18 @@ def _is_time_sourced(time_str, source_text):
         if hour == h and minute == m:
             return True
 
+    if m == 0:
+        # "9am", "9 p.m.": an hour with a meridiem and no minutes.
+        for match in re.finditer(r"(?<![0-9:.$])([0-9]{1,2})\s*([AaPp])\.?\s*[Mm]\b", source_text):
+            hour = int(match.group(1))
+            if not 1 <= hour <= 12:
+                continue
+            hour = hour % 12 + (12 if match.group(2).lower() == "p" else 0)
+            if hour == h:
+                return True
+        if h in (0, 12) and re.search(r"\bmidnight\b" if h == 0 else r"\bnoon\b", source_text, re.IGNORECASE):
+            return True
+
     return False
 
 
@@ -236,17 +262,25 @@ MONTHS = ["January", "February", "March", "April", "May", "June", "July",
 def _is_date_sourced(date_str, source_text):
     """Return (month_day_sourced, year_sourced) for a YYYY-MM-DD or MM-DD date.
 
-    Month-day is sourced by "March 20", "Mar. 20" or "03-20" (any case); the year
-    only by the 4-digit year. An MM-DD date has no year, so year_sourced is False.
+    Month-day is sourced by the month name or its abbreviation with the day in
+    either order ("March 20", "Mar. 20th", "20 March", "the 20th of March"), by
+    "03-20", or by the two numbers around a slash ("3/20" or "20/3": the values
+    are the user's, the reading is the agent's). The year only by the 4-digit
+    year. An MM-DD date has no year, so year_sourced is False.
     """
     date = parse_date(date_str)
     if date is None:
         return (False, False)
     name = MONTHS[date.month - 1]
+    sept = r"|Sept\.?" if date.month == 9 else ""
+    month = rf"(?:{name}|{name[:3]}\.?{sept})"
+    day = rf"0?{date.day}(?:st|nd|rd|th)?"
     patterns = [
-        rf"\b{name}\s+{date.day}\b",
-        rf"\b{name[:3]}\.?\s+{date.day}\b",
+        rf"\b{month}\s+{day}\b",
+        rf"(?<![\d/.:-]){day}\s+(?:of\s+)?{month}(?![a-z])",
         rf"\b{date.month:02d}-{date.day:02d}\b",
+        rf"(?<![\d/.:-])0?{date.month}/0?{date.day}(?!\d)",
+        rf"(?<![\d/.:-])0?{date.day}/0?{date.month}(?!\d)",
     ]
     month_day = any(re.search(p, source_text, re.IGNORECASE) for p in patterns)
     year = _has_year(date_str) and re.search(rf"(?<!\d){date.year}(?!\d)", source_text) is not None
@@ -270,7 +304,7 @@ def unsourced_values(record, check):
             unsourced.append(f"end {check['end']}")
         # segments_min N for each segment
         for seg in check["segments_min"]:
-            if not _is_number_sourced(seg, source):
+            if not _is_minutes_sourced(seg, source):
                 unsourced.append(f"segments_min {fmt_num(seg)}")
 
     elif kind == "before":
@@ -406,10 +440,23 @@ def _normalize(text):
     return re.sub(r"\s+", " ", text).strip()
 
 
-NEGATION = re.compile(r"\b(?:not|no|never|don't|dont|doesn't|didn't|can't|cannot|won't|without|avoid)\b", re.IGNORECASE)
+TYPOGRAPHY = str.maketrans({"\u2018": "'", "\u2019": "'", "\u02bc": "'", "\u201c": '"', "\u201d": '"'})
 
 
-def _quote_in(quote, message):
+def _fold(text):
+    """_normalize, with typographic quotes and apostrophes as ASCII and runs of dots as one ellipsis.
+
+    Editors and chat apps swap these silently; none of them changes what was said.
+    Dots fold toward the ellipsis character because a pause does not end a
+    clause: "Do not ... spend $900" stays negated.
+    """
+    return _normalize(re.sub(r"\.{2,}", "\u2026", text.translate(TYPOGRAPHY)))
+
+
+NEGATION = re.compile(r"\b(?:not|no|never|\w+n't|dont|cannot|without|avoid|neither|nor|nobody|none|nothing)\b", re.IGNORECASE)
+
+
+def _quote_in(quote, message, ignore_negation=False):
     """True when quote occurs in message as whole tokens and is not negated in its clause.
 
     Lexical, not semantic: "$900" does not match inside "$9000" or "$900.50", and
@@ -423,16 +470,27 @@ def _quote_in(quote, message):
         if re.search(r"(?:^|[^\d])[-\u2212]\$?$", message[:match.start()]):
             continue
         clause = re.split(r"[.!?;:\n]", message[:match.start()])[-1]
-        if not NEGATION.search(clause[-40:]):
+        if ignore_negation or not NEGATION.search(clause[-40:]):
             return True
     return False
 
 
+def _unverified_line(record, path, messages):
+    """The UNVERIFIED diagnostic for path, saying whether a negation or absence caused it."""
+    match = re.fullmatch(r"items\[(\d+)\]\.quote", path)
+    source = record["items"][int(match.group(1))] if match else record["objective"]
+    quote = _fold(source.get("quote") or "")
+    if any(_quote_in(quote, _fold(message), ignore_negation=True) for message in messages):
+        return ("%s: UNVERIFIED: these words follow a negation in the same clause of the user's "
+                "message; if the user did say this, quote the whole sentence" % path)
+    return "%s: UNVERIFIED: quote not found in the user's messages" % path
+
+
 def unverified_quotes(record, messages):
-    """Return list of JSON paths whose _normalize(quote) is not a substring
-    of _normalize(m) for any single message m.
+    """Return list of JSON paths whose folded quote is not found by _quote_in
+    in any single folded message.
     """
-    normalized_messages = [_normalize(m) for m in messages]
+    normalized_messages = [_fold(m) for m in messages]
     unverified = []
 
     # Check objective quote
@@ -440,7 +498,7 @@ def unverified_quotes(record, messages):
     if objective and isinstance(objective, dict):
         quote = objective.get("quote")
         if isinstance(quote, str):
-            norm_quote = _normalize(quote)
+            norm_quote = _fold(quote)
             if not any(_quote_in(norm_quote, norm_msg) for norm_msg in normalized_messages):
                 unverified.append("objective.quote")
 
@@ -450,7 +508,7 @@ def unverified_quotes(record, messages):
         if isinstance(item, dict):
             quote = item.get("quote")
             if isinstance(quote, str):
-                norm_quote = _normalize(quote)
+                norm_quote = _fold(quote)
                 if not any(_quote_in(norm_quote, norm_msg) for norm_msg in normalized_messages):
                     unverified.append(f"items[{i}].quote")
 
@@ -962,7 +1020,7 @@ def cmd_check(args):
         unverified = unverified_quotes(record, messages)
         if unverified:
             for path in unverified:
-                print(f"{path}: UNVERIFIED: quote not found in the user's messages")
+                print(_unverified_line(record, path, messages))
             return 1
 
     return 1 if (failed or unsourced_found) else 0
@@ -972,18 +1030,47 @@ def _marker_path(session_id, suffix):
     """Per-session marker file for the no-record nudge, or None without a session."""
     if not (isinstance(session_id, str) and session_id):
         return None
-    state_dir = os.environ.get("RUMBO_STATE_DIR") or os.path.join(
-        tempfile.gettempdir(), "rumbo"
-    )
+    # A directory the user configured may be reached through a link; the shared default may not.
+    configured = os.environ.get("RUMBO_STATE_DIR")
+    state_dir = os.path.realpath(configured) if configured else os.path.join(tempfile.gettempdir(), "rumbo")
     digest = hashlib.sha256(session_id.encode("utf-8", "replace")).hexdigest()[:12]
     safe = re.sub(r"[^A-Za-z0-9_-]", "_", session_id)[:64]
     return os.path.join(state_dir, "%s-%s%s" % (safe, digest, suffix))
 
 
+def _open_marker(path, mode="r"):
+    """Open a marker inside a state directory this user owns; OSError otherwise.
+
+    The default directory sits in the shared temp directory, where another
+    local user could own it or plant links: never follow one or trust theirs.
+    """
+    directory = os.path.dirname(path)
+    if mode == "w":
+        os.makedirs(directory, mode=0o700, exist_ok=True)
+    info = os.lstat(directory)
+    if not stat.S_ISDIR(info.st_mode):
+        raise OSError("state directory is not a directory")
+    if hasattr(os, "geteuid"):
+        if info.st_uid != os.geteuid():
+            raise OSError("state directory belongs to another user")
+        if info.st_mode & 0o077:
+            os.chmod(directory, 0o700)
+    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC if mode == "w" else os.O_RDONLY
+    fd = os.open(path, flags | getattr(os, "O_NOFOLLOW", 0), 0o600)
+    try:
+        # A marker left by an earlier version may be readable by others.
+        if hasattr(os, "fchmod"):
+            os.fchmod(fd, 0o600)
+        return os.fdopen(fd, mode, encoding="utf-8")
+    except BaseException:
+        os.close(fd)
+        raise
+
+
 def _planning_prompts(session_id):
     path = _marker_path(session_id, ".prompts")
     try:
-        with open(path, encoding="utf-8") as handle:
+        with _open_marker(path) as handle:
             return int(handle.read().strip() or "0")
     except (OSError, TypeError, ValueError):
         return 0
@@ -995,8 +1082,7 @@ def _count_planning_prompt(session_id):
         return
     count = _planning_prompts(session_id) + 1
     try:
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        with open(path, "w", encoding="utf-8") as handle:
+        with _open_marker(path, "w") as handle:
             handle.write(str(count))
     except OSError:
         pass
@@ -1037,8 +1123,7 @@ def maybe_nudge(args, payload):
     marker_path = _marker_path(session_id, ".nudged")
     if marker_path:
         try:
-            os.makedirs(os.path.dirname(marker_path), exist_ok=True)
-            with open(marker_path, "w", encoding="utf-8") as handle:
+            with _open_marker(marker_path, "w") as handle:
                 handle.write(args.record)
         except OSError:
             pass
@@ -1148,7 +1233,7 @@ def cmd_init(args):
     parent = os.path.dirname(os.path.abspath(args.record))
     try:
         if parent and not os.path.isdir(parent):
-            os.makedirs(parent, exist_ok=True)
+            os.makedirs(parent, mode=0o700, exist_ok=True)
         _publish_new(args.record, json.dumps(record, indent=2) + "\n")
     except FileExistsError:
         print("RECORD_EXISTS", file=sys.stderr)
@@ -1165,7 +1250,7 @@ def cmd_init(args):
     try:
         with open(gitignore_path, "r", encoding="utf-8") as handle:
             for line in handle:
-                if line.strip() in (".rumbo/", ".rumbo"):
+                if line.strip().lstrip("/").rstrip("/*") == ".rumbo":
                     ignored = True
                     break
     except OSError:
@@ -1275,7 +1360,7 @@ def _stop_gate(args, hook_input):
                 continue
             approval = item is not None and item.get("status") in ("commitment", "authorized")
             if (full if approval else core) not in ledger:
-                parts.append("%s: UNVERIFIED: quote not found in the user's messages" % path)
+                parts.append(_unverified_line(record, path, messages))
                 continue
             # Verified in an earlier session. That shows the words were said, not
             # that an approval still stands after this session's messages.
@@ -1346,7 +1431,7 @@ def _read_failed_ids(session_id):
     try:
         if not path:
             return []
-        with open(path, encoding="utf-8") as handle:
+        with _open_marker(path) as handle:
             ids = _loads(handle.read())
     except (OSError, ValueError):
         return []
@@ -1367,20 +1452,19 @@ def _block_bounded(session_id, parts, tail, problem_ids=None, chained=False):
         last_path = _marker_path(session_id, ".lastreason")
         repeat = False
         try:
-            with open(last_path, encoding="utf-8") as handle:
+            with _open_marker(last_path) as handle:
                 repeat = handle.read() == reason
         except (OSError, ValueError):
             pass
         try:
-            with open(blocks_path, encoding="utf-8") as handle:
+            with _open_marker(blocks_path) as handle:
                 count = int(handle.read().strip() or "0")
         except (OSError, ValueError):
             count = 0
         if count >= MAX_BLOCKS:
             return 0
         try:
-            os.makedirs(os.path.dirname(blocks_path), exist_ok=True)
-            with open(blocks_path, "w", encoding="utf-8") as handle:
+            with _open_marker(blocks_path, "w") as handle:
                 handle.write(str(count + 1))
         except OSError:
             if chained:
@@ -1388,10 +1472,10 @@ def _block_bounded(session_id, parts, tail, problem_ids=None, chained=False):
             print(json.dumps({"decision": "block", "reason": reason + "\n" + STATE_UNAVAILABLE}))
             return 0
         try:
-            with open(last_path, "w", encoding="utf-8") as handle:
+            with _open_marker(last_path, "w") as handle:
                 handle.write(reason)
             if problem_ids is not None:
-                with open(_marker_path(session_id, ".failed"), "w", encoding="utf-8") as handle:
+                with _open_marker(_marker_path(session_id, ".failed"), "w") as handle:
                     json.dump(problem_ids, handle)
         except OSError:
             pass

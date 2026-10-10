@@ -12,6 +12,15 @@ The packaged OpenAI launcher is a worker-only adapter to the canonical Rumbo eng
 python3 -m rumbo.registry --plugin-data /absolute/plugin/data add export-project --root /absolute/project
 ```
 
+To review or change what is registered, the owner runs:
+
+```sh
+python3 -m rumbo.registry --plugin-data /absolute/plugin/data list
+python3 -m rumbo.registry --plugin-data /absolute/plugin/data remove export-project
+```
+
+`list` prints every alias with its project root and whether it would still connect (`ok`, or the refusal a connection would get). `remove` forgets one alias and never touches the project or its ledger. A project directory that was moved, restored or replaced has a new identity and is refused with `PROJECT_CHANGED`: remove its alias, then `add` the project again at its current path. Like registration, both are owner commands and are not available as MCP tools; running connections must restart after either change.
+
 Registration validates an already initialized ledger read-only and records the alias, expected project ID, and directory device/inode in `projects.json`. Owner registrations are serialized with a private `.projects.lock` so simultaneous setup commands cannot silently lose an alias. Runtime connections never create that lock or rewrite the registry. Provisioning is an owner-run local command, never an agent MCP tool. File access protections are local safeguards, not proof of a human identity; an unrestricted process under the same OS account is outside this boundary. The standard launcher runs as its own process. Embedding it concurrently with direct core `Engine` or raw SQLite connections in that same process is unsupported; use the separate trusted CLI/server process for those workflows. Installed connections coordinate their own SQLite operations and identity-handle cleanup.
 
 ## Agent connection
@@ -48,4 +57,4 @@ python3 scripts/verify_installed_wheel.py
 
 The verifier builds without dependency resolution, installs only that wheel into a fresh virtual environment, removes inherited Python import overrides, and runs the core, protocol, demo, backup and installed-registry test modules from a temporary directory outside the checkout. It checks that imported Rumbo modules belong to the isolated environment, runs the installed `rumbo --help` console entrypoint, and confirms that the packaged board matches the canonical resource. The final JSON line reports the actual test count, failures, errors, skips and import paths; any test skip fails verification. Two source-packaging-specific launcher cases stay in the normal full suite, where their required source inputs are available.
 
-To inspect an existing wheel instead, pass `--wheel /absolute/path/to/rumbo_referee-0.3.1-py3-none-any.whl`. Both forms use offline pip invocation (`--no-index --no-deps`); install build prerequisites separately beforehand. This proves the wheel's local runtime behavior on the interpreter executing the verifier. It does not certify a different Python version, host plugin installation, UI rendering, or public submission readiness.
+To inspect an existing wheel instead, pass `--wheel /absolute/path/to/rumbo_referee-0.3.2-py3-none-any.whl`. Both forms use offline pip invocation (`--no-index --no-deps`); install build prerequisites separately beforehand. This proves the wheel's local runtime behavior on the interpreter executing the verifier. It does not certify a different Python version, host plugin installation, UI rendering, or public submission readiness.

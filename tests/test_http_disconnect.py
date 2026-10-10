@@ -31,6 +31,50 @@ class HttpDisconnectTests(unittest.TestCase):
         ]))
         self.addCleanup(self.server.server_close)
 
+    def test_storage_lost_after_startup_gets_a_response_instead_of_a_dropped_connection(self):
+        import shutil
+        body = json.dumps(dict(jsonrpc='2.0', id=1, method='tools/call', params=dict(name='rumbo_state', arguments={})))
+        headers = {'Authorization': 'Bearer synthetic-disconnect-token', 'Content-Type': 'application/json'}
+        thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            def post():
+                client = http.client.HTTPConnection('127.0.0.1', self.server.server_port, timeout=5)
+                self.addCleanup(client.close)
+                client.request('POST', '/mcp', body=body, headers=headers)
+                response = client.getresponse()
+                return response.status, json.loads(response.read())
+            self.assertEqual(post()[0], 200)
+            database = self.root/'.rumbo'/'state.sqlite3'
+            database.chmod(0)
+            stderr = io.StringIO()
+            with contextlib.redirect_stderr(stderr):
+                # An unreadable ledger is the tool's own refusal; a missing or inaccessible project is the server's.
+                status, unreadable = post()
+                self.assertEqual((status, unreadable['result']['isError']), (200, True))
+                self.assertIn('LEDGER_UNREADABLE', unreadable['result']['content'][0]['text'])
+                database.chmod(0o600)
+                self.assertEqual(post()[0], 200)
+                self.root.chmod(0)
+                try:
+                    self.assertEqual(post(), (503, {'error': 'Project storage unavailable'}))
+                finally:
+                    self.root.chmod(0o700)
+                self.assertEqual(post()[0], 200)
+                # A ledger that disappears is lost storage, never a fresh empty project.
+                saved = database.read_bytes()
+                database.unlink()
+                self.assertEqual(post(), (503, {'error': 'Project storage unavailable'}))
+                self.assertFalse(database.exists())
+                database.write_bytes(saved)
+                self.assertEqual(post()[1]['result']['structuredContent']['project_id'], 'sample')
+                shutil.rmtree(self.root)
+                self.assertEqual(post(), (503, {'error': 'Project storage unavailable'}))
+            self.assertNotIn('Traceback', stderr.getvalue())
+        finally:
+            self.server.shutdown()
+            thread.join(5)
+
     def test_incomplete_request_body_never_commits_even_when_received_json_is_valid(self):
         body = json.dumps(dict(jsonrpc='2.0', id=75, method='tools/call', params=dict(
             name='rumbo_ingest_artifact', arguments=dict(task_id='export', contract_revision=1,

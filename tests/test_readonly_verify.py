@@ -93,7 +93,9 @@ class ReadOnlyVerifyTests(unittest.TestCase):
             connection.execute('PRAGMA wal_checkpoint(TRUNCATE)').fetchall()
         finally:
             connection.close()
-        self.assertFalse(path.with_name('state.sqlite3-wal').exists())
+        # Apple's system SQLite keeps a truncated WAL file on close; checkpointed means absent or empty.
+        wal = path.with_name('state.sqlite3-wal')
+        self.assertTrue(not wal.exists() or wal.stat().st_size == 0)
         before = (path.read_bytes(), path.stat().st_mtime_ns, stat.S_IMODE(path.stat().st_mode))
         result = self.verify()
         self.assertEqual(result.returncode, 0, result.stderr)

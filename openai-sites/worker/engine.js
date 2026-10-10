@@ -6,6 +6,19 @@ export const MAX_INGEST=128*1024, MAX_EVENTS=10000, MAX_LEDGER_BYTES=16*1024*102
 export const MAX_ARTIFACT_JSON_DEPTH=512, MAX_ARTIFACT_JSON_INTEGER_DIGITS=4300;
 export class RumboError extends Error { constructor(code,message=''){super(code+': '+(message||code.toLowerCase().replaceAll('_',' ')));this.code=code;} }
 export function fail(code,message=''){throw new RumboError(code,message);}
+// Refusal text matches rumbo/core.py so hosted and local agents get the same recovery hint.
+function currentContract(revision,state){if(revision!==state.contract_revision)fail('STALE_CONTRACT',`Contract is at revision ${state.contract_revision}, not ${revision}; read the current state and retry with its revisions`);}
+function findTask(id,state){const task=state.tasks.find(t=>t.id===id);if(!task){const known=state.tasks.map(t=>t.id);fail('UNKNOWN_TASK',`No task ${id} in contract revision ${state.contract_revision}; its tasks are ${known.slice(0,20).join(', ')}${known.length>20?', ...':''}`);}return task;}
+function currentArtifact(task,revision,state){
+ const artifact=task.artifact;
+ if(!artifact)fail('STALE_ARTIFACT',`Task ${task.id} has no registered artifact; claim the task and register one first`);
+ if(artifact.contract_revision!==state.contract_revision)fail('STALE_ARTIFACT',`Artifact revision ${artifact.revision} was registered under contract revision ${artifact.contract_revision}; register it again under revision ${state.contract_revision}`);
+ if(revision!==artifact.revision)fail('STALE_ARTIFACT',`Artifact is at revision ${artifact.revision}, not ${revision}; read the current state and retry with its revisions`);
+ return artifact;
+}
+function artifactChanged(artifact){fail('ARTIFACT_CHANGED',`Bytes no longer match registered artifact revision ${artifact.revision}; register the artifact again, then rerun its checks`);}
+const ACTIONS_HINT=()=>'Supported actions are '+Object.keys(ACTION_FIELDS).sort().join(', ');
+const LEDGER_FULL=`Ledger holds its maximum of ${MAX_EVENTS} events; ask its owner to archive the project and start a new one`;
 export function fields(value,required,optional=[]){
  if(!value||typeof value!=='object'||Array.isArray(value)||value instanceof FloatValue)fail('BAD_INPUT','Expected an object');
  const unknown=Object.keys(value).filter(k=>!required.includes(k)&&!optional.includes(k));
@@ -47,7 +60,7 @@ export function validateContract(data,actor){
   }
  }
  const tasks=new Map(data.tasks.map(t=>[t.id,t])),visiting=new Set(),visited=new Set();
- function visit(id){if(!ids.has(id))fail('BAD_INPUT','Unknown dependency');if(visiting.has(id))fail('DEPENDENCY_CYCLE');if(visited.has(id))return;visiting.add(id);for(const dep of tasks.get(id).dependencies)visit(dep);visiting.delete(id);visited.add(id);}
+ function visit(id){if(!ids.has(id))fail('BAD_INPUT','Unknown dependency');if(visiting.has(id))fail('DEPENDENCY_CYCLE','Task dependencies form a cycle through '+id);if(visited.has(id))return;visiting.add(id);for(const dep of tasks.get(id).dependencies)visit(dep);visiting.delete(id);visited.add(id);}
  for(const id of ids)visit(id);if(utf8(canonical(data)).length>256000)fail('BAD_INPUT','Contract too large');
 }
 const ZERO='0'.repeat(64);
@@ -68,7 +81,7 @@ function apply(state,event){
 export class Engine {
  constructor({store,artifacts,actor,role,clock=()=>Math.floor(Date.now()/1000)}){this.store=store;this.artifacts=artifacts;this.actor=identifier(actor,'host actor');if(!['human','worker','reviewer','viewer'].includes(role))fail('FORBIDDEN','Unknown host role');this.role=role;this.clock=clock;}
  async replay(rows){
-  if(rows.length>MAX_EVENTS)fail('LEDGER_LIMIT');const state=initial();let previous=ZERO;
+  if(rows.length>MAX_EVENTS)fail('LEDGER_LIMIT',`Ledger exceeds ${MAX_EVENTS} events; ask its owner to archive the project and start a new one`);const state=initial();let previous=ZERO;
   for(let i=0;i<rows.length;i++){
    const row=rows[i];if(row.seq!==i+1||row.previous!==previous||await sha256(previous+'\n'+row.payload)!==row.digest)fail('LEDGER_CORRUPT','Hash-chain verification failed; restore from a trusted copy');
    try{apply(state,parseJSON(row.payload,128));}catch{fail('LEDGER_CORRUPT','Invalid ledger event');}previous=row.digest;
@@ -77,8 +90,8 @@ export class Engine {
  }
  async digestArtifact(artifact){
   if(artifact.source!=='uploaded_text')fail('LOCAL_ARTIFACT_UNAVAILABLE','Hosted storage cannot read local project files');
-  if(!/^[a-f0-9]{64}$/.test(artifact.sha256))fail('ARTIFACT_CORRUPT');
-  const data=await this.artifacts.get(artifact.sha256);if(data.length>MAX_INGEST)fail('ARTIFACT_CORRUPT');return {digest:await sha256(data),size:data.length,data};
+  if(!/^[a-f0-9]{64}$/.test(artifact.sha256))fail('ARTIFACT_CORRUPT','Recorded upload digest is malformed; ask the owner to restore from a trusted backup');
+  const data=await this.artifacts.get(artifact.sha256);if(data.length>MAX_INGEST)fail('ARTIFACT_CORRUPT','Stored upload exceeds the 128 KiB upload bound; ask the owner to restore from a trusted backup');return {digest:await sha256(data),size:data.length,data};
  }
  static currentEvidence(task,revision){const latest=Object.create(null);if(!task.artifact)return latest;for(const item of task.evidence)if(item.contract_revision===revision&&item.artifact_revision===task.artifact.revision&&item.artifact_sha256===task.artifact.sha256)latest[item.check_id]=item;return latest;}
  static dependencyStamp(task,tasks){const out=Object.create(null);for(const dep of task.dependencies){const t=tasks.get(dep);if(t.artifact&&t.decisions.length)out[dep]={artifact:t.artifact.sha256,decision:t.decisions.at(-1).id};}return out;}
@@ -109,14 +122,13 @@ export class Engine {
  async snapshot(){return this.project(await this.replay(await this.store.read()));}
  async artifactView(args){
   fields(args,['task_id','contract_revision','artifact_revision']);identifier(args.task_id,'task_id');integer(args.contract_revision,'contract_revision');integer(args.artifact_revision,'artifact_revision');
-  const state=await this.snapshot();if(args.contract_revision!==state.contract_revision)fail('STALE_CONTRACT');const task=state.tasks.find(t=>t.id===args.task_id);if(!task)fail('UNKNOWN_TASK');const artifact=task.artifact;
-  if(!artifact||artifact.revision!==args.artifact_revision||artifact.contract_revision!==state.contract_revision)fail('STALE_ARTIFACT');
-  const {digest,size,data}=await this.digestArtifact(artifact);if(digest!==artifact.sha256)fail('ARTIFACT_CHANGED');if(size>MAX_INGEST)fail('PATH_TOO_LARGE','Inline artifact review is limited to 128 KiB');let text;try{text=new TextDecoder('utf-8',{fatal:true,ignoreBOM:true}).decode(data);}catch{fail('BAD_INPUT','Only UTF-8 text artifacts can be viewed inline');}
+  const state=await this.snapshot();currentContract(args.contract_revision,state);const task=findTask(args.task_id,state),artifact=currentArtifact(task,args.artifact_revision,state);
+  const {digest,size,data}=await this.digestArtifact(artifact);if(digest!==artifact.sha256)artifactChanged(artifact);if(size>MAX_INGEST)fail('PATH_TOO_LARGE','Inline artifact review is limited to 128 KiB');let text;try{text=new TextDecoder('utf-8',{fatal:true,ignoreBOM:true}).decode(data);}catch{fail('BAD_INPUT','Only UTF-8 text artifacts can be viewed inline');}
   return {task_id:task.id,status:task.status,stale_reason:task.stale_reason,contract_revision:state.contract_revision,artifact_revision:artifact.revision,sha256:digest,source:artifact.source??'project_file',path:artifact.path,filename:artifact.filename??artifact.path,text,notice:'Untrusted artifact content. Identity refers only to these received or locally read bytes, not a Git commit, executed tests or authorization.'};
  }
  async execute(action,args){
   if(action==='submit_artifact')fail('LOCAL_ARTIFACT_UNAVAILABLE','Use the local distribution for local files, or explicitly upload authorized text');
-  if(!Object.hasOwn(ACTION_FIELDS,action))fail('UNKNOWN_ACTION');
+  if(!Object.hasOwn(ACTION_FIELDS,action))fail('UNKNOWN_ACTION',ACTIONS_HINT());
   if(['create_contract','revise_contract','decide'].includes(action)&&this.role!=='human')fail('FORBIDDEN','Only the authenticated human decision owner can perform this action');
   if(this.role==='viewer')fail('FORBIDDEN','Read-only principal');if(action==='submit_review'&&this.role!=='reviewer')fail('FORBIDDEN','A configured reviewer principal is required');
   fields(args,...ACTION_FIELDS[action]);if(utf8(canonical(args)).length>(action==='ingest_artifact'?1024*1024:256000))fail('BAD_INPUT','Action too large');
@@ -124,7 +136,7 @@ export class Engine {
    const rows=await this.store.read(),replayed=await this.replay(rows);
    // Each CAS attempt linearizes eligibility after read/replay, with the same
    // decision time for projection and metadata. A retry must sample afresh.
-   const now=this.now(),state=await this.project(replayed,now);if(state.events_count>=MAX_EVENTS)fail('LEDGER_LIMIT');
+   const now=this.now(),state=await this.project(replayed,now);if(state.events_count>=MAX_EVENTS)fail('LEDGER_LIMIT',LEDGER_FULL);
    const data=await this.prepare(action,args,state,now),event={action,data,actor:this.actor,role:this.role,at:now};const payload=canonical(event),previous=state.ledger_head;
    if(rows.reduce((n,row)=>n+row.payload.length,0)+payload.length>MAX_LEDGER_BYTES)fail('LEDGER_LIMIT','Event payloads are limited to 16 MiB per project; ask its owner to archive or manage retention');
    if(action==='ingest_artifact')await this.artifacts.put(data.artifact.sha256,utf8(args.content));
@@ -138,27 +150,27 @@ export class Engine {
  }
  async prepare(action,args,state,now){
   const rev=state.contract_revision,eventid='e'+(state.events_count+1);
-  if(action==='create_contract'){if(rev)fail('CONTRACT_EXISTS');validateContract(args,this.actor);return {...clone(args),contract_revision:1,contract_change_reason:'Initial owner-approved contract'};}
+  if(action==='create_contract'){if(rev)fail('CONTRACT_EXISTS',`Project ${state.project_id} already has a contract at revision ${rev}; its owner changes it with revise_contract`);validateContract(args,this.actor);return {...clone(args),contract_revision:1,contract_change_reason:'Initial owner-approved contract'};}
   if(!rev)fail('NO_CONTRACT','The human owner must initialize a contract first');
   if(['revise_contract','decide'].includes(action)&&this.actor!==state.decision_owner)fail('FORBIDDEN','Only the configured decision owner may decide');
   if(action==='revise_contract'){
-   integer(args.expected_revision,'expected_revision');if(args.expected_revision!==rev)fail('STALE_CONTRACT');string(args.reason,'reason');validateContract(args.contract,this.actor);if(args.contract.project_id!==state.project_id)fail('BAD_INPUT','Project id is immutable');return {...clone(args.contract),demo:args.contract.demo??false,contract_revision:rev+1,contract_change_reason:args.reason};
+   integer(args.expected_revision,'expected_revision');currentContract(args.expected_revision,state);string(args.reason,'reason');validateContract(args.contract,this.actor);if(args.contract.project_id!==state.project_id)fail('BAD_INPUT','Project id is immutable');return {...clone(args.contract),demo:args.contract.demo??false,contract_revision:rev+1,contract_change_reason:args.reason};
   }
-  identifier(args.task_id,'task_id');const task=state.tasks.find(t=>t.id===args.task_id);if(!task)fail('UNKNOWN_TASK');
+  identifier(args.task_id,'task_id');const task=findTask(args.task_id,state);
   if(action==='request_decision'){string(args.question,'question');return {id:eventid,task_id:task.id,question:args.question,actor:this.actor,contract_revision:rev,at:now};}
-  integer(args.contract_revision,'contract_revision');if(args.contract_revision!==rev)fail('STALE_CONTRACT');
+  integer(args.contract_revision,'contract_revision');currentContract(args.contract_revision,state);
   if(action==='claim_task'){
-   const ttl=integer(args.lease_seconds,'lease_seconds',30,3600);if(task.status==='blocked')fail('DEPENDENCY_BLOCKED');if(task.lease&&task.lease.actor!==this.actor)fail('LEASE_CONFLICT','Another actor holds an unexpired lease');return {task_id:task.id,lease:{actor:this.actor,expires_at:now+ttl,contract_revision:rev}};
+   const ttl=integer(args.lease_seconds,'lease_seconds',30,3600);if(task.status==='blocked')fail('DEPENDENCY_BLOCKED',task.stale_reason);if(task.lease&&task.lease.actor!==this.actor)fail('LEASE_CONFLICT','Another actor holds an unexpired lease');return {task_id:task.id,lease:{actor:this.actor,expires_at:now+ttl,contract_revision:rev}};
   }
   const tasks=new Map(state.tasks.map(t=>[t.id,t]));
   if(action==='ingest_artifact'){
-   if(!task.lease||task.lease.actor!==this.actor)fail('LEASE_REQUIRED');if(task.status==='blocked')fail('DEPENDENCY_BLOCKED');const filename=string(args.filename,'filename',128);
+   if(!task.lease)fail('LEASE_REQUIRED',`No unexpired lease on ${task.id}; claim the task first. Leases expire and do not carry over to a new connection`);if(task.lease.actor!==this.actor)fail('LEASE_REQUIRED',`Another actor holds the unexpired lease on ${task.id}; only the lease holder can register its artifact`);if(task.status==='blocked')fail('DEPENDENCY_BLOCKED',task.stale_reason);const filename=string(args.filename,'filename',128);
    if(!/^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/.test(filename)||/\.(pem|key|p12|pfx)$/i.test(filename))fail('PATH_INVALID','Use a simple display filename; paths and credential filenames are not accepted');
    if(typeof args.content!=='string'||!args.content.isWellFormed())fail('BAD_INPUT','content must be valid UTF-8 text');const bytes=utf8(args.content);if(bytes.length>MAX_INGEST)fail('PATH_TOO_LARGE','Uploaded text is limited to 128 KiB of UTF-8 bytes');
    const digest=await sha256(bytes);
    return {task_id:task.id,artifact:{path:'uploaded:'+filename,filename,source:'uploaded_text',sha256:digest,size:bytes.length,revision:task.artifact?task.artifact.revision+1:1,contract_revision:rev,maker:this.actor,at:now,dependencies:Engine.dependencyStamp(task,tasks)}};
   }
-  const artifact=task.artifact;integer(args.artifact_revision,'artifact_revision');if(!artifact||args.artifact_revision!==artifact.revision||artifact.contract_revision!==rev)fail('STALE_ARTIFACT');const {digest,data:raw}=await this.digestArtifact(artifact);if(digest!==artifact.sha256)fail('ARTIFACT_CHANGED');if(task.status==='blocked'||canonical(artifact.dependencies??{})!==canonical(Engine.dependencyStamp(task,tasks)))fail('DEPENDENCY_BLOCKED');
+  integer(args.artifact_revision,'artifact_revision');const artifact=currentArtifact(task,args.artifact_revision,state);const {digest,data:raw}=await this.digestArtifact(artifact);if(digest!==artifact.sha256)artifactChanged(artifact);if(task.status==='blocked')fail('DEPENDENCY_BLOCKED',task.stale_reason);if(canonical(artifact.dependencies??{})!==canonical(Engine.dependencyStamp(task,tasks)))fail('DEPENDENCY_BLOCKED',`A dependency was decided or changed after artifact revision ${artifact.revision} was registered; register the artifact again`);
   const common={actor:this.actor,role:this.role,contract_revision:rev,artifact_revision:artifact.revision,artifact_sha256:digest,at:now};
   if(action==='run_checks'){
    // Cache failed parses too, only for these exact bytes in this action.
@@ -174,6 +186,6 @@ export class Engine {
   if(action==='decide'){
    if(!['accepted','rejected'].includes(args.outcome))fail('BAD_INPUT','Decision must be accepted or rejected');string(args.reason,'reason');const ev=Engine.currentEvidence(task,rev);if(args.outcome==='accepted'&&!task.acceptance.every(c=>ev[c.id]?.outcome==='pass'))fail('CHECKS_INCOMPLETE','Every current acceptance criterion needs passing evidence');return {task_id:task.id,decision:{...common,id:eventid,outcome:args.outcome,reason:args.reason,evidence_ids:Object.values(ev).map(e=>e.id).sort()}};
   }
-  fail('UNKNOWN_ACTION');
+  fail('UNKNOWN_ACTION',ACTIONS_HINT());
  }
 }

@@ -3,6 +3,7 @@ from contextlib import closing
 import importlib
 import importlib.util
 import json
+import shutil
 import os
 from pathlib import Path
 import sqlite3
@@ -56,6 +57,52 @@ class InstalledTests(unittest.TestCase):
     def assertToolError(self, result, code):
         self.assertTrue(result.get('isError'), result)
         self.assertIn(code, result['content'][0]['text'])
+
+    def registry_cli(self, *arguments):
+        import subprocess, sys
+        return subprocess.run([sys.executable, '-m', 'rumbo.registry', '--plugin-data', str(self.data), *map(str, arguments)],
+                              text=True, capture_output=True, timeout=20, cwd=Path(__file__).resolve().parents[1])
+
+    def test_owner_can_reregister_a_moved_project_after_removing_its_alias(self):
+        db_bytes = (self.project / '.rumbo/state.sqlite3').read_bytes()
+        self.assertEqual(self.registry_cli('add', 'sample', '--root', self.project).returncode, 0)
+        moved = self.base / 'moved'
+        shutil.copytree(self.project, moved)
+        shutil.rmtree(self.project)
+        listing = json.loads(self.registry_cli('list').stdout)
+        self.assertEqual([(p['alias'], p['root']) for p in listing['projects']], [('sample', str(self.project))])
+        self.assertIn('PROJECT_CHANGED', listing['projects'][0]['status'])
+        self.assertToolError(self.call(self.protocol(), 'rumbo_connect_project', dict(alias='sample')), 'PROJECT_CHANGED')
+        blocked = self.registry_cli('add', 'sample', '--root', moved)
+        self.assertEqual(blocked.returncode, 2)
+        self.assertIn('ALIAS_EXISTS', blocked.stderr)
+        self.assertIn('remove it first', blocked.stderr)
+        removed = self.registry_cli('remove', 'sample')
+        self.assertEqual(removed.returncode, 0, removed.stderr)
+        self.assertEqual(json.loads(removed.stdout)['removed'], 'sample')
+        self.assertEqual(json.loads(self.registry_cli('list').stdout)['projects'], [])
+        self.assertEqual(self.registry_cli('add', 'sample', '--root', moved).returncode, 0)
+        self.assertEqual(json.loads(self.registry_cli('list').stdout)['projects'][0]['status'], 'ok')
+        self.assertEqual(self.bind(self.protocol())['project_id'], 'sample')
+        # Removal and listing never touch a project or its ledger.
+        self.assertEqual((moved / '.rumbo/state.sqlite3').read_bytes(), db_bytes)
+        self.assertEqual((self.data / 'projects.json').stat().st_mode & 0o777, 0o600)
+
+    def test_removing_one_alias_keeps_the_others_and_unknown_aliases_change_nothing(self):
+        self.register('first')
+        self.register('second')
+        before = (self.data / 'projects.json').read_bytes()
+        missing = self.registry_cli('remove', 'third')
+        self.assertEqual(missing.returncode, 2)
+        self.assertIn('UNKNOWN_PROJECT', missing.stderr)
+        self.assertEqual((self.data / 'projects.json').read_bytes(), before)
+        connected = self.protocol()
+        self.bind(connected, 'second')
+        self.assertEqual(self.registry_cli('remove', 'first').returncode, 0)
+        self.assertEqual([p['alias'] for p in json.loads(self.registry_cli('list').stdout)['projects']], ['second'])
+        # A running connection sees the registry change and must restart, as for any other change.
+        self.assertToolError(self.call(connected, 'rumbo_state'), 'REGISTRY_CHANGED')
+        self.assertEqual(self.bind(self.protocol(), 'second')['alias'], 'second')
 
     def test_unbound_startup_lists_aliases_without_creating_project_state(self):
         protocol = self.protocol()

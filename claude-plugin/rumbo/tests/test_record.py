@@ -3,6 +3,7 @@
 
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -1014,7 +1015,7 @@ class RecordTest(unittest.TestCase):
             self.assertEqual(out6.strip(), "", f"Expected silent with stop_hook_active true, got: {out6}")
             self.assertEqual(err6, "", f"Unexpected stderr: {err6}")
             # Marker should still exist (not renamed).
-            self.assertTrue(os.path.exists(marker_s3), f"Marker for s3 was incorrectly removed or renamed")
+            self.assertTrue(os.path.exists(marker_s3), "Marker for s3 was incorrectly removed or renamed")
 
             # 6. A non-planning prompt writes no marker.
             prompt_s4 = json.dumps({"prompt": "fix the typo", "session_id": "s4"})
@@ -2044,6 +2045,244 @@ class RecordTest(unittest.TestCase):
         self.assertEqual(os.listdir(os.path.dirname(self.record_path)), ["record.json"])
         with open(self.record_path, encoding="utf-8") as handle:
             self.assertEqual(json.load(handle)["objective"], {"text": "o", "quote": "q"})
+
+    # ------------------------------------------- everyday phrasings and typography
+
+    def _check_with(self, quote, check, transcript=None):
+        record = {"version": 1, "objective": {"text": "o", "quote": quote}, "items": [],
+                  "checks": [dict(check, id="C1", refs=[])]}
+        with open(self.record_path, "w", encoding="utf-8") as handle:
+            json.dump(record, handle)
+        args = ["check", "--record", self.record_path]
+        if transcript is not None:
+            path = os.path.join(self.dir, "typed.jsonl")
+            with open(path, "w", encoding="utf-8") as handle:
+                handle.write(json.dumps({"type": "user", "message": {"content": transcript}}) + "\n")
+            args += ["--transcript", path]
+        return run_record(args)
+
+    def test_dates_are_sourced_by_ordinals_either_order_and_slashes(self):
+        check = {"kind": "before", "first": "03-12", "second": "03-20"}
+        for words in ("The event is March 12th and the printer wants files by March 20th.",
+                      "Event on 12 March, printer deadline the 20th of March.",
+                      "Event 3/12, printer 3/20.", "Event 12/3, printer 20/3.",
+                      "Event Mar. 12th; printer Mar 20"):
+            with self.subTest(words=words):
+                code, out, err = self._check_with(words, check)
+                self.assertEqual((code, out.strip()), (0, "C1: PASS before"), out + err)
+        code, out, err = self._check_with("Event Sept 5th, printer Sept. 9", {"kind": "before", "first": "09-05", "second": "09-09"})
+        self.assertEqual((code, out.strip()), (0, "C1: PASS before"))
+
+    def test_dates_do_not_source_from_longer_numbers_or_other_words(self):
+        check = {"kind": "before", "first": "03-12", "second": "03-20"}
+        for words in ("March 120 and March 200 units", "112 March and 120 March", "13/12/3 and 3/200",
+                      "builds 1.3/12 and 2.3/20", "12 Marching bands and 20 Marchers", "March 12 only"):
+            with self.subTest(words=words):
+                code, out, err = self._check_with(words, check)
+                self.assertEqual(code, 1)
+                self.assertIn("C1: UNSOURCED before", out)
+                self.assertIn("second month-day 03-20", out)
+
+    def test_times_are_sourced_by_an_hour_with_meridiem_noon_and_midnight(self):
+        cases = (("Doors at 9am, 150 minutes of sessions, done by noon.", "09:00", "12:00"),
+                 ("Start 9 a.m., 150 minutes, hard stop 1 PM.", "09:00", "13:00"),
+                 ("From midnight for 150 minutes, wrap by 12pm", "00:00", "12:00"),
+                 ("Begin 12am, 150 minutes, out by 9 p.m.", "00:00", "21:00"))
+        for words, start, end in cases:
+            with self.subTest(words=words):
+                code, out, err = self._check_with(words, {"kind": "fits_window", "start": start, "end": end, "segments_min": [150]})
+                self.assertEqual((code, out.strip()), (0, "C1: PASS fits_window"), out + err)
+
+    def test_bare_hour_does_not_source_other_times(self):
+        for words, start in (("at 9 sharp for 150 minutes until 12:30", "09:00"),
+                             ("9am for 150 minutes until 12:30", "09:30"),
+                             ("9:45am for 150 minutes until 12:30", "09:00"),
+                             ("9am for 150 minutes until 12:30", "21:00"),
+                             ("13pm, $9 am I right, 1.9am, 150 minutes, 12:30", "09:00"),
+                             ("room 9 amber for 150 minutes until 12:30", "09:00")):
+            with self.subTest(words=words, start=start):
+                code, out, err = self._check_with(words, {"kind": "fits_window", "start": start, "end": "12:30", "segments_min": [150]})
+                self.assertEqual(code, 1)
+                self.assertIn("start " + start, out)
+
+    def test_durations_in_hours_source_minutes_but_not_ranges_or_other_values(self):
+        window = {"kind": "fits_window", "start": "09:00", "end": "17:00"}
+        for words, minutes in (("9:00 to 17:00 with a 2-hour workshop", 120), ("9:00 to 17:00, 1.5 hours of talks", 90),
+                               ("9:00 to 17:00, 2 hrs", 120)):
+            with self.subTest(words=words):
+                code, out, err = self._check_with(words, dict(window, segments_min=[minutes]))
+                self.assertEqual((code, out.strip()), (0, "C1: PASS fits_window"), out + err)
+        for words, minutes in (("9:00 to 17:00 with 12 hours of prep", 120), ("9:00 to 17:00, 1-2 hours", 120),
+                               ("9:00 to 17:00, 1e2 hours", 120), ("9:00 to 17:00, \u22122 hours", 120), ("9:00 to 17:00, v2 hours", 120),
+                               ("9:00 to 17:00, 2.5 hourly rate", 150)):
+            with self.subTest(words=words):
+                code, out, err = self._check_with(words, dict(window, segments_min=[minutes]))
+                self.assertEqual(code, 1)
+                self.assertIn("segments_min %d not in the user's quoted words" % minutes, out)
+        # Hours are a duration: they never source money.
+        code, out, err = self._check_with("2 hours, cap $500", {"kind": "within_budget", "amounts": [120], "total_cap": 500})
+        self.assertIn("amounts 120 not in the user's quoted words", out)
+
+    def test_thousands_suffix_sources_the_multiplied_amount_only(self):
+        budget = {"kind": "within_budget", "total_cap": 5000}
+        code, out, err = self._check_with("Catering is $1.5k of the 5K budget", dict(budget, amounts=[1500]))
+        self.assertEqual((code, out.strip()), (0, "C1: PASS within_budget"), out + err)
+        code, out, err = self._check_with("Catering is $1.5k of the 5K budget", dict(budget, amounts=[1.5]))
+        self.assertIn("amounts 1.5 not in the user's quoted words", out)
+        code, out, err = self._check_with("Refund -$1.5k from the 5K budget", dict(budget, amounts=[1500]))
+        self.assertIn("amounts 1500 not in the user's quoted words", out)
+        code, out, err = self._check_with("A 5 km walk, cap 5000", dict(budget, amounts=[5]))
+        self.assertEqual((code, out.strip()), (0, "C1: PASS within_budget"), out + err)
+
+    def test_typographic_apostrophes_quotes_and_ellipses_match_their_ascii_forms(self):
+        pairs = (("I don't want a cake", "Honestly I don\u2019t want a cake."),
+                 ("I don\u2019t want a cake", "Honestly I don't want a cake."),
+                 ('call it "alpha" for now', "Let\u2019s call it \u201calpha\u201d for now"),
+                 ("wait... ok, ship it", "wait\u2026 ok, ship it"), ("wait\u2026 ok, ship it", "wait.... ok, ship it"))
+        for quote, said in pairs:
+            with self.subTest(quote=quote):
+                code, out, err = self._check_with(quote, {"kind": "within_budget", "amounts": [], "total_cap": 0}, said)
+                self.assertEqual(code, 0, out + err)
+                self.assertNotIn("UNVERIFIED", out)
+
+    def test_contractions_negate_whatever_apostrophe_was_typed(self):
+        for said in ("Don\u2019t spend $900 on catering.", "We shouldn't spend $900 on catering.",
+                     "We shouldn\u2019t spend $900 on catering.", "I wouldn't spend $900 on catering.",
+                     "We aren\u2019t going to spend $900 on catering.", "Nobody should spend $900 on catering.",
+                     "Neither of us will spend $900 on catering.", "Do not \u2026 spend $900 on catering.",
+                     "Do not ... spend $900 on catering.", "Never.. spend $900 on catering."):
+            with self.subTest(said=said):
+                code, out, err = self._check_with("spend $900 on catering", {"kind": "within_budget", "amounts": [], "total_cap": 0}, said)
+                self.assertEqual(code, 1)
+                self.assertIn("objective.quote: UNVERIFIED", out)
+        code, out, err = self._check_with("spend $900 on catering", {"kind": "within_budget", "amounts": [], "total_cap": 0},
+                                          "Isn\u2019t that settled? Yes: spend $900 on catering.")
+        self.assertEqual(code, 0, out + err)
+
+    def test_typography_does_not_change_an_earlier_session_fingerprint(self):
+        record = {"version": 1, "objective": {"text": "o", "quote": "I don\u2019t want a cake"}, "items": [], "checks": []}
+        with open(self.record_path, "w", encoding="utf-8") as handle:
+            json.dump(record, handle)
+        first = os.path.join(self.dir, "first.jsonl")
+        later = os.path.join(self.dir, "later.jsonl")
+        with open(first, "w", encoding="utf-8") as handle:
+            handle.write(json.dumps({"type": "user", "message": {"content": "I don't want a cake"}}) + "\n")
+        with open(later, "w", encoding="utf-8") as handle:
+            handle.write(json.dumps({"type": "user", "message": {"content": "carry on"}}) + "\n")
+        with tempfile.TemporaryDirectory() as state:
+            env = dict(os.environ, RUMBO_STATE_DIR=state)
+            for session, transcript in (("s1", first), ("s2", later)):
+                code, out, err = run_record(["stop-gate", "--record", self.record_path],
+                                            json.dumps({"session_id": session, "transcript_path": transcript}), env=env)
+                self.assertEqual((code, out, err), (0, "", ""))
+
+    # --------------------------------------------------- private state directory
+
+    def _workshop_gate(self, state, session="s1", chained=False):
+        with open(self.record_path, "w", encoding="utf-8") as handle:
+            json.dump(self.workshop_record(), handle)
+        hook = {"session_id": session, "stop_hook_active": chained}
+        code, out, err = run_record(["stop-gate", "--record", self.record_path], json.dumps(hook),
+                                    env=dict(os.environ, RUMBO_STATE_DIR=state))
+        self.assertEqual((code, err), (0, ""))
+        return out.strip()
+
+    def test_state_directory_and_markers_are_private(self):
+        state = os.path.join(self.dir, "state")
+        self.assertIn('"block"', self._workshop_gate(state))
+        self.assertEqual(os.stat(state).st_mode & 0o777, 0o700)
+        self.assertEqual({os.stat(os.path.join(state, name)).st_mode & 0o777 for name in os.listdir(state)}, {0o600})
+
+    def test_own_state_directory_open_to_others_is_closed_and_still_counts(self):
+        state = os.path.join(self.dir, "state")
+        for mode in (0o777, 0o755):
+            with self.subTest(mode=oct(mode)):
+                shutil.rmtree(state, ignore_errors=True)
+                os.mkdir(state)
+                os.chmod(state, mode)
+                # A marker an earlier version left readable by others.
+                old = marker(state, "s1", ".blocks")
+                with open(old, "w", encoding="utf-8") as handle:
+                    handle.write("0")
+                os.chmod(old, 0o644)
+                outs = [self._workshop_gate(state, chained=call > 0) for call in range(5)]
+                self.assertEqual(os.stat(state).st_mode & 0o777, 0o700)
+                self.assertEqual({os.stat(os.path.join(state, name)).st_mode & 0o777 for name in os.listdir(state)}, {0o600})
+                self.assertEqual([bool(out) for out in outs], [True, True, True, False, False])
+
+    def test_marker_symlink_is_never_followed(self):
+        state = os.path.join(self.dir, "state")
+        os.mkdir(state, 0o700)
+        victim = os.path.join(self.dir, "victim.txt")
+        with open(victim, "w", encoding="utf-8") as handle:
+            handle.write("3")
+        for suffix in (".blocks", ".lastreason", ".failed"):
+            os.symlink(victim, marker(state, "s1", suffix))
+        # A planted count of 3 must not silence the gate, and nothing is written through the links.
+        out = self._workshop_gate(state)
+        self.assertIn('"block"', out)
+        self.assertIn("STATE_UNAVAILABLE", out)
+        with open(victim, encoding="utf-8") as handle:
+            self.assertEqual(handle.read(), "3")
+        self.assertEqual(self._workshop_gate(state, chained=True), "")
+
+    def test_default_state_directory_that_is_a_link_is_not_used(self):
+        real = os.path.join(self.dir, "elsewhere")
+        os.mkdir(real, 0o700)
+        planted = marker(real, "s1", ".blocks")
+        with open(planted, "w", encoding="utf-8") as handle:
+            handle.write("3")
+        shared_tmp = os.path.join(self.dir, "tmp")
+        os.mkdir(shared_tmp)
+        os.symlink(real, os.path.join(shared_tmp, "rumbo"))
+        with open(self.record_path, "w", encoding="utf-8") as handle:
+            json.dump(self.workshop_record(), handle)
+        env = {k: v for k, v in os.environ.items() if k != "RUMBO_STATE_DIR"}
+        env["TMPDIR"] = shared_tmp
+        code, out, err = run_record(["stop-gate", "--record", self.record_path], json.dumps({"session_id": "s1"}), env=env)
+        self.assertEqual((code, err), (0, ""))
+        self.assertIn("STATE_UNAVAILABLE", out)
+        self.assertEqual(os.listdir(real), [os.path.basename(planted)])
+
+    def test_configured_state_directory_reached_through_a_link_keeps_the_block_limit(self):
+        real = os.path.join(self.dir, "elsewhere")
+        os.mkdir(real, 0o700)
+        state = os.path.join(self.dir, "state")
+        os.symlink(real, state)
+        outs = [self._workshop_gate(state) for _ in range(5)]
+        self.assertEqual([bool(out) for out in outs], [True, True, True, False, False])
+        self.assertNotIn("STATE_UNAVAILABLE", "".join(outs))
+        self.assertTrue(os.path.exists(marker(real, "s1", ".blocks")))
+
+    def test_unverified_says_when_a_negation_and_not_absence_is_the_cause(self):
+        check = {"kind": "within_budget", "amounts": [], "total_cap": 0}
+        said = "I haven't heard back from Sam, book the hall for March 12"
+        code, out, err = self._check_with("book the hall for March 12", check, said)
+        self.assertEqual(code, 1)
+        self.assertIn("objective.quote: UNVERIFIED: these words follow a negation", out)
+        self.assertIn("quote the whole sentence", out)
+        code, out, err = self._check_with(said, check, said)
+        self.assertEqual((code, out), (0, "C1: PASS within_budget\n"))
+        code, out, err = self._check_with("book the gym for March 12", check, said)
+        self.assertIn("objective.quote: UNVERIFIED: quote not found in the user's messages", out)
+
+    def test_init_creates_a_private_record_directory(self):
+        project = os.path.join(self.dir, "fresh")
+        os.mkdir(project)
+        path = os.path.join(project, ".rumbo", "record.json")
+        code, out, err = run_record(["init", "--record", path, "--objective", "o", "--quote", "q"])
+        self.assertEqual(code, 0, err)
+        self.assertEqual(os.stat(os.path.dirname(path)).st_mode & 0o777, 0o700)
+
+    def test_init_accepts_anchored_and_wildcard_gitignore_entries(self):
+        for index, entry in enumerate(("/.rumbo/", "/.rumbo", ".rumbo/*", ".rumbo")):
+            with self.subTest(entry=entry):
+                project = os.path.join(self.dir, "p%d" % index)
+                os.mkdir(project)
+                with open(os.path.join(project, ".gitignore"), "w", encoding="utf-8") as handle:
+                    handle.write("node_modules/\n" + entry + "\n")
+                code, out, err = run_record(["init", "--record", os.path.join(project, ".rumbo", "record.json"), "--objective", "o", "--quote", "q"])
+                self.assertEqual((code, err), (0, ""))
 
 if __name__ == "__main__":
     unittest.main()

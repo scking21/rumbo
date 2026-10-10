@@ -7,7 +7,6 @@ No provider calls are possible: containers use --network none. Nothing deploys.
 """
 import json
 from contextlib import contextmanager
-import os
 from pathlib import Path
 import shutil
 import subprocess

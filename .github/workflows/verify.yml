@@ -68,6 +68,7 @@ jobs:
           python -m unittest discover -s tests -p test_json_check_cache.py -v
           python -m unittest discover -s tests -p test_decision_clock.py -v
           python -m unittest discover -s tests -p test_http_disconnect.py -v
+          python -m unittest discover -s tests -p test_diagnostics.py -v
       - name: Verify legacy adapter floor
         working-directory: claude-plugin/rumbo
         run: python -m unittest discover -s tests -v

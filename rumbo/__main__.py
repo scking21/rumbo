@@ -3,13 +3,30 @@ import argparse
 import json
 from pathlib import Path
 import sys
+from . import __version__
 from .core import Engine, RumboError
 from .protocol import safe_json, serve_stdio
 from .server import create_server
 
 
+def _json(text,source):
+    try:return safe_json(text)
+    except (ValueError,RecursionError) as e:
+        raise RumboError('BAD_INPUT',source+' is not one valid JSON value: '+str(e))
+
+
+class _ProjectAtCallTime:
+    def __init__(self,root,actor,role):
+        self.root=root;self.actor=actor;self.role=role
+    def _engine(self):return Engine(self.root,self.actor,self.role,create=False)
+    def snapshot(self):return self._engine().snapshot()
+    def artifact_view(self,arguments):return self._engine().artifact_view(arguments)
+    def execute(self,action,arguments):return self._engine().execute(action,arguments)
+
+
 def main(argv=None):
     parser=argparse.ArgumentParser(description='Rumbo local contract and evidence referee')
+    parser.add_argument('--version',action='version',version='rumbo '+__version__)
     parser.add_argument('--root',default='.',help='Trusted project root (not a tool argument)')
     parser.add_argument('--actor',default='local-worker',help='Local host principal identity')
     parser.add_argument('--role',choices=['worker','reviewer','viewer'],default='worker')
@@ -23,7 +40,7 @@ def main(argv=None):
     sub.add_parser('mcp',help='MCP stdio server, no human-authority tools')
     serve=sub.add_parser('serve',help='Run Streamable HTTP behind your approved TLS/OAuth deployment')
     serve.add_argument('--config',required=True);serve.add_argument('--host',default='127.0.0.1');serve.add_argument('--port',type=int,default=8765)
-    demo=sub.add_parser('demo',help='Create an isolated synthetic sample project; refuses existing contract')
+    sub.add_parser('demo',help='Create an isolated synthetic sample project; refuses existing contract')
     args=parser.parse_args(argv)
     try:
         if args.command=='serve':
@@ -40,18 +57,21 @@ def main(argv=None):
         elif args.command=='operator':
             if not sys.stdin.isatty():
                 raise RumboError('HUMAN_CONFIRMATION_REQUIRED','Noninteractive invocation refused; use the trusted local operator flow. A terminal is not proof of human identity')
-            payload=safe_json(Path(args.file).read_text())
+            payload=_json(Path(args.file).read_text(),args.file)
             print(json.dumps(payload,indent=2,ensure_ascii=False))
             phrase='CONFIRM '+args.action
             if input('As the human decision owner, type '+phrase+': ')!=phrase:
                 raise RumboError('CANCELLED')
             result=Engine(args.root,args.owner,'human').execute(args.action,payload)
         else:
-            engine=Engine(args.root,args.actor,'viewer' if args.command=='verify' else args.role,read_only=args.command=='verify')
             if args.command=='mcp':
-                serve_stdio(engine);return 0
+                # A host starts this before the owner may have initialized the project: answer the
+                # handshake, and let each tool call find (or refuse) the ledger as it then stands.
+                serve_stdio(_ProjectAtCallTime(args.root,args.actor,args.role));return 0
+            # Only the owner's create_contract or demo may start a ledger.
+            engine=Engine(args.root,args.actor,'viewer' if args.command=='verify' else args.role,read_only=args.command=='verify',create=False)
             if args.command=='call':
-                result=engine.execute(args.action,safe_json(args.json))
+                result=engine.execute(args.action,_json(args.json,'--json'))
             else:
                 result=engine.checkpoint() if args.command=='verify' else engine.snapshot()
         print(json.dumps(result,indent=2,ensure_ascii=False,allow_nan=False))

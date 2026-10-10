@@ -1,10 +1,8 @@
 """Real signature verification with locally generated ephemeral fixture keys only."""
-import base64
 import copy
 import importlib.util
 import json
 import os
-from pathlib import Path
 import tempfile
 import time
 import unittest
@@ -122,7 +120,7 @@ class WorkOSTests(unittest.TestCase):
     @unittest.skipUnless(importlib.util.find_spec('authlib') and importlib.util.find_spec('requests'),
                          'Install requirements-authkit.txt for owner HTTP integration tests')
     def test_http_owner_pkce_nonce_and_mcp_use_separate_verified_credentials(self):
-        import http.client, io, re, threading
+        import http.client, io, threading
         from http.cookies import SimpleCookie
         from urllib.parse import urlencode, urlsplit
         from requests import Response

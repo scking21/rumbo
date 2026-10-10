@@ -1,6 +1,6 @@
-# Rumbo 0.3.2 local plugin review candidate
+# Rumbo 0.3.3 local plugin review candidate
 
-The OpenAI adapter is versioned independently at 0.3.2; the canonical shared engine remains 0.3.1. This ZIP is for local review and testing, not public-directory submission. It contains the portable Agent Plugins 1.0 manifest, a stdio MCP server, workflow skills and an inline MCP Apps board. Current public review requires an authenticated public HTTPS MCP endpoint; none is configured or claimed here.
+The OpenAI adapter is versioned independently at 0.3.3; the canonical shared engine remains 0.3.2. This ZIP is for local review and testing, not public-directory submission. It contains the portable Agent Plugins 1.0 manifest, a stdio MCP server, workflow skills and an inline MCP Apps board. Current public review requires an authenticated public HTTPS MCP endpoint; none is configured or claimed here.
 
 Python 3.9+ on Linux/macOS is required. The installed launcher starts unbound. The human operator first initializes the approved project through the trusted source-release CLI, then registers an alias using `python3 -m rumbo.registry --plugin-data /absolute/plugin/data add project-alias --root /absolute/project`. The host supplies that same private directory as `PLUGIN_DATA`; aliases live in `projects.json`. The agent calls `rumbo_list_projects`, then `rumbo_connect_project` with only the approved alias. It cannot supply paths or roles or reconnect within that process.
 

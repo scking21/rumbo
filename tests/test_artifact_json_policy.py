@@ -1,6 +1,5 @@
 """Canonical artifact-only JSON limits, independent of transport limits."""
 import json
-from pathlib import Path
 import sys
 import tempfile
 import unittest
