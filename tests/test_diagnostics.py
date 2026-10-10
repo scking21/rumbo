@@ -172,12 +172,33 @@ class CommandLineTests(unittest.TestCase):
 
     def test_agent_commands_do_not_start_a_ledger_in_an_uninitialized_directory(self):
         claim = json.dumps(dict(task_id='export', contract_revision=1, lease_seconds=60))
-        for command in (['state'], ['call', 'claim_task', '--json', claim], ['mcp']):
+        for command in (['state'], ['call', 'claim_task', '--json', claim]):
             with self.subTest(command=command[0]):
                 result = self.cli('--root', self.root, *command)
                 self.assertEqual(result.returncode, 2)
                 self.assertIn('NO_CONTRACT: No project ledger in this root; check the root', result.stderr)
                 self.assertEqual(list(self.root.iterdir()), [])
+
+    def test_mcp_answers_before_the_project_exists_and_finds_it_once_it_does(self):
+        def request(number, method, **params):
+            return json.dumps(dict(jsonrpc='2.0', id=number, method=method, params=params)) + '\n'
+        state = dict(name='rumbo_state', arguments={})
+        process = subprocess.Popen([sys.executable, '-m', 'rumbo', '--root', str(self.root), 'mcp'], text=True,
+                                   stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        self.addCleanup(process.kill)
+        def ask(line):
+            process.stdin.write(line); process.stdin.flush()
+            return json.loads(process.stdout.readline())
+        self.assertEqual(ask(request(1, 'initialize', protocolVersion='2025-06-18'))['result']['serverInfo']['name'], 'rumbo')
+        refused = ask(request(2, 'tools/call', **state))['result']
+        self.assertTrue(refused['isError'])
+        self.assertIn('NO_CONTRACT', refused['content'][0]['text'])
+        self.assertEqual(list(self.root.iterdir()), [])
+        Engine(self.root, 'owner', 'human').execute('create_contract', contract())
+        self.assertEqual(ask(request(3, 'tools/call', **state))['result']['structuredContent']['project_id'], 'sample')
+        process.stdin.close()
+        self.assertEqual(process.wait(timeout=10), 0)
+        process.stdout.close(); process.stderr.close()
 
     def test_agent_commands_still_work_on_an_initialized_project(self):
         Engine(self.root, 'owner', 'human').execute('create_contract', contract())

@@ -2226,16 +2226,45 @@ class RecordTest(unittest.TestCase):
             self.assertEqual(handle.read(), "3")
         self.assertEqual(self._workshop_gate(state, chained=True), "")
 
-    def test_state_directory_that_is_a_link_is_not_used(self):
+    def test_default_state_directory_that_is_a_link_is_not_used(self):
         real = os.path.join(self.dir, "elsewhere")
         os.mkdir(real, 0o700)
-        with open(marker(real, "s1", ".blocks"), "w", encoding="utf-8") as handle:
+        planted = marker(real, "s1", ".blocks")
+        with open(planted, "w", encoding="utf-8") as handle:
             handle.write("3")
+        shared_tmp = os.path.join(self.dir, "tmp")
+        os.mkdir(shared_tmp)
+        os.symlink(real, os.path.join(shared_tmp, "rumbo"))
+        with open(self.record_path, "w", encoding="utf-8") as handle:
+            json.dump(self.workshop_record(), handle)
+        env = {k: v for k, v in os.environ.items() if k != "RUMBO_STATE_DIR"}
+        env["TMPDIR"] = shared_tmp
+        code, out, err = run_record(["stop-gate", "--record", self.record_path], json.dumps({"session_id": "s1"}), env=env)
+        self.assertEqual((code, err), (0, ""))
+        self.assertIn("STATE_UNAVAILABLE", out)
+        self.assertEqual(os.listdir(real), [os.path.basename(planted)])
+
+    def test_configured_state_directory_reached_through_a_link_keeps_the_block_limit(self):
+        real = os.path.join(self.dir, "elsewhere")
+        os.mkdir(real, 0o700)
         state = os.path.join(self.dir, "state")
         os.symlink(real, state)
-        out = self._workshop_gate(state)
-        self.assertIn("STATE_UNAVAILABLE", out)
-        self.assertEqual(sorted(os.listdir(real)), [os.path.basename(marker(real, "s1", ".blocks"))])
+        outs = [self._workshop_gate(state) for _ in range(5)]
+        self.assertEqual([bool(out) for out in outs], [True, True, True, False, False])
+        self.assertNotIn("STATE_UNAVAILABLE", "".join(outs))
+        self.assertTrue(os.path.exists(marker(real, "s1", ".blocks")))
+
+    def test_unverified_says_when_a_negation_and_not_absence_is_the_cause(self):
+        check = {"kind": "within_budget", "amounts": [], "total_cap": 0}
+        said = "I haven't heard back from Sam, book the hall for March 12"
+        code, out, err = self._check_with("book the hall for March 12", check, said)
+        self.assertEqual(code, 1)
+        self.assertIn("objective.quote: UNVERIFIED: these words follow a negation", out)
+        self.assertIn("quote the whole sentence", out)
+        code, out, err = self._check_with(said, check, said)
+        self.assertEqual((code, out), (0, "C1: PASS within_budget\n"))
+        code, out, err = self._check_with("book the gym for March 12", check, said)
+        self.assertIn("objective.quote: UNVERIFIED: quote not found in the user's messages", out)
 
     def test_init_creates_a_private_record_directory(self):
         project = os.path.join(self.dir, "fresh")

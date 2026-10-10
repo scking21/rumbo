@@ -456,7 +456,7 @@ def _fold(text):
 NEGATION = re.compile(r"\b(?:not|no|never|\w+n't|dont|cannot|without|avoid|neither|nor|nobody|none|nothing)\b", re.IGNORECASE)
 
 
-def _quote_in(quote, message):
+def _quote_in(quote, message, ignore_negation=False):
     """True when quote occurs in message as whole tokens and is not negated in its clause.
 
     Lexical, not semantic: "$900" does not match inside "$9000" or "$900.50", and
@@ -470,9 +470,20 @@ def _quote_in(quote, message):
         if re.search(r"(?:^|[^\d])[-\u2212]\$?$", message[:match.start()]):
             continue
         clause = re.split(r"[.!?;:\n]", message[:match.start()])[-1]
-        if not NEGATION.search(clause[-40:]):
+        if ignore_negation or not NEGATION.search(clause[-40:]):
             return True
     return False
+
+
+def _unverified_line(record, path, messages):
+    """The UNVERIFIED diagnostic for path, saying whether a negation or absence caused it."""
+    match = re.fullmatch(r"items\[(\d+)\]\.quote", path)
+    source = record["items"][int(match.group(1))] if match else record["objective"]
+    quote = _fold(source.get("quote") or "")
+    if any(_quote_in(quote, _fold(message), ignore_negation=True) for message in messages):
+        return ("%s: UNVERIFIED: these words follow a negation in the same clause of the user's "
+                "message; if the user did say this, quote the whole sentence" % path)
+    return "%s: UNVERIFIED: quote not found in the user's messages" % path
 
 
 def unverified_quotes(record, messages):
@@ -1009,7 +1020,7 @@ def cmd_check(args):
         unverified = unverified_quotes(record, messages)
         if unverified:
             for path in unverified:
-                print(f"{path}: UNVERIFIED: quote not found in the user's messages")
+                print(_unverified_line(record, path, messages))
             return 1
 
     return 1 if (failed or unsourced_found) else 0
@@ -1019,9 +1030,9 @@ def _marker_path(session_id, suffix):
     """Per-session marker file for the no-record nudge, or None without a session."""
     if not (isinstance(session_id, str) and session_id):
         return None
-    state_dir = os.environ.get("RUMBO_STATE_DIR") or os.path.join(
-        tempfile.gettempdir(), "rumbo"
-    )
+    # A directory the user configured may be reached through a link; the shared default may not.
+    configured = os.environ.get("RUMBO_STATE_DIR")
+    state_dir = os.path.realpath(configured) if configured else os.path.join(tempfile.gettempdir(), "rumbo")
     digest = hashlib.sha256(session_id.encode("utf-8", "replace")).hexdigest()[:12]
     safe = re.sub(r"[^A-Za-z0-9_-]", "_", session_id)[:64]
     return os.path.join(state_dir, "%s-%s%s" % (safe, digest, suffix))
@@ -1349,7 +1360,7 @@ def _stop_gate(args, hook_input):
                 continue
             approval = item is not None and item.get("status") in ("commitment", "authorized")
             if (full if approval else core) not in ledger:
-                parts.append("%s: UNVERIFIED: quote not found in the user's messages" % path)
+                parts.append(_unverified_line(record, path, messages))
                 continue
             # Verified in an earlier session. That shows the words were said, not
             # that an approval still stands after this session's messages.

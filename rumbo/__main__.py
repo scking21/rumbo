@@ -15,6 +15,15 @@ def _json(text,source):
         raise RumboError('BAD_INPUT',source+' is not one valid JSON value: '+str(e))
 
 
+class _ProjectAtCallTime:
+    def __init__(self,root,actor,role):
+        self.root=root;self.actor=actor;self.role=role
+    def _engine(self):return Engine(self.root,self.actor,self.role,create=False)
+    def snapshot(self):return self._engine().snapshot()
+    def artifact_view(self,arguments):return self._engine().artifact_view(arguments)
+    def execute(self,action,arguments):return self._engine().execute(action,arguments)
+
+
 def main(argv=None):
     parser=argparse.ArgumentParser(description='Rumbo local contract and evidence referee')
     parser.add_argument('--version',action='version',version='rumbo '+__version__)
@@ -55,10 +64,12 @@ def main(argv=None):
                 raise RumboError('CANCELLED')
             result=Engine(args.root,args.owner,'human').execute(args.action,payload)
         else:
+            if args.command=='mcp':
+                # A host starts this before the owner may have initialized the project: answer the
+                # handshake, and let each tool call find (or refuse) the ledger as it then stands.
+                serve_stdio(_ProjectAtCallTime(args.root,args.actor,args.role));return 0
             # Only the owner's create_contract or demo may start a ledger.
             engine=Engine(args.root,args.actor,'viewer' if args.command=='verify' else args.role,read_only=args.command=='verify',create=False)
-            if args.command=='mcp':
-                serve_stdio(engine);return 0
             if args.command=='call':
                 result=engine.execute(args.action,_json(args.json,'--json'))
             else:
