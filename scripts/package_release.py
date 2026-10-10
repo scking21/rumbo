@@ -350,7 +350,7 @@ def build_source(root,target):
     root=Path(root);files={}
     for name in ['README.md','LICENSE','PRIVACY.md','SECURITY.md','pyproject.toml','requirements-owner.txt','requirements-authkit.txt','.gitignore','.dockerignore']:
         if (root/name).is_file():files[name]=(root/name).read_bytes()
-    for dirname in ['rumbo','claude-plugin','tests','scripts','schemas','openai-plugin','docs','deploy','.github','.claude-plugin','openai-sites']:
+    for dirname in ['rumbo','tests','scripts','schemas','openai-plugin','docs','deploy','.github','.claude-plugin','openai-sites']:
         for path in (root/dirname).rglob('*'):
             relative=path.relative_to(root).as_posix()
             if dirname=='openai-sites' and any(part in {'node_modules','dist','qa-artifacts','test-results','playwright-report'} for part in path.relative_to(root/'openai-sites').parts):
