@@ -3,7 +3,7 @@ import json
 from pathlib import Path
 import sys
 from . import __version__
-from .core import RumboError, fields
+from .core import RumboError, fail, fields
 
 UI_URI = 'ui://rumbo/project-board/v1.html'
 VERSIONS = ('2025-11-25', '2025-06-18', '2024-11-05')
@@ -18,6 +18,24 @@ def prop(kind, description, **extra):
 TASK = prop('string', 'Task ID in the current contract', minLength=1, maxLength=64)
 CONTRACT = prop('integer', 'Exact current contract revision', minimum=1)
 ARTIFACT = prop('integer', 'Exact recorded artifact revision', minimum=1)
+RESPONSE_MODE = prop('string', 'Optional response shape. snapshot (default) returns full state; receipt returns an incomplete operation-time observation. Use its rumbo_state recovery call for full context; never treat a ledger head as cache validity.', enum=['snapshot', 'receipt'])
+RECEIPT_NOTICE = 'Incomplete operation-time observation of one task; excludes goal, constraints, other tasks, evidence and human decisions. Artifact is recorded identity, not fresh verification. Task status may reflect an earlier human decision. Ledger anchor is not cache validity: time and artifact bytes can change status without events. Read recovery for current context and after a lost response before considering a retry; mutations are not idempotent. Evidence is not authorization.'
+
+
+def mutation_receipt(name, args, state):
+    """Project only a successful engine response; never change execution or storage."""
+    task = next(task for task in state['tasks'] if task['id'] == args['task_id'])
+    artifact = task['artifact']
+    return dict(kind='rumbo.mutation_receipt.v1', complete=False,
+                observation='operation_response_only', operation=name,
+                project_id=state['project_id'], contract_revision=state['contract_revision'],
+                task_id=task['id'], task_status=task['status'], human_decision_recorded=False,
+                artifact=({key: artifact[key] for key in ('revision', 'contract_revision', 'sha256')}
+                          if artifact else None),
+                ledger=dict(events_count=state['events_count'], head=state['ledger_head']),
+                recovery=dict(tool='rumbo_state', arguments={}), notice=RECEIPT_NOTICE)
+
+
 TOOL_SPECS = [
     ('rumbo_state','Inspect Project','Read the agreed goal, constraints, task claims, artifact revisions, check receipts and human decisions in your connected project.',{},True),
     ('open_project_board','Project Board','Open your project acceptance board. Shows claimed work, deterministic receipts, reviewer assertions and human acceptance separately.',{},True),
@@ -34,7 +52,10 @@ TOOL_SPECS = [
 def tool_definitions(oauth=False):
     result=[]
     for name,title,description,properties,readonly in TOOL_SPECS:
-        item=dict(name=name,title=title,description=description,inputSchema=dict(type='object',properties=properties,required=list(properties),additionalProperties=False),outputSchema=dict(type='object'),annotations=dict(readOnlyHint=readonly,destructiveHint=False,openWorldHint=False,idempotentHint=readonly))
+        schema_properties=dict(properties)
+        if not readonly:
+            schema_properties['response_mode']=RESPONSE_MODE
+        item=dict(name=name,title=title,description=description,inputSchema=dict(type='object',properties=schema_properties,required=list(properties),additionalProperties=False),outputSchema=dict(type='object'),annotations=dict(readOnlyHint=readonly,destructiveHint=False,openWorldHint=False,idempotentHint=readonly))
         if oauth:
             item['securitySchemes']=[dict(type='oauth2',scopes=['rumbo:read'] if readonly else ['rumbo:read','rumbo:write'])]
         if name=='open_project_board':
@@ -106,12 +127,19 @@ class Protocol:
                 if not spec:
                     return rpc_error(id,-32602,'Unknown tool')
                 try:
-                    fields(args,set(spec[3]))
-                    state=self.engine.artifact_view(args) if name=='rumbo_read_artifact' else (self.engine.snapshot() if spec[4] else self.engine.execute(name.removeprefix('rumbo_'),args))
+                    fields(args,set(spec[3]),set() if spec[4] else {'response_mode'})
+                    mode=args.get('response_mode','snapshot')
+                    if mode not in ('snapshot','receipt'):
+                        fail('BAD_INPUT','response_mode must be snapshot or receipt')
+                    # Do not mutate caller-owned arguments or pass transport options to the engine.
+                    action_args={key:value for key,value in args.items() if key!='response_mode'}
+                    state=self.engine.artifact_view(action_args) if name=='rumbo_read_artifact' else (self.engine.snapshot() if spec[4] else self.engine.execute(name.removeprefix('rumbo_'),action_args))
                     if self.owner_url and name in ('rumbo_state','open_project_board'):
                         state['owner_review_url']=self.owner_url
-                    # Text is deliberately a short orientation; structured data contains the project.
-                    result=dict(content=[dict(type='text',text=state['notice'] if name=='rumbo_read_artifact' else 'Rumbo project '+str(state['project_id'])+', contract revision '+str(state['contract_revision'])+'. '+str(len(state['tasks']))+' tasks. Evidence is not authorization.')],structuredContent=state,isError=False)
+                    if mode=='receipt':
+                        state=mutation_receipt(name,action_args,state)
+                    # Snapshot text remains a short orientation; only opt-in receipts omit full state.
+                    result=dict(content=[dict(type='text',text=state['notice'] if name=='rumbo_read_artifact' or mode=='receipt' else 'Rumbo project '+str(state['project_id'])+', contract revision '+str(state['contract_revision'])+'. '+str(len(state['tasks']))+' tasks. Evidence is not authorization.')],structuredContent=state,isError=False)
                 except RumboError as e:
                     result=dict(content=[dict(type='text',text=str(e))],isError=True)
             elif method=='resources/list':

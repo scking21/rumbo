@@ -158,7 +158,9 @@ const attention = new Set(['blocked','rejected','stale']);
 const embedded = window.parent !== window;
 const pending = new Map();
 let state = null, selected = null, ready = false, canRefresh = false, hostOrigin = null;
-let requestSequence = 0, resizeTimer = null, lastSize = '', hostContext = {}, closed = false;
+let requestSequence = 0, stateSequence = 0, resizeTimer = null, lastSize = '', hostContext = {}, closed = false;
+let initialHostSequence = 0, receivedInitialHostResult = false;
+const currentStateRequest = sequence => !closed && sequence === stateSequence;
 const protocolVersion = '2026-01-26';
 const text = value => value == null ? '—' : typeof value === 'object' ? JSON.stringify(value, null, 2) : String(value);
 const array = value => Array.isArray(value) ? value : [];
@@ -433,7 +435,16 @@ function onMessage(event) {
   }
   if (!ready) return;
   try {
-    if (message.method === 'ui/notifications/tool-result') consume(message.params);
+    if (message.method === 'ui/notifications/tool-result') {
+      // The first delivery belongs to opening this view, even if it arrives late.
+      // An explicit read made since initialization owns the newer state instead.
+      if (!receivedInitialHostResult) {
+        receivedInitialHostResult = true;
+        if (stateSequence !== initialHostSequence) return;
+      }
+      // Later host results supersede any earlier in-flight state read.
+      ++stateSequence; consume(message.params);
+    }
     else if (message.method === 'ui/notifications/host-context-changed') applyContext(message.params || {});
     else if (message.method === 'ui/notifications/tool-cancelled') error('The tool call was cancelled.');
     else if (message.method === 'ping' && Object.hasOwn(message,'id')) post({jsonrpc:'2.0',id:message.id,result:{}});
@@ -451,6 +462,7 @@ async function initialize() {
     if (result?.protocolVersion !== protocolVersion) throw new Error('The host does not support MCP Apps protocol ' + protocolVersion);
     canRefresh = !!result.hostCapabilities?.serverTools;
     applyContext(result.hostContext || {});ready = true;
+    initialHostSequence = stateSequence;
     notify('ui/notifications/initialized');sizeChanged();
     $('refresh').disabled = !canRefresh;
     $('refresh').title = canRefresh ? 'Read the latest project state' : 'This host does not provide tool refresh';
@@ -459,21 +471,24 @@ async function initialize() {
   } catch (err) {error(err.message);}
 }
 async function refresh() {
+  const sequence = ++stateSequence;
   $('refresh').disabled = true;$('refresh').textContent = 'Refreshing…';
   try {
     if (embedded) {
       if (!ready) {await initialize();return;}
       if (!canRefresh) throw new Error('The host does not support tool refresh');
-      consume(await request('tools/call',{name:'rumbo_state',arguments:{}}));
+      const result = await request('tools/call',{name:'rumbo_state',arguments:{}});
+      if (currentStateRequest(sequence)) consume(result);
     } else {
       const controller = new AbortController(), timer = setTimeout(() => controller.abort(),10000);
       try {
         const response = await fetch('/api/state',{cache:'no-store',credentials:'omit',signal:controller.signal});
         if (!response.ok) throw new Error('Cannot read local project state (HTTP ' + response.status + ')');
-        render(await response.json());
+        const snapshot = await response.json();
+        if (currentStateRequest(sequence)) render(snapshot);
       } finally {clearTimeout(timer);}
     }
-  } catch (err) {error(err.name === 'AbortError' ? 'The local request timed out.' : err.message);}
+  } catch (err) {if (currentStateRequest(sequence)) error(err.name === 'AbortError' ? 'The local request timed out.' : err.message);}
 }
 $('status-filter').addEventListener('change',() => { if (state) {renderList();updateFilterNotice();} });
 $('refresh').addEventListener('click',refresh);

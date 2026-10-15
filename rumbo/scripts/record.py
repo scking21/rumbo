@@ -10,6 +10,7 @@ import decimal
 import datetime
 import hashlib
 import json
+import math
 import os
 import re
 import stat
@@ -122,7 +123,8 @@ def load_record(path):
 
 
 def _is_number(value):
-    return isinstance(value, (int, float)) and not isinstance(value, bool)
+    return (isinstance(value, int) and not isinstance(value, bool)
+            or isinstance(value, float) and math.isfinite(value))
 
 
 def _is_int(value):
@@ -130,6 +132,9 @@ def _is_int(value):
 
 
 def fmt_num(value):
+    if isinstance(value, decimal.Decimal):
+        text = format(value, 'f')
+        return text.rstrip('0').rstrip('.') if '.' in text else text
     if isinstance(value, int) and not isinstance(value, bool):
         return str(value)
     return "%g" % value
@@ -340,7 +345,7 @@ def parse_time(text):
     parts = text.split(":")
     if len(parts) != 2 or len(parts[0]) != 2 or len(parts[1]) != 2:
         return None
-    if not (parts[0].isdigit() and parts[1].isdigit()):
+    if not (parts[0].isdecimal() and parts[1].isdecimal()):
         return None
     hours = int(parts[0])
     minutes = int(parts[1])
@@ -908,26 +913,35 @@ def evaluate_check(check):
         detail = "%s is %d %s after %s" % (check["first"], days, unit, check["second"])
         return False, detail
 
-    amounts = check["amounts"]
-    total = sum(amounts)
-    cap = check["total_cap"]
-    problems = []
-    if total > cap:
-        problems.append(
-            "total %s exceeds total_cap %s by %s"
-            % (fmt_num(total), fmt_num(cap), fmt_num(total - cap))
-        )
+    amounts = [decimal.Decimal(str(value)) for value in check["amounts"]]
+    cap = decimal.Decimal(str(check["total_cap"]))
     item_cap = check.get("item_cap")
     if item_cap is not None:
-        for amount in amounts:
-            if amount > item_cap:
-                problems.append(
-                    "amount %s exceeds item_cap %s"
-                    % (fmt_num(amount), fmt_num(item_cap))
-                )
-    if not problems:
-        return True, None
-    return False, "; ".join(problems)
+        item_cap = decimal.Decimal(str(item_cap))
+    values = amounts + [cap] + ([] if item_cap is None else [item_cap])
+    # Keep every decimal place, including carry digits, without float overflow.
+    precision = (max(value.adjusted() for value in values)
+                 - min(value.as_tuple().exponent for value in values)
+                 + len(str(len(amounts) + 1)) + 2)
+    with decimal.localcontext() as context:
+        context.prec = max(1, precision)
+        total = sum(amounts, decimal.Decimal(0))
+        problems = []
+        if total > cap:
+            problems.append(
+                "total %s exceeds total_cap %s by %s"
+                % (fmt_num(total), fmt_num(cap), fmt_num(total - cap))
+            )
+        if item_cap is not None:
+            for amount in amounts:
+                if amount > item_cap:
+                    problems.append(
+                        "amount %s exceeds item_cap %s"
+                        % (fmt_num(amount), fmt_num(item_cap))
+                    )
+        if not problems:
+            return True, None
+        return False, "; ".join(problems)
 
 
 def status_line(check):

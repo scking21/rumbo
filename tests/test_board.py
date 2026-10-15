@@ -94,6 +94,18 @@ nodes['status-filter'].value='all';
 function findId(node,id){return node.id===id?node:node.children.map(c=>findId(c,id)).find(Boolean);}
 const document={documentElement:new Element('html'),body:new Element('body'),createElement:tag=>new Element(tag),createDocumentFragment:()=>new Element('fragment'),getElementById:id=>nodes[id]||Object.values(nodes).map(n=>findId(n,id)).find(Boolean)};
 const messages=[],fetches=[];let listener;const window={addEventListener:(name,fn)=>{if(name==='message')listener=fn},removeEventListener:()=>{}};
+// Own the clock: the resize debounce must not race this harness's capture turn.
+// These are synthetic protocol tests, not native browser timer verification.
+let clock=0,nextTimer=1;const timers=new Map();
+function advanceTime(milliseconds){
+  const target=clock+milliseconds;
+  while(true){
+    const due=[...timers].filter(([,timer])=>timer.at<=target).sort((a,b)=>a[1].at-b[1].at||a[0]-b[0])[0];
+    if(!due)break;
+    const [id,timer]=due;clock=timer.at;timers.delete(id);timer.callback();
+  }
+  clock=target;
+}
 const parent={postMessage:message=>{
   messages.push(message);
   if(message.method==='ui/initialize')queueMicrotask(()=>listener({source:parent,origin:'https://host.test',data:{jsonrpc:'2.0',id:message.id,result:{protocolVersion:input.unsupported?'1900-01-01':'2026-01-26',hostCapabilities:{serverTools:{}},hostContext:{theme:'light'}}}}));
@@ -102,7 +114,8 @@ const parent={postMessage:message=>{
 }};
 window.parent=input.embedded?parent:window;
 const context={document,window,console,Set,Map,Date,Error,String,Number,Array,Object,Promise,JSON,AbortController,
-  setTimeout:(fn,ms)=>{const id=setTimeout(fn,ms);id.unref();return id},clearTimeout,
+  setTimeout:(callback,ms)=>{const id=nextTimer++;timers.set(id,{callback,at:clock+ms});return id},
+  clearTimeout:id=>timers.delete(id),
   navigator:{clipboard:{writeText:async v=>{context.copied=v}}},
   ResizeObserver:class{observe(){}disconnect(){}},fetch:async url=>{fetches.push(url);return {ok:true,json:async()=>input.state}}};
 vm.runInNewContext(input.script,context);
@@ -112,6 +125,7 @@ setImmediate(async()=>{
   if(input.action==='spoof')listener({source:window,origin:'https://host.test',data:{jsonrpc:'2.0',method:'ui/notifications/tool-result',params:{structuredContent:{version:1,goal:'FORGED',tasks:[]}}}});
   if(input.action==='copy') {const seek=n=>n.tagName==='button'&&n.textContent==='Copy handoff'?n:n.children.map(seek).find(Boolean);await seek(nodes['task-detail']).handlers.click();}
   if(input.action==='refresh_error'){context.fetch=async()=>({ok:false,status:503});await nodes.refresh.handlers.click();}
+  if(input.advance_ms!==undefined)advanceTime(input.advance_ms);
   const stages=[];
   for(const step of input.steps || []) {
     if(step.filter) {nodes['status-filter'].value=step.filter;nodes['status-filter'].handlers.change();}
@@ -169,6 +183,17 @@ class BoardRuntimeTests(unittest.TestCase):
         result = self.run_ui(embedded=True,action='refresh')
         call = [m for m in result['messages'] if m['method']=='tools/call'][0]
         self.assertEqual(call['params'], {'name':'rumbo_state','arguments':{}})
+
+    def test_runtime_bridge_resize_notification_uses_controlled_debounce(self):
+        before = self.run_ui(embedded=True, advance_ms=69)
+        self.assertEqual([m['method'] for m in before['messages']],
+                         ['ui/initialize', 'ui/notifications/initialized'])
+        after = self.run_ui(embedded=True, advance_ms=70)
+        self.assertEqual([m['method'] for m in after['messages']],
+                         ['ui/initialize', 'ui/notifications/initialized',
+                          'ui/notifications/size-changed'])
+        self.assertEqual(after['messages'][-1]['params'], {'width': 1000, 'height': 900})
+        self.assertEqual(after['texts']['goal'], STATE['goal'])
 
     def test_runtime_rejects_spoofed_message_and_unsupported_protocol(self):
         result = self.run_ui(embedded=True,action='spoof')
