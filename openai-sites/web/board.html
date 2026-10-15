@@ -158,7 +158,9 @@ const attention = new Set(['blocked','rejected','stale']);
 const embedded = window.parent !== window;
 const pending = new Map();
 let state = null, selected = null, ready = false, canRefresh = false, hostOrigin = null;
-let requestSequence = 0, resizeTimer = null, lastSize = '', hostContext = {}, closed = false;
+let requestSequence = 0, stateSequence = 0, resizeTimer = null, lastSize = '', hostContext = {}, closed = false;
+let initialHostSequence = 0, receivedInitialHostResult = false;
+const currentStateRequest = sequence => !closed && sequence === stateSequence;
 const protocolVersion = '2026-01-26';
 const text = value => value == null ? '—' : typeof value === 'object' ? JSON.stringify(value, null, 2) : String(value);
 const array = value => Array.isArray(value) ? value : [];
@@ -366,17 +368,24 @@ function render(snapshot) {
   if (snapshot?.project_selection_required && Array.isArray(snapshot.projects)) {
     state = null; selected = null; $('goal').textContent = 'Choose your project';
     $('task-list').replaceChildren(); $('task-detail').replaceChildren(); $('error').hidden = true;
+    $('list-empty').hidden = true;
     $('accepted-count').textContent = '0'; $('review-count').textContent = '0'; $('attention-count').textContent = '0';
     $('contract-revision').textContent = '—'; $('decision-owner').textContent = '—';
     $('contract-context').hidden = true; $('integrity').hidden = true; $('demo').hidden = true;
     for (const project of snapshot.projects) {
       const button = element('button', project.alias + ' · ' + project.role, 'task-button'); button.type = 'button';
-      button.addEventListener('click', async () => { try { consume(await request('tools/call', {name:'rumbo_state',arguments:{project_key:project.project_key}})); } catch (e) { error(e.message); } });
+      button.addEventListener('click', async () => {
+        const sequence = ++stateSequence;
+        try {
+          const result = await request('tools/call', {name:'rumbo_state',arguments:{project_key:project.project_key}});
+          if (currentStateRequest(sequence)) consume(result);
+        } catch (e) { if (currentStateRequest(sequence)) error(e.message); }
+      });
       $('task-list').append(button);
     }
     $('task-detail').append(element('p', snapshot.projects.length ? 'Select an authorized project to inspect its exact evidence.' : 'No authorized projects yet. Create a contract in the signed-in owner browser.', 'empty large'));
     $('connection').textContent = 'Authorized project selector'; $('ledger').textContent = 'Read-only project selection';
-    $('refresh').disabled = true; return;
+    $('refresh').disabled = true; $('refresh').textContent = 'Refresh'; return;
   }
 
   if (!snapshot || snapshot.version !== 1 || !Array.isArray(snapshot.tasks) || typeof snapshot.goal !== 'string' || snapshot.tasks.some(t => !t || typeof t.id !== 'string')) throw new Error('Unsupported or malformed project snapshot');
@@ -449,7 +458,16 @@ function onMessage(event) {
   }
   if (!ready) return;
   try {
-    if (message.method === 'ui/notifications/tool-result') consume(message.params);
+    if (message.method === 'ui/notifications/tool-result') {
+      // The first delivery belongs to opening this view, even if it arrives late.
+      // An explicit read made since initialization owns the newer state instead.
+      if (!receivedInitialHostResult) {
+        receivedInitialHostResult = true;
+        if (stateSequence !== initialHostSequence) return;
+      }
+      // Later host results supersede any earlier in-flight state read.
+      ++stateSequence; consume(message.params);
+    }
     else if (message.method === 'ui/notifications/host-context-changed') applyContext(message.params || {});
     else if (message.method === 'ui/notifications/tool-cancelled') error('The tool call was cancelled.');
     else if (message.method === 'ping' && Object.hasOwn(message,'id')) post({jsonrpc:'2.0',id:message.id,result:{}});
@@ -467,6 +485,7 @@ async function initialize() {
     if (result?.protocolVersion !== protocolVersion) throw new Error('The host does not support MCP Apps protocol ' + protocolVersion);
     canRefresh = !!result.hostCapabilities?.serverTools;
     applyContext(result.hostContext || {});ready = true;
+    initialHostSequence = stateSequence;
     notify('ui/notifications/initialized');sizeChanged();
     $('refresh').disabled = !canRefresh;
     $('refresh').title = canRefresh ? 'Read the latest project state' : 'This host does not provide tool refresh';
@@ -475,21 +494,29 @@ async function initialize() {
   } catch (err) {error(err.message);}
 }
 async function refresh() {
+  const sequence = ++stateSequence;
   $('refresh').disabled = true;$('refresh').textContent = 'Refreshing…';
   try {
     if (embedded) {
       if (!ready) {await initialize();return;}
       if (!canRefresh) throw new Error('The host does not support tool refresh');
-      consume(await request('tools/call',{name:'rumbo_state',arguments:{project_key:state?.hosted_project_key}}));
+      // Before the initial result (or after its failure), discover authorized
+      // context without inventing a project key. The board tool is read-only.
+      const projectKey = state?.hosted_project_key;
+      const result = await request('tools/call',projectKey
+        ? {name:'rumbo_state',arguments:{project_key:projectKey}}
+        : {name:'open_project_board',arguments:{}});
+      if (currentStateRequest(sequence)) consume(result);
     } else {
       const controller = new AbortController(), timer = setTimeout(() => controller.abort(),10000);
       try {
         const response = await fetch('/api/state'+window.location.search,{cache:'no-store',credentials:'omit',signal:controller.signal});
         if (!response.ok) throw new Error('Cannot read local project state (HTTP ' + response.status + ')');
-        render(await response.json());
+        const snapshot = await response.json();
+        if (currentStateRequest(sequence)) render(snapshot);
       } finally {clearTimeout(timer);}
     }
-  } catch (err) {error(err.name === 'AbortError' ? 'The local request timed out.' : err.message);}
+  } catch (err) {if (currentStateRequest(sequence)) error(err.name === 'AbortError' ? 'The local request timed out.' : err.message);}
 }
 $('status-filter').addEventListener('change',() => { if (state) {renderList();updateFilterNotice();} });
 $('refresh').addEventListener('click',refresh);

@@ -9,7 +9,7 @@ import unittest
 import zipfile
 
 from rumbo import __version__
-from scripts.package_release import build_local, build_source
+from scripts.package_release import GATES, build_local, build_source, build_submission, build_review_draft
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -18,14 +18,45 @@ class ReleaseIdentityTests(unittest.TestCase):
     def test_changed_distributions_have_new_consistent_identities(self):
         project = (ROOT/'pyproject.toml').read_text()
         self.assertEqual(re.search(r'^version = "([^"]+)"$', project, re.M).group(1), __version__)
-        self.assertEqual(__version__, '0.3.2')
+        self.assertEqual(__version__, '0.3.3')
         portable = json.loads((ROOT/'openai-plugin/rumbo/plugin.json').read_text())
         codex = json.loads((ROOT/'openai-plugin/rumbo/.codex-plugin/plugin.json').read_text())
         claude = json.loads((ROOT/'rumbo/.claude-plugin/plugin.json').read_text())
-        self.assertEqual(portable['version'], '0.3.3')
+        self.assertEqual(portable['version'], '0.3.4')
         self.assertEqual(codex['version'], portable['version'])
-        self.assertEqual(claude['version'], '0.3.4')
-        self.assertTrue(portable['extensions']['com.openai']['publication']['release_notes'].startswith('0.3.3 '))
+        self.assertEqual(claude['version'], '0.3.5')
+        self.assertTrue(portable['extensions']['com.openai']['publication']['release_notes'].startswith('0.3.4 '))
+
+    def test_release_notes_disclose_optional_receipts_and_catalog_change(self):
+        portable = json.loads((ROOT/'openai-plugin/rumbo/plugin.json').read_text())
+        notes = portable['extensions']['com.openai']['publication']['release_notes']
+        self.assertIn('receipt', notes)
+        self.assertIn('response_mode', notes)
+        self.assertIn('full snapshots by default', notes)
+        self.assertIn('tools/list', notes)
+
+    def test_packaged_release_notes_disclose_optional_receipts_and_catalog_change(self):
+        # Structural package fixtures only; no endpoint call or real attestation.
+        config = {key: 'https://rumbo.company.dev/'+key for key in
+                  ['website_url', 'support_url', 'privacy_url', 'terms_url', 'video_url']}
+        config.update(mcp_url='https://rumbo.company.dev/mcp',
+                      attestations={gate: True for gate in GATES})
+        with tempfile.TemporaryDirectory() as temp:
+            for kind, build, args in [('local', build_local, []),
+                                     ('public', build_submission, [config]),
+                                     ('sites-draft', build_review_draft,
+                                      [{'mcp_url': config['mcp_url']}])]:
+                with self.subTest(kind=kind):
+                    target = Path(temp)/(kind+'.zip')
+                    build(ROOT, target, *args)
+                    with zipfile.ZipFile(target) as archive:
+                        manifest = json.loads(archive.read('rumbo/plugin.json'))
+                    notes = manifest['extensions']['com.openai']['publication']['release_notes']
+                    self.assertIn('response_mode=receipt', notes)
+                    self.assertIn('full snapshots by default', notes)
+                    self.assertIn('tools/list schemas are larger even without opt-in', notes)
+                    self.assertIn('incomplete operation-time observations', notes)
+                    self.assertIn('full-state recovery', notes)
 
     def test_source_archive_version_and_claude_hook_execution(self):
         with tempfile.TemporaryDirectory(prefix='rumbo release ') as temp:

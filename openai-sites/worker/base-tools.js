@@ -1,4 +1,4 @@
-// Derived from the unchanged Python tool catalog; hosted envelopes are added in protocol.js.
+// Derived from the Python tool catalog; hosted envelopes are added in protocol.js.
 export const baseTools=[
   {
     "name": "rumbo_state",
@@ -78,6 +78,14 @@ export const baseTools=[
           "description": "Lease duration in seconds",
           "minimum": 30,
           "maximum": 3600
+        },
+        "response_mode": {
+          "type": "string",
+          "description": "Optional response shape. snapshot (default) returns full state; receipt returns an incomplete operation-time observation. Use its rumbo_state recovery call for full context; never treat a ledger head as cache validity.",
+          "enum": [
+            "snapshot",
+            "receipt"
+          ]
         }
       },
       "required": [
@@ -124,6 +132,14 @@ export const baseTools=[
           "type": "string",
           "description": "Authorized artifact text, at most 128 KiB UTF-8 bytes",
           "maxLength": 131072
+        },
+        "response_mode": {
+          "type": "string",
+          "description": "Optional response shape. snapshot (default) returns full state; receipt returns an incomplete operation-time observation. Use its rumbo_state recovery call for full context; never treat a ledger head as cache validity.",
+          "enum": [
+            "snapshot",
+            "receipt"
+          ]
         }
       },
       "required": [
@@ -207,6 +223,14 @@ export const baseTools=[
           "type": "integer",
           "description": "Exact recorded artifact revision",
           "minimum": 1
+        },
+        "response_mode": {
+          "type": "string",
+          "description": "Optional response shape. snapshot (default) returns full state; receipt returns an incomplete operation-time observation. Use its rumbo_state recovery call for full context; never treat a ledger head as cache validity.",
+          "enum": [
+            "snapshot",
+            "receipt"
+          ]
         }
       },
       "required": [
@@ -267,6 +291,14 @@ export const baseTools=[
           "type": "string",
           "description": "What was inspected and limitations",
           "maxLength": 4000
+        },
+        "response_mode": {
+          "type": "string",
+          "description": "Optional response shape. snapshot (default) returns full state; receipt returns an incomplete operation-time observation. Use its rumbo_state recovery call for full context; never treat a ledger head as cache validity.",
+          "enum": [
+            "snapshot",
+            "receipt"
+          ]
         }
       },
       "required": [
@@ -306,6 +338,14 @@ export const baseTools=[
           "type": "string",
           "description": "Narrow decision question",
           "maxLength": 4000
+        },
+        "response_mode": {
+          "type": "string",
+          "description": "Optional response shape. snapshot (default) returns full state; receipt returns an incomplete operation-time observation. Use its rumbo_state recovery call for full context; never treat a ledger head as cache validity.",
+          "enum": [
+            "snapshot",
+            "receipt"
+          ]
         }
       },
       "required": [

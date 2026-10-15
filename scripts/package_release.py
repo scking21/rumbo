@@ -14,6 +14,9 @@ import zipfile
 STAMP=(2026,10,1,0,0,0)
 PUBLIC_FIELDS={'mcp_url','website_url','support_url','privacy_url','terms_url','video_url','attestations'}
 GATES={'https_endpoint_verified','oauth_verified','domain_verified','publisher_verified','reviewer_account_verified','host_qa_verified','legal_pages_reviewed','video_access_verified'}
+MUTATION_RECEIPT_NOTES = ('Mutations add optional response_mode=receipt and keep full snapshots by default; '
+                          'tools/list schemas are larger even without opt-in. Receipts are incomplete '
+                          'operation-time observations and include a full-state recovery call.')
 
 
 def validate_public_config(config):
@@ -140,7 +143,7 @@ def build_submission(root,target,config):
     ext=manifest['extensions']['com.openai']
     ext['interface'].update(websiteURL=config['website_url'],supportURL=config['support_url'],privacyPolicyURL=config['privacy_url'],termsOfServiceURL=config['terms_url'])
     ext['review']['demo_recording_url']=config['video_url']
-    ext['publication']['release_notes']=manifest['version']+': versioned contracts, expiring task claims, artifact-bound checks and reviewer assertions, human-owned acceptance and an interactive read-only project board.'
+    ext['publication']['release_notes']=manifest['version']+': versioned contracts, expiring task claims, artifact-bound checks and reviewer assertions, human-owned acceptance and an interactive read-only project board. '+MUTATION_RECEIPT_NOTES
     files['plugin.json']=pretty(manifest)
     files['mcp.json']=pretty({'$schema':'https://agent-plugins.org/schemas/1.0.0/mcp.schema.json','mcpServers':{'rumbo':{'type':'streamable-http','url':config['mcp_url']}}})
     files['README.md']=b'# Rumbo\n\nRemote project coordination and acceptance evidence. This archive has not been uploaded or submitted by its packaging script.\n'
@@ -244,7 +247,7 @@ def build_review_draft(root,target,config):
     ext['review']={'test_cases':cases}
     if 'video_url' in config:ext['review']['demo_recording_url']=config['video_url']
     else:pending.append('review.demo_recording_url')
-    ext['publication']={'release_notes':manifest['version']+' Sites review draft: uploaded-artifact workflow with project keys and server-issued worker sessions. Managed authentication, reviewer access and directory review remain unverified.'}
+    ext['publication']={'release_notes':manifest['version']+' Sites review draft: uploaded-artifact workflow with project keys and server-issued worker sessions. Managed authentication, reviewer access and directory review remain unverified. '+MUTATION_RECEIPT_NOTES}
     files['plugin.json']=pretty(manifest)
     files['mcp.json']=pretty({'$schema':'https://agent-plugins.org/schemas/1.0.0/mcp.schema.json','mcpServers':{'rumbo':{'type':'streamable-http','url':config['mcp_url']}}})
     files['README.md']=b'# Rumbo Sites review draft\n\nThis archive is for preparation and review. It is not submission-ready. Packaging performs no upload, portal verification, authentication, submission or publication. See the separate readiness report. No local filesystem access is provided.\n'
@@ -299,6 +302,7 @@ SITES_SOURCE_FILES={
     'tests/board-dom.test.mjs',
     'tests/board-clipboard.test.mjs',
     'tests/board-focus.test.mjs',
+    'tests/board-state-order.test.mjs',
     'tests/codec.test.mjs',
     'tests/decision-clock.test.mjs',
     'tests/deletion.test.mjs',
@@ -306,6 +310,7 @@ SITES_SOURCE_FILES={
     'tests/export.test.mjs',
     'tests/http.test.mjs',
     'tests/json-check-cache.test.mjs',
+    'tests/mutation-receipts.test.mjs',
     'tests/oracle.py',
     'tests/oracle_core.py',
     'tests/owner-dom.test.mjs',
@@ -365,7 +370,7 @@ def build_source(root,target):
                 if dirname=='deploy' and path.relative_to(root/'deploy').as_posix() not in {'Dockerfile','compose.yml','nginx.conf.template','render.py','entrypoint.py','healthcheck.py','server-config.template.json','ci_smoke.py','render.yaml.template'}:
                     raise ValueError('Unexpected deployment input; never package live configuration or credentials: '+relative)
                 files[relative]=path.read_bytes()
-    return write_zip(target,files,prefix='rumbo-0.3.2-source')
+    return write_zip(target,files,prefix='rumbo-0.3.3-source')
 
 
 def main():

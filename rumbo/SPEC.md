@@ -43,7 +43,7 @@ Field rules:
 - `checks`: list, may be empty. Each requires unique `id` (unique across checks) and `kind`; `label` optional string; `refs` optional list of item ids. When supplied, `refs` limits the item quotes that may source this check; an empty list uses only the objective quote.
   - `fits_window`: `start` and `end` as `HH:MM` 24-hour; `segments_min` a nonempty list of positive integers. Passes when start + sum(segments) <= end.
   - `before`: `first` and `second`, both `MM-DD` or both `YYYY-MM-DD`. Use `MM-DD` unless the user stated a year. Passes when first <= second.
-  - `within_budget`: `amounts` a list of non-negative numbers; `total_cap` a number; `item_cap` optional number. Passes when sum(amounts) <= total_cap and, if `item_cap` is present, every amount <= item_cap.
+  - `within_budget`: `amounts` a list of non-negative finite numbers; `total_cap` a finite number; `item_cap` an optional non-negative finite number. Passes when sum(amounts) <= total_cap and, if `item_cap` is present, every amount <= item_cap. Arithmetic uses exact decimal values converted from the parsed numbers, matching the provenance comparison convention. It does not round away genuine excesses or change JSON number parsing.
 
 ### Sourced values
 
@@ -75,7 +75,7 @@ Per-session markers (`.nudged`, `.enforced`, `.prompts`, `.blocks`, `.failed`, `
 
 ## Packaging
 
-- `.claude-plugin/plugin.json`: name `rumbo`, version `0.3.4`, MIT; `.claude-plugin/icon.svg` is the listing icon.
+- `.claude-plugin/plugin.json`: name `rumbo`, version `0.3.5`, MIT; `.claude-plugin/icon.svg` is the listing icon.
 - `hooks/hooks.json`: `UserPromptSubmit` runs `"${CLAUDE_PLUGIN_ROOT}"/scripts/show.sh` and `Stop` runs `"${CLAUDE_PLUGIN_ROOT}"/scripts/stop-gate.sh`. Each is a two-line shell script that runs `record.py` against `${CLAUDE_PROJECT_DIR}/.rumbo/record.json`; the hook command itself names only a literal path inside the plugin, as the directory validator requires.
 - `skills/commitments/SKILL.md`: when and how the agent maintains the record.
 - The repository root's `.claude-plugin/marketplace.json` lists `rumbo` with source `./rumbo`.
