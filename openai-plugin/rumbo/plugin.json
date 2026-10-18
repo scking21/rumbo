@@ -1,7 +1,7 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "rumbo",
-  "version": "0.3.4",
+  "version": "0.3.5",
   "description": "Keep agreed work connected to its artifacts, evidence and human decisions.",
   "author": {
     "name": "Corby King"
@@ -36,7 +36,7 @@
         ]
       },
       "publication": {
-        "release_notes": "0.3.4 local review candidate: bundles shared engine 0.3.3 and preserves the prior diagnostics, storage and registry improvements. The board ignores superseded project-selection, refresh and delayed initial host results. Mutations add optional response_mode=receipt and keep full snapshots by default; tools/list schemas are larger even without opt-in. Receipts are incomplete operation-time observations and include a full-state recovery call. Owner-provisioned aliases and worker-only authority are unchanged. Actual host installation and reviewer connection remain separate verification gates."
+        "release_notes": "0.3.5 local review candidate: bundles shared engine 0.3.4 and preserves the prior diagnostics, storage and registry improvements. The board ignores superseded project-selection, refresh and delayed initial host results. Mutations add optional response_mode=receipt and keep full snapshots by default; tools/list schemas are larger even without opt-in. Receipts are incomplete operation-time observations and include a full-state recovery call. Owner-provisioned aliases and worker-only authority are unchanged. Actual host installation and reviewer connection remain separate verification gates. Rebuilt task-detail controls retain useful keyboard focus without stale clipboard feedback. Prepared distribution identity only; no release or installed update is claimed."
       }
     }
   }
