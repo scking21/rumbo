@@ -365,6 +365,11 @@ function renderDetail() {
   frag.append(message,handoffText);root.replaceChildren(frag);updateFilterNotice();
 }
 function render(snapshot) {
+  const detail = $('task-detail'), active = document.activeElement;
+  const restoreDetailFocus = active && active !== detail && detail.contains(active);
+  const restoreListFocus = active && $('task-list').contains(active);
+  const restoreProjectFocus = !state && restoreListFocus;
+  const focusedProjectKey = restoreProjectFocus ? active.dataset?.projectKey : undefined;
   if (snapshot?.project_selection_required && Array.isArray(snapshot.projects)) {
     state = null; selected = null; $('goal').textContent = 'Choose your project';
     $('task-list').replaceChildren(); $('task-detail').replaceChildren(); $('error').hidden = true;
@@ -372,8 +377,11 @@ function render(snapshot) {
     $('accepted-count').textContent = '0'; $('review-count').textContent = '0'; $('attention-count').textContent = '0';
     $('contract-revision').textContent = '—'; $('decision-owner').textContent = '—';
     $('contract-context').hidden = true; $('integrity').hidden = true; $('demo').hidden = true;
+    let projectFocusTarget = null;
     for (const project of snapshot.projects) {
       const button = element('button', project.alias + ' · ' + project.role, 'task-button'); button.type = 'button';
+      button.dataset.projectKey = project.project_key;
+      if (project.project_key === focusedProjectKey) projectFocusTarget = button;
       button.addEventListener('click', async () => {
         const sequence = ++stateSequence;
         try {
@@ -385,10 +393,13 @@ function render(snapshot) {
     }
     $('task-detail').append(element('p', snapshot.projects.length ? 'Select an authorized project to inspect its exact evidence.' : 'No authorized projects yet. Create a contract in the signed-in owner browser.', 'empty large'));
     $('connection').textContent = 'Authorized project selector'; $('ledger').textContent = 'Read-only project selection';
+    if (restoreDetailFocus || restoreListFocus) (projectFocusTarget || $('task-list').querySelector('button') || detail).focus({preventScroll:true});
     $('refresh').disabled = true; $('refresh').textContent = 'Refresh'; return;
   }
 
   if (!snapshot || snapshot.version !== 1 || !Array.isArray(snapshot.tasks) || typeof snapshot.goal !== 'string' || snapshot.tasks.some(t => !t || typeof t.id !== 'string')) throw new Error('Unsupported or malformed project snapshot');
+  const sameTask = state && state.project_id === snapshot.project_id &&
+    state.hosted_project_key === snapshot.hosted_project_key && snapshot.tasks.some(task => task.id === selected);
   state = snapshot;
   if (!state.tasks.some(task => task.id === selected)) selected = state.tasks[0]?.id || null;
   $('goal').textContent = state.goal || 'Untitled goal';
@@ -410,6 +421,10 @@ function render(snapshot) {
   $('ledger').title = 'Ledger head: ' + text(state.ledger_head) + '. A stored hash chain does not prove real-world correctness.';
   $('connection').textContent = (embedded ? 'MCP host snapshot' : 'Hosted snapshot') + (state.demo ? ' · demonstration data' : '') + ' · refreshed ' + new Date().toLocaleTimeString();
   renderList();renderDetail();
+  // Rebuilt handoff controls must not strand focus or preserve stale summary bytes.
+  if (restoreDetailFocus) (sameTask ? detail.querySelector('button') : $('status-filter')).focus({preventScroll:true});
+  // Capture focus at response time, so a pending choice cannot steal outside focus.
+  else if (restoreProjectFocus) ($('task-list').querySelector('[aria-pressed="true"]') || detail).focus({preventScroll:true});
   $('refresh').disabled = embedded && !canRefresh;
   $('refresh').textContent = 'Refresh';
 }
@@ -481,7 +496,7 @@ function onMessage(event) {
 async function initialize() {
   $('refresh').disabled = true;
   try {
-    const result = await request('ui/initialize',{appInfo:{name:'Rumbo acceptance board',version:'0.1.0'},appCapabilities:{availableDisplayModes:['inline']},protocolVersion});
+    const result = await request('ui/initialize',{appInfo:{name:'Rumbo acceptance board',version:'0.1.1'},appCapabilities:{availableDisplayModes:['inline']},protocolVersion});
     if (result?.protocolVersion !== protocolVersion) throw new Error('The host does not support MCP Apps protocol ' + protocolVersion);
     canRefresh = !!result.hostCapabilities?.serverTools;
     applyContext(result.hostContext || {});ready = true;

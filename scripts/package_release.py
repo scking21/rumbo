@@ -335,6 +335,7 @@ SITES_SOURCE_FILES={
     'tests/semantic-stress-oracle.py',
     'tests/semantic-stress-support.mjs',
     'tests/semantic-stress.test.mjs',
+    'tests/release-identity.test.mjs',
     'tests/state-size-oracle.py',
     'web/board.html',
     'web/owner.css',
@@ -370,7 +371,7 @@ def build_source(root,target):
                 if dirname=='deploy' and path.relative_to(root/'deploy').as_posix() not in {'Dockerfile','compose.yml','nginx.conf.template','render.py','entrypoint.py','healthcheck.py','server-config.template.json','ci_smoke.py','render.yaml.template'}:
                     raise ValueError('Unexpected deployment input; never package live configuration or credentials: '+relative)
                 files[relative]=path.read_bytes()
-    return write_zip(target,files,prefix='rumbo-0.3.3-source')
+    return write_zip(target,files,prefix='rumbo-0.3.4-source')
 
 
 def main():

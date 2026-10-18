@@ -366,6 +366,10 @@ function renderDetail() {
 }
 function render(snapshot) {
   if (!snapshot || snapshot.version !== 1 || !Array.isArray(snapshot.tasks) || typeof snapshot.goal !== 'string' || snapshot.tasks.some(t => !t || typeof t.id !== 'string')) throw new Error('Unsupported or malformed project snapshot');
+  const detail = $('task-detail'), active = document.activeElement;
+  const restoreDetailFocus = active && active !== detail && detail.contains(active);
+  const sameTask = state && state.project_id === snapshot.project_id &&
+    state.hosted_project_key === snapshot.hosted_project_key && snapshot.tasks.some(task => task.id === selected);
   state = snapshot;
   if (!state.tasks.some(task => task.id === selected)) selected = state.tasks[0]?.id || null;
   $('goal').textContent = state.goal || 'Untitled goal';
@@ -387,6 +391,8 @@ function render(snapshot) {
   $('ledger').title = 'Ledger head: ' + text(state.ledger_head) + '. A local hash chain does not prove real-world correctness.';
   $('connection').textContent = (embedded ? 'MCP host snapshot' : 'Local snapshot') + (state.demo ? ' · demonstration data' : '') + ' · refreshed ' + new Date().toLocaleTimeString();
   renderList();renderDetail();
+  // Rebuilt handoff controls must not strand focus or preserve stale summary bytes.
+  if (restoreDetailFocus) (sameTask ? detail.querySelector('button') : $('status-filter')).focus({preventScroll:true});
   $('refresh').disabled = embedded && !canRefresh;
   $('refresh').textContent = 'Refresh';
 }
@@ -458,7 +464,7 @@ function onMessage(event) {
 async function initialize() {
   $('refresh').disabled = true;
   try {
-    const result = await request('ui/initialize',{appInfo:{name:'Rumbo acceptance board',version:'0.1.0'},appCapabilities:{availableDisplayModes:['inline']},protocolVersion});
+    const result = await request('ui/initialize',{appInfo:{name:'Rumbo acceptance board',version:'0.1.1'},appCapabilities:{availableDisplayModes:['inline']},protocolVersion});
     if (result?.protocolVersion !== protocolVersion) throw new Error('The host does not support MCP Apps protocol ' + protocolVersion);
     canRefresh = !!result.hostCapabilities?.serverTools;
     applyContext(result.hostContext || {});ready = true;
