@@ -157,6 +157,7 @@ const labels = {unclaimed:'Unclaimed', claimed:'Claimed', blocked:'Blocked', pro
 const attention = new Set(['blocked','rejected','stale']);
 const embedded = window.parent !== window;
 const pending = new Map();
+let hasProjectSelector = false;
 let state = null, selected = null, ready = false, canRefresh = false, hostOrigin = null;
 let requestSequence = 0, stateSequence = 0, resizeTimer = null, lastSize = '', hostContext = {}, closed = false;
 let initialHostSequence = 0, receivedInitialHostResult = false;
@@ -181,12 +182,12 @@ function date(value) {
   return Number.isNaN(valueDate.getTime()) ? text(value) : valueDate.toLocaleString();
 }
 function error(message) {
-  $('error').textContent = message + (state ? ' Showing the last snapshot; it may be out of date.' : ' No project snapshot is available.');
+  $('error').textContent = message + (state ? ' Showing the last snapshot; it may be out of date.' : hasProjectSelector ? ' Showing the last project selection; it may be out of date.' : ' No project snapshot is available.');
   $('error').hidden = false;
   $('connection').textContent = embedded ? 'Host connection needs attention' : 'Hosted connection needs attention';
   $('refresh').disabled = false;
   $('refresh').textContent = 'Refresh';
-  if (!state) {
+  if (!state && !hasProjectSelector) {
     $('goal').textContent = 'Your acceptance board';
     $('task-detail').replaceChildren(element('p','Refresh to try again. In an MCP host, open the Rumbo board tool to load a project.','empty large'));
   }
@@ -370,7 +371,18 @@ function render(snapshot) {
   const restoreListFocus = active && $('task-list').contains(active);
   const restoreProjectFocus = !state && restoreListFocus;
   const focusedProjectKey = restoreProjectFocus ? active.dataset?.projectKey : undefined;
-  if (snapshot?.project_selection_required && Array.isArray(snapshot.projects)) {
+  if (snapshot?.project_selection_required) {
+    // Reject the whole selection before replacing known context or focus.
+    const keys = new Set();
+    if (snapshot.project_selection_required !== true || !Array.isArray(snapshot.projects))
+      throw new Error('Unsupported or malformed project selection');
+    for (const project of snapshot.projects) {
+      if (!project || typeof project !== 'object' || Array.isArray(project) ||
+          ['project_key','alias','role'].some(key => typeof project[key] !== 'string' || !project[key].trim()) ||
+          keys.has(project.project_key)) throw new Error('Unsupported or malformed project selection');
+      keys.add(project.project_key);
+    }
+    hasProjectSelector = true;
     state = null; selected = null; $('goal').textContent = 'Choose your project';
     $('task-list').replaceChildren(); $('task-detail').replaceChildren(); $('error').hidden = true;
     $('list-empty').hidden = true;
@@ -400,6 +412,7 @@ function render(snapshot) {
   if (!snapshot || snapshot.version !== 1 || !Array.isArray(snapshot.tasks) || typeof snapshot.goal !== 'string' || snapshot.tasks.some(t => !t || typeof t.id !== 'string')) throw new Error('Unsupported or malformed project snapshot');
   const sameTask = state && state.project_id === snapshot.project_id &&
     state.hosted_project_key === snapshot.hosted_project_key && snapshot.tasks.some(task => task.id === selected);
+  hasProjectSelector = false;
   state = snapshot;
   if (!state.tasks.some(task => task.id === selected)) selected = state.tasks[0]?.id || null;
   $('goal').textContent = state.goal || 'Untitled goal';
@@ -496,7 +509,7 @@ function onMessage(event) {
 async function initialize() {
   $('refresh').disabled = true;
   try {
-    const result = await request('ui/initialize',{appInfo:{name:'Rumbo acceptance board',version:'0.1.1'},appCapabilities:{availableDisplayModes:['inline']},protocolVersion});
+    const result = await request('ui/initialize',{appInfo:{name:'Rumbo acceptance board',version:'0.1.2'},appCapabilities:{availableDisplayModes:['inline']},protocolVersion});
     if (result?.protocolVersion !== protocolVersion) throw new Error('The host does not support MCP Apps protocol ' + protocolVersion);
     canRefresh = !!result.hostCapabilities?.serverTools;
     applyContext(result.hostContext || {});ready = true;

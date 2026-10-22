@@ -301,7 +301,7 @@ SITES_SOURCE_FILES={
     'tests/browser/owner.spec.mjs',
     'tests/board-dom.test.mjs',
     'tests/board-clipboard.test.mjs',
-    'tests/board-focus.test.mjs',
+    'tests/board-focus.test.mjs','tests/board-selector-validation.test.mjs',
     'tests/board-state-order.test.mjs',
     'tests/codec.test.mjs',
     'tests/decision-clock.test.mjs',
