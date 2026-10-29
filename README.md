@@ -1,4 +1,9 @@
-# Rumbo
+<h1>
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/brand/rumbo-wordmark-reversed.svg">
+    <img src="docs/brand/rumbo-wordmark.svg" alt="Rumbo" height="64">
+  </picture>
+</h1>
 
 Know what your coding agents changed, what evidence supports it, and what still needs your decision.
 
@@ -52,7 +57,7 @@ Agents can use the explicit local CLI shown in the quickstart or [the installed 
 
 A separate [source-only opt-in mutation receipt v1 experiment](docs/MUTATION-RECEIPTS-v1.md) preserves full snapshots by default. It is not a deployed or installed-host capability claim.
 
-The candidate Python engine is **0.3.4**, the OpenAI adapter is **0.3.5**, and the Claude adapter is **0.3.5**. See [the current update notes](docs/UPDATE-2026-10-18.md), [the prior update](docs/UPDATE-2026-10-10.md), [the preserved prior update](docs/UPDATE-2026-10-09-B.md) and [the earlier update and rollback notes](docs/UPDATE-2026-10-09.md). They are versioned independently; a component version does not establish hosted or installed-host verification.
+The candidate Python engine is **0.3.5**, the OpenAI adapter is **0.3.6**, and the Claude adapter is **0.3.6**. See [the current update notes](docs/UPDATE-2026-10-29.md), [the prior update](docs/UPDATE-2026-10-18.md), [the earlier update](docs/UPDATE-2026-10-10.md), [the preserved prior update](docs/UPDATE-2026-10-09-B.md) and [the earlier update and rollback notes](docs/UPDATE-2026-10-09.md). They are versioned independently; a component version does not establish hosted or installed-host verification.
 
 Rumbo now has a working provider-neutral contract/evidence engine, CLI, MCP transports, a read-only acceptance board and OpenAI plugin packaging. It records **agreed goal → bounded task → exact artifact → evidence → human decision**.
 
@@ -81,8 +86,8 @@ The goal remains a free public plugin in the OpenAI ecosystem, using the existin
 ## OpenAI plugin packages
 
 ```sh
-python3 scripts/package_release.py --kind local --output dist/rumbo-openai-0.3.5-local-plugin.zip
-python3 scripts/package_release.py --kind source --output dist/rumbo-0.3.4-source.zip
+python3 scripts/package_release.py --kind local --output dist/rumbo-openai-0.3.6-local-plugin.zip
+python3 scripts/package_release.py --kind source --output dist/rumbo-0.3.5-source.zip
 ```
 
 The local archive includes portable root `plugin.json` and `mcp.json`, a compatibility manifest, workflow skills and a real stdio launcher. The installed server starts unbound. Its owner provisions approved aliases in `PLUGIN_DATA/projects.json`; the agent selects one alias once per process with a unique worker identity. Legacy `RUMBO_PROJECT_ROOT`, `RUMBO_ROLE` and `RUMBO_ACTOR` cannot configure this launcher. See [installed setup and lease limits](docs/INSTALLED-PLUGIN.md). No marketplace entry or installation is performed by packaging.
@@ -102,7 +107,7 @@ The legacy final-gated archive below is for the **Python remote profile**, not a
 ```sh
 python3 scripts/package_release.py --kind submission \
   --production-config /path/to/verified-production.json \
-  --output dist/rumbo-openai-0.3.5-public-review.zip
+  --output dist/rumbo-openai-0.3.6-public-review.zip
 ```
 
 The script never uploads. Local packaging does not establish public eligibility. The public archive excludes Claude lifecycle hooks, app references and local execution. [Current official requirements and links](docs/SUBMISSION-REQUIREMENTS.md).

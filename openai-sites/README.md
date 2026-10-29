@@ -2,7 +2,7 @@
 
 This experimental hosted runtime is isolated from Rumbo's canonical Python engine and its unchanged Claude/local distributions. The owner-only private deployment is v4, Sites source `c477594e6ad1e84e9be5cdb6c3d8e7037d58194b`, with runtime inputs from tested GitHub source `efb8fa6`. It has not been submitted to or approved for the public directory. Authenticated managed use remains unverified.
 
-The October 18 source candidate is version **0.1.1**, with keyboard-focus continuity in the hosted board. Its package/lock identity, MCP server identity and board app identity agree. This prepared patch identity is not a deployment: the existing v4 description above remains historical deployed state. See [the current source update](../docs/UPDATE-2026-10-18.md).
+The October 29 source candidate is version **0.1.2**, with the Rumbo wordmark in the hosted board header. It keeps the October 18 keyboard-focus continuity. Its package/lock identity, MCP server identity and board app identity agree. This prepared patch identity is not a deployment: the existing v4 description above remains historical deployed state. See [the current source update](../docs/UPDATE-2026-10-29.md).
 
 ## Approved implementation boundary
 

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import {JSDOM} from 'jsdom';
 import {dispatch} from '../worker/protocol.js';
-const version='0.1.1';
+const version='0.1.2';
 test('Sites package, lock root and actual MCP server report the prepared patch identity',async()=>{
  const pkg=JSON.parse(fs.readFileSync(new URL('../package.json',import.meta.url)));
  const lock=JSON.parse(fs.readFileSync(new URL('../package-lock.json',import.meta.url)));
