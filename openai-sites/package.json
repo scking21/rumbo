@@ -20,9 +20,12 @@
   },
   "overrides": {
     "esbuild": "$esbuild",
+    "jsdom": {
+      "undici": "8.12.2"
+    },
     "miniflare": {
       "sharp": "0.35.5",
-      "undici": "7.30.0"
+      "undici": "7.30.1"
     }
   },
   "engines": {
