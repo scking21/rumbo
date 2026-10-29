@@ -373,8 +373,9 @@ function render(snapshot) {
   const restoreListFocus = active && $('task-list').contains(active);
   const restoreProjectFocus = !state && restoreListFocus;
   const focusedProjectKey = restoreProjectFocus ? active.dataset?.projectKey : undefined;
-  if (snapshot?.project_selection_required) {
+  if (snapshot != null && Object.hasOwn(snapshot, 'project_selection_required')) {
     // Reject the whole selection before replacing known context or focus.
+    // A present discriminator must be exactly true; a falsy one is not a snapshot either.
     const keys = new Set();
     if (snapshot.project_selection_required !== true || !Array.isArray(snapshot.projects))
       throw new Error('Unsupported or malformed project selection');
