@@ -1,4 +1,9 @@
-# Rumbo
+<h1>
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/brand/rumbo-wordmark-reversed.svg">
+    <img src="docs/brand/rumbo-wordmark.svg" alt="Rumbo" height="64">
+  </picture>
+</h1>
 
 Know what your coding agents changed, what evidence supports it, and what still needs your decision.
 

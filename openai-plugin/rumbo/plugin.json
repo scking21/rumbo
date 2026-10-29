@@ -28,7 +28,7 @@
         ],
         "composerIcon": "./assets/icon.svg",
         "logo": "./assets/icon.svg",
-        "brandColor": "#237A4B",
+        "brandColor": "#C42A78",
         "defaultPrompt": [
           "Show my project's acceptance board",
           "What evidence is missing before acceptance?",
