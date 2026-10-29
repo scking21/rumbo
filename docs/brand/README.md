@@ -32,7 +32,9 @@ a course held at one bearing. The logo is drawn in the board's chart language.
 | `rumbo-social-1280x640.png` | Repository social preview |
 
 `make_logo.py` draws every SVG here from its construction and writes the two
-plugin icons. Change the geometry there, not in the SVG files:
+plugin icons. The acceptance boards (`rumbo/web/board.html`, `openai-sites/web/board.html`)
+inline the wordmark in their header, with the fix colored by the board's `--owner` token.
+Change the geometry in the script, not in the SVG files:
 
 ```sh
 python3 docs/brand/make_logo.py

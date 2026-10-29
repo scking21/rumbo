@@ -25,7 +25,9 @@ h3{font-size:14px;line-height:1.5;font-weight:600;margin-bottom:6px}
 [hidden]{display:none!important}
 .shell{max-width:1200px;margin:0 auto;min-height:100vh}
 .topbar{display:flex;align-items:baseline;gap:14px;padding:14px 24px;border-bottom:1px solid var(--line)}
-.brand{font-size:21px;font-weight:700;font-style:italic;letter-spacing:-.02em}
+.brand{flex:none;position:relative;top:1.25px}
+.brand .fix{stroke:var(--owner)}
+.brand .pip{fill:var(--owner)}
 .board-name{color:var(--sounding)}
 .top-actions{margin-left:auto;display:flex;gap:14px;align-items:center}
 .quiet{color:var(--sounding)}
@@ -141,7 +143,7 @@ h3+.surface,.explanation+.surface{border-top:0;padding-top:0}
 <body>
 <a class="skip" href="#task-detail">Skip to task details</a>
 <div class="shell">
-<header class="topbar"><span class="brand">rumbo</span><span class="board-name">Acceptance board</span><div class="top-actions"><span id="demo" class="demo" hidden>Demo</span><span class="quiet read-only">Read only</span><button id="refresh" type="button">Refresh</button></div></header>
+<header class="topbar"><svg class="brand" viewBox="0 0 614 160" width="76.75" height="20" role="img" aria-label="rumbo"><g fill="none" stroke="currentColor" stroke-width="20" stroke-linecap="round"><path d="M10 150V60M10 100A40 40 0 0 1 70 65.36M104 60V100A40 40 0 0 0 184 100M184 60V150M228 150V60M228 94A34 34 0 0 1 296 94V150M296 94A34 34 0 0 1 364 94V150M408 10V150"/><circle cx="448" cy="100" r="40"/><circle class="fix" cx="564" cy="100" r="40"/></g><circle class="pip" cx="564" cy="100" r="12"/></svg><span class="board-name">Acceptance board</span><div class="top-actions"><span id="demo" class="demo" hidden>Demo</span><span class="quiet read-only">Read only</span><button id="refresh" type="button">Refresh</button></div></header>
 <main>
 <section class="intro" aria-labelledby="goal"><div><h1 id="goal">Loading your acceptance board</h1><ul class="tally" aria-label="Task summary"><li class="status" data-status="accepted"><span><strong id="accepted-count">0</strong> accepted</span></li><li class="status" data-status="checks_passed"><span><strong id="review-count">0</strong> ready for review</span></li><li class="status" data-status="stale"><span><strong id="attention-count">0</strong> need attention</span></li></ul></div><dl class="contract-meta"><dt>Contract revision</dt><dd id="contract-revision">—</dd><dt>Decision owner</dt><dd id="decision-owner">—</dd></dl><details class="contract-context" id="contract-context" hidden><summary>Original request and constraints</summary><div id="context-body" class="context-body"></div></details></section>
 <div id="error" class="notice" role="alert" hidden></div>
@@ -464,7 +466,7 @@ function onMessage(event) {
 async function initialize() {
   $('refresh').disabled = true;
   try {
-    const result = await request('ui/initialize',{appInfo:{name:'Rumbo acceptance board',version:'0.1.1'},appCapabilities:{availableDisplayModes:['inline']},protocolVersion});
+    const result = await request('ui/initialize',{appInfo:{name:'Rumbo acceptance board',version:'0.1.2'},appCapabilities:{availableDisplayModes:['inline']},protocolVersion});
     if (result?.protocolVersion !== protocolVersion) throw new Error('The host does not support MCP Apps protocol ' + protocolVersion);
     canRefresh = !!result.hostCapabilities?.serverTools;
     applyContext(result.hostContext || {});ready = true;
