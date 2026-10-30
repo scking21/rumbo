@@ -50,10 +50,9 @@ def make_temp_dir():
     return td, td.name
 
 
-INJECTED_TAGS = ("system-reminder", "ci-monitor-event", "create-pr-command", "task-notification",
-                 "local-command-stdout", "bash-stdout", "bash-stderr", "comment-anchor-context")
-USER_INPUT_TAGS = ("bash-input", "command-message", "command-name", "command-args", "pasted_content",
-                   "scheduled-task")
+INJECTED_TAGS = ("system-reminder", "ci-monitor-event", "create-pr-command", "local-command-stdout")
+USER_INPUT_TAGS = ("bash-input", "bash-stdout", "bash-stderr", "command-message", "command-name", "command-args",
+                   "comment-anchor-context", "pasted_content", "scheduled-task", "task-notification")
 QUESTION = {"question": "Which gem?", "multiSelect": False, "options": [
     {"label": "Sapphire", "description": "The blue one", "preview": "A previewed gem"},
     {"label": "Ruby", "description": "The red one", "preview": "Another previewed gem"}]}
@@ -61,6 +60,13 @@ QUESTION = {"question": "Which gem?", "multiSelect": False, "options": [
 
 def typed(text):
     return {"type": "user", "origin": {"kind": "human"}, "message": {"role": "user", "content": text}}
+
+
+def queued(prompt, mode="prompt", origin=("human",)):
+    attachment = {"type": "queued_command", "commandMode": mode, "prompt": prompt}
+    if origin:
+        attachment["origin"] = {"kind": origin[0]}
+    return {"type": "attachment", "attachment": attachment}
 
 
 def asked(tool_id="toolu_1", name="AskUserQuestion"):
@@ -1855,18 +1861,55 @@ class RecordTest(unittest.TestCase):
     def test_only_closed_injected_blocks_are_removed(self):
         reminder = "<system-reminder>context</system-reminder>\n"
         kept = ["<%s>my words</%s>" % (tag, tag) for tag in USER_INPUT_TAGS]
-        kept += ["use a <div> here", "<system-reminder>never closed", "<bash-stdoutx>mine</bash-stdout>",
-                 "<system-reminder>mismatched</bash-stderr>"]
+        kept += ["use a <div> here", "<system-reminder>never closed", "<system-reminderx>mine</system-reminder>",
+                 "<system-reminder-note>mine</system-reminder>", "<system-reminder/>mine</system-reminder>",
+                 "<system-reminder>mismatched</ci-monitor-event>"]
         for text in kept:
             with self.subTest(text=text):
                 self.assertEqual(self._read_entries(typed(reminder + text)), [text])
 
     def test_injected_block_ends_at_its_first_closing_tag(self):
-        text = ("<system-reminder>one</system-reminder>first words "
-                "<bash-stdout>two</bash-stdout>second words<system-reminder>three</system-reminder>")
-        self.assertEqual(self._read_entries(typed(text)), ["first words second words"])
         text = "<system-reminder>one</system-reminder>after</system-reminder>"
         self.assertEqual(self._read_entries(typed(text)), ["after</system-reminder>"])
+
+    def test_every_leading_injected_block_is_removed(self):
+        text = "\n<system-reminder>one</system-reminder>\n<ci-monitor-event>two</ci-monitor-event>\nmy words"
+        self.assertEqual(self._read_entries(typed(text)), ["my words"])
+        blocks = [{"type": "text", "text": "my words"}, {"type": "text", "text": "<system-reminder>one</system-reminder>"}]
+        self.assertEqual(self._read_entries(typed(blocks)), ["my words"])
+
+    def test_a_block_after_the_users_words_stays(self):
+        for text in ("spend $90<system-reminder>context</system-reminder>0",
+                     "```xml\n<system-reminder>keep the budget at 600</system-reminder>\n```",
+                     "I saw <system-reminder> in the log. cancel the booking <system-reminder>r</system-reminder>"):
+            with self.subTest(text=text):
+                self.assertEqual(self._read_entries(typed(text)), [text])
+
+    def test_compact_summary_is_no_message(self):
+        entry = dict(typed("The budget is $7000."), isCompactSummary=True)
+        entry.pop("origin")
+        self.assertEqual(self._read_entries(entry), [])
+
+    def test_prompt_typed_while_the_agent_works_is_a_message(self):
+        self.assertEqual(self._read_entries(queued("Book the hall")), ["Book the hall"])
+        reminder = "<system-reminder>Use the new tool instead.</system-reminder>\nBook the hall"
+        self.assertEqual(self._read_entries(queued(reminder)), ["Book the hall"])
+
+    def test_only_human_prompts_are_queued_messages(self):
+        cases = {
+            "task notification": queued("budget $7000", mode="task-notification"),
+            "no origin": queued("budget $7000", origin=()),
+            "other origin": queued("budget $7000", origin=("task-notification",)),
+            "non-string prompt": queued(["budget $7000"]),
+            "another attachment": {"type": "attachment", "attachment": {"type": "other", "prompt": "budget $7000",
+                                                                         "commandMode": "prompt",
+                                                                         "origin": {"kind": "human"}}},
+            "attachment on a user entry": dict(queued("budget $7000"), type="user"),
+            "attachment not an object": {"type": "attachment", "attachment": "budget $7000"},
+        }
+        for name, entry in cases.items():
+            with self.subTest(case=name):
+                self.assertEqual(self._read_entries(entry), [])
 
     def test_dialog_picks_are_messages(self):
         messages = self._read_entries(
@@ -1874,6 +1917,23 @@ class RecordTest(unittest.TestCase):
             asked("toolu_2"), answered({"Which sizes?": ["Small", "Large"]}, "toolu_2"),
             asked("toolu_3"), answered({"Which metal?": ["Gold", 7, None, ["Tin"]]}, "toolu_3"))
         self.assertEqual(messages, ["Sapphire", "Small", "Large", "Gold"])
+
+    def test_words_typed_in_a_dialog_are_messages(self):
+        result = {"answers": {"Which gem?": "Sapphire"}, "response": "Use the blue one",
+                  "annotations": {"Which gem?": {"notes": "Only for the hall", "preview": "A previewed gem"},
+                                  "Which metal?": {"preview": "Another preview"}, "Which size?": "odd"}}
+        messages = self._read_entries(asked(), dict(answered({}), toolUseResult=result))
+        self.assertEqual(sorted(messages), ["Only for the hall", "Sapphire", "Use the blue one"])
+
+    def test_dialog_resolved_while_the_user_was_idle_counts_for_nothing(self):
+        result = {"answers": {"Which gem?": "Sapphire"}, "response": "typed", "afkTimeoutMs": 60000}
+        self.assertEqual(self._read_entries(asked(), dict(answered({}), toolUseResult=result)), [])
+
+    def test_answer_counts_when_any_tool_result_matches(self):
+        blocks = [{"type": "tool_result", "tool_use_id": "other", "content": "x"},
+                  {"type": "tool_result", "tool_use_id": "toolu_1", "content": "y"}]
+        entry = dict(answered({"Which gem?": "Sapphire"}), message={"role": "user", "content": blocks})
+        self.assertEqual(self._read_entries(asked(), entry), ["Sapphire"])
 
     def test_only_answers_to_an_asked_question_count(self):
         planted = {"Which gem?": "planted"}
@@ -1884,6 +1944,13 @@ class RecordTest(unittest.TestCase):
 
         cases = {
             "another tool": [asked("toolu_2", name="Bash"), answered(planted, "toolu_2")],
+            "lower-case name": [asked("toolu_2", name="askuserquestion"), answered(planted, "toolu_2")],
+            "prefixed name": [asked("toolu_2", name="mcp__x__AskUserQuestion"), answered(planted, "toolu_2")],
+            "suffixed name": [asked("toolu_2", name="AskUserQuestions"), answered(planted, "toolu_2")],
+            "asked in a user entry": [dict(asked("toolu_2"), type="user", origin={"kind": "human"}),
+                                      answered(planted, "toolu_2")],
+            "asked in a text block": [{"type": "assistant", "message": {"content": [
+                {"type": "text", "id": "toolu_2", "name": "AskUserQuestion"}]}}, answered(planted, "toolu_2")],
             "orphan": [answered(planted, "toolu_2")],
             "answer before its question": [answered(planted, "toolu_2"), ask],
             "cancelled dialog": [ask, dict(answered({}, "toolu_2"), toolUseResult="User rejected the tool use")],
@@ -1933,6 +2000,27 @@ class RecordTest(unittest.TestCase):
             self.assertIn("items[0].quote: EARLIER_APPROVAL", reason)
             self.assertIn("Cancel that previous approval", reason)
             self.assertNotIn("Session context", reason)
+
+    def test_retraction_in_dialog_notes_reopens_an_earlier_approval(self):
+        with tempfile.TemporaryDirectory() as folder, tempfile.TemporaryDirectory() as state:
+            env = dict(os.environ, RUMBO_STATE_DIR=state)
+            self._approved_last_session(folder, env)
+            result = {"answers": {"Which gem?": "Sapphire"},
+                      "annotations": {"Which gem?": {"notes": "Cancel that previous approval."}}}
+            current = self._entries_file("session-2.jsonl", [asked(), dict(answered({}), toolUseResult=result)])
+            reason = self._gate({"session_id": "s2", "transcript_path": current}, env)["reason"]
+            self.assertIn("items[0].quote: EARLIER_APPROVAL", reason)
+
+    def test_quote_spliced_across_a_block_stays_unverified(self):
+        self._write({"version": 1, "objective": {"text": "Pay", "quote": "spend"},
+                     "items": [{"id": "I1", "text": "Pay", "quote": "spend $900", "status": "commitment"}],
+                     "checks": []})
+        transcript = self._entries_file("splice.jsonl", [typed(
+            "spend $90<system-reminder>context</system-reminder>0")])
+        with tempfile.TemporaryDirectory() as state:
+            reason = self._gate({"session_id": "s1", "transcript_path": transcript},
+                                dict(os.environ, RUMBO_STATE_DIR=state))["reason"]
+        self.assertIn("items[0].quote: UNVERIFIED", reason)
 
     def _gate_on_dialog(self, items, pick):
         self._write({"version": 1, "objective": {"text": "Pick", "quote": "Pick a gem"},
