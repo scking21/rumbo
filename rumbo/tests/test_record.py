@@ -62,8 +62,8 @@ def typed(text):
     return {"type": "user", "origin": {"kind": "human"}, "message": {"role": "user", "content": text}}
 
 
-def queued(prompt, mode="prompt", origin=("human",)):
-    attachment = {"type": "queued_command", "commandMode": mode, "prompt": prompt}
+def queued(prompt, mode="prompt", origin=("human",), **flags):
+    attachment = {"type": "queued_command", "commandMode": mode, "prompt": prompt, **flags}
     if origin:
         attachment["origin"] = {"kind": origin[0]}
     return {"type": "attachment", "attachment": attachment}
@@ -1894,13 +1894,21 @@ class RecordTest(unittest.TestCase):
         self.assertEqual(self._read_entries(queued("Book the hall")), ["Book the hall"])
         reminder = "<system-reminder>Use the new tool instead.</system-reminder>\nBook the hall"
         self.assertEqual(self._read_entries(queued(reminder)), ["Book the hall"])
+        blocks = [{"type": "image", "source": {"type": "base64"}}, {"type": "text", "text": "Book the hall"}]
+        self.assertEqual(self._read_entries(queued(blocks)), ["Book the hall"])
+
+    def test_prompt_a_hook_rewrote_is_no_message(self):
+        self.assertEqual(self._read_entries(queued("Deploy production", promptRewritten=True)), [])
+        self.assertEqual(self._read_entries(dict(typed("Deploy production"), promptRewritten=True)), [])
 
     def test_only_human_prompts_are_queued_messages(self):
         cases = {
             "task notification": queued("budget $7000", mode="task-notification"),
             "no origin": queued("budget $7000", origin=()),
             "other origin": queued("budget $7000", origin=("task-notification",)),
-            "non-string prompt": queued(["budget $7000"]),
+            "meta prompt": queued("budget $7000", isMeta=True),
+            "list of strings": queued(["budget $7000"]),
+            "number prompt": queued(7),
             "another attachment": {"type": "attachment", "attachment": {"type": "other", "prompt": "budget $7000",
                                                                          "commandMode": "prompt",
                                                                          "origin": {"kind": "human"}}},
