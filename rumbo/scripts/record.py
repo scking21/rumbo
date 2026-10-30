@@ -375,16 +375,38 @@ def _has_year(text):
     return isinstance(text, str) and len(text) == 10
 
 
+INJECTED_BLOCK = re.compile(
+    r"<(system-reminder|ci-monitor-event|create-pr-command|task-notification|"
+    r"local-command-stdout|bash-stdout|bash-stderr|comment-anchor-context)\b[^>]*>.*?</\1>", re.DOTALL)
+
+
+def _dialog_picks(entry, asked):
+    result = entry["toolUseResult"]
+    answers = result.get("answers") if isinstance(result, dict) else None
+    content = entry["message"].get("content")
+    if not isinstance(answers, dict) or not isinstance(content, list):
+        return []
+    if not any(isinstance(block, dict) and block.get("type") == "tool_result"
+               and isinstance(block.get("tool_use_id"), str) and block["tool_use_id"] in asked
+               for block in content):
+        return []
+    return [pick for value in answers.values()
+            for pick in (value if isinstance(value, list) else [value])
+            if isinstance(pick, str) and pick.strip()]
+
+
 def user_messages(transcript_path):
     """Read transcript JSONL and return list of user message texts.
 
     Skips lines that are not valid JSON. Keeps an entry only if:
     - entry["type"] == "user"
     - not entry.get("isMeta")
-    - "toolUseResult" not in entry
     - if entry has "origin", origin.get("kind") == "human"
+    - "toolUseResult" not in entry; one that answers an earlier AskUserQuestion
+      call instead adds each pick as its own message (see _dialog_picks)
     Text: message.content if it is a str, else concatenation (joined with "\n")
-    of the "text" of every block whose type is "text" (skip tool_result, image, others).
+    of the "text" of every block whose type is "text" (skip tool_result, image, others),
+    with INJECTED_BLOCK matches removed and surrounding whitespace stripped.
     Skip empty texts. Missing/unreadable file -> return None (distinct from []).
     """
     try:
@@ -394,6 +416,7 @@ def user_messages(transcript_path):
         return None
 
     messages = []
+    asked = set()
     for line in lines:
         line = line.strip()
         if not line:
@@ -404,22 +427,24 @@ def user_messages(transcript_path):
             # Skip invalid JSON lines
             continue
 
-        if not isinstance(entry, dict) or entry.get("type") != "user":
+        message = entry.get("message") if isinstance(entry, dict) else None
+        if not isinstance(message, dict):
             continue
-        if entry.get("isMeta"):
-            continue
-        if "toolUseResult" in entry:
+        content = message.get("content")
+
+        if entry.get("type") == "assistant" and isinstance(content, list):
+            asked.update(block["id"] for block in content
+                         if isinstance(block, dict) and block.get("type") == "tool_use"
+                         and block.get("name") == "AskUserQuestion" and isinstance(block.get("id"), str))
+        if entry.get("type") != "user" or entry.get("isMeta"):
             continue
         origin = entry.get("origin")
         if origin is not None and (not isinstance(origin, dict) or origin.get("kind") != "human"):
             continue
-
-        # Extract text content
-        message = entry.get("message")
-        if not isinstance(message, dict):
+        if "toolUseResult" in entry:
+            messages.extend(_dialog_picks(entry, asked))
             continue
 
-        content = message.get("content")
         if isinstance(content, str):
             text = content
         elif isinstance(content, list):
@@ -434,6 +459,7 @@ def user_messages(transcript_path):
         else:
             continue
 
+        text = INJECTED_BLOCK.sub("", text).strip()
         if text:  # Skip empty texts
             messages.append(text)
 
