@@ -411,20 +411,35 @@ def _is_human(origin):
     return isinstance(origin, dict) and origin.get("kind") == "human"
 
 
+def _not_the_users(entry):
+    return entry.get("isMeta") or entry.get("isCompactSummary") or entry.get("promptRewritten")
+
+
+def _message_text(content):
+    if isinstance(content, str):
+        return _without_injected(content)
+    if not isinstance(content, list):
+        return ""
+    parts = [_without_injected(block["text"]) for block in content
+             if isinstance(block, dict) and block.get("type") == "text" and isinstance(block.get("text"), str)]
+    return "\n".join(part for part in parts if part)
+
+
 def user_messages(transcript_path):
     """Read transcript JSONL and return list of user message texts.
 
     Skips lines that are not valid JSON. Keeps an entry only if:
     - entry["type"] == "user"
-    - not entry.get("isMeta") and not entry.get("isCompactSummary")
+    - not _not_the_users(entry)
     - if entry has "origin", origin.get("kind") == "human"
     - "toolUseResult" not in entry; one that answers an earlier AskUserQuestion
       call instead adds each thing the user picked or typed (see _dialog_words)
     Text: message.content if it is a str, else concatenation (joined with "\n")
     of the "text" of every block whose type is "text" (skip tool_result, image, others),
     each with its leading injected blocks removed (see _without_injected).
-    A queued_command attachment with commandMode "prompt" and a human origin is
-    a prompt typed while the agent worked, and adds its text the same way.
+    A queued_command attachment with commandMode "prompt", a human origin and
+    not _not_the_users is a prompt typed while the agent worked, and adds its
+    text the same way.
     Skip empty texts. Missing/unreadable file -> return None (distinct from []).
     """
     try:
@@ -448,10 +463,10 @@ def user_messages(transcript_path):
         if not isinstance(entry, dict):
             continue
         attachment = entry.get("attachment")
-        if (entry.get("type") == "attachment" and isinstance(attachment, dict)
-                and attachment.get("type") == "queued_command" and attachment.get("commandMode") == "prompt"
-                and _is_human(attachment.get("origin")) and isinstance(attachment.get("prompt"), str)):
-            messages.append(_without_injected(attachment["prompt"]))
+        if entry.get("type") == "attachment" and isinstance(attachment, dict):
+            if (attachment.get("type") == "queued_command" and attachment.get("commandMode") == "prompt"
+                    and _is_human(attachment.get("origin")) and not _not_the_users(attachment)):
+                messages.append(_message_text(attachment.get("prompt")))
             continue
 
         message = entry.get("message")
@@ -463,7 +478,7 @@ def user_messages(transcript_path):
             asked.update(block["id"] for block in content
                          if isinstance(block, dict) and block.get("type") == "tool_use"
                          and block.get("name") == "AskUserQuestion" and isinstance(block.get("id"), str))
-        if entry.get("type") != "user" or entry.get("isMeta") or entry.get("isCompactSummary"):
+        if entry.get("type") != "user" or _not_the_users(entry):
             continue
         origin = entry.get("origin")
         if origin is not None and not _is_human(origin):
@@ -472,21 +487,7 @@ def user_messages(transcript_path):
             messages.extend(_dialog_words(entry["toolUseResult"], content, asked))
             continue
 
-        if isinstance(content, str):
-            text = _without_injected(content)
-        elif isinstance(content, list):
-            # Concatenate text from all blocks of type "text"
-            text_parts = []
-            for block in content:
-                if isinstance(block, dict) and block.get("type") == "text":
-                    text_part = block.get("text")
-                    if isinstance(text_part, str):
-                        text_parts.append(_without_injected(text_part))
-            text = "\n".join(part for part in text_parts if part)
-        else:
-            continue
-
-        messages.append(text)
+        messages.append(_message_text(content))
 
     return [text for text in messages if text]
 
