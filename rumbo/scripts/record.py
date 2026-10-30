@@ -375,24 +375,40 @@ def _has_year(text):
     return isinstance(text, str) and len(text) == 10
 
 
-INJECTED_BLOCK = re.compile(
-    r"<(system-reminder|ci-monitor-event|create-pr-command|task-notification|"
-    r"local-command-stdout|bash-stdout|bash-stderr|comment-anchor-context)\b[^>]*>.*?</\1>", re.DOTALL)
+INJECTED_OPENING = re.compile(
+    r"\s*<(system-reminder|ci-monitor-event|create-pr-command|local-command-stdout)(?=[\s>])[^<>]*>")
 
 
-def _dialog_picks(entry, asked):
-    result = entry["toolUseResult"]
-    answers = result.get("answers") if isinstance(result, dict) else None
-    content = entry["message"].get("content")
-    if not isinstance(answers, dict) or not isinstance(content, list):
+def _without_injected(text):
+    start = 0
+    while True:
+        opening = INJECTED_OPENING.match(text, start)
+        closing = text.find("</%s>" % opening.group(1), opening.end()) if opening else -1
+        if closing < 0:
+            return text[start:].strip()
+        start = closing + len(opening.group(1)) + 3
+
+
+def _dialog_words(result, content, asked):
+    if not isinstance(result, dict) or "afkTimeoutMs" in result or not isinstance(content, list):
         return []
     if not any(isinstance(block, dict) and block.get("type") == "tool_result"
                and isinstance(block.get("tool_use_id"), str) and block["tool_use_id"] in asked
                for block in content):
         return []
-    return [pick for value in answers.values()
-            for pick in (value if isinstance(value, list) else [value])
-            if isinstance(pick, str) and pick.strip()]
+    words = [result.get("response")]
+    answers = result.get("answers")
+    annotations = result.get("annotations")
+    if isinstance(answers, dict):
+        for value in answers.values():
+            words.extend(value if isinstance(value, list) else [value])
+    if isinstance(annotations, dict):
+        words.extend(note.get("notes") for note in annotations.values() if isinstance(note, dict))
+    return [word for word in words if isinstance(word, str) and word.strip()]
+
+
+def _is_human(origin):
+    return isinstance(origin, dict) and origin.get("kind") == "human"
 
 
 def user_messages(transcript_path):
@@ -400,13 +416,15 @@ def user_messages(transcript_path):
 
     Skips lines that are not valid JSON. Keeps an entry only if:
     - entry["type"] == "user"
-    - not entry.get("isMeta")
+    - not entry.get("isMeta") and not entry.get("isCompactSummary")
     - if entry has "origin", origin.get("kind") == "human"
     - "toolUseResult" not in entry; one that answers an earlier AskUserQuestion
-      call instead adds each pick as its own message (see _dialog_picks)
+      call instead adds each thing the user picked or typed (see _dialog_words)
     Text: message.content if it is a str, else concatenation (joined with "\n")
     of the "text" of every block whose type is "text" (skip tool_result, image, others),
-    with INJECTED_BLOCK matches removed and surrounding whitespace stripped.
+    each with its leading injected blocks removed (see _without_injected).
+    A queued_command attachment with commandMode "prompt" and a human origin is
+    a prompt typed while the agent worked, and adds its text the same way.
     Skip empty texts. Missing/unreadable file -> return None (distinct from []).
     """
     try:
@@ -427,7 +445,16 @@ def user_messages(transcript_path):
             # Skip invalid JSON lines
             continue
 
-        message = entry.get("message") if isinstance(entry, dict) else None
+        if not isinstance(entry, dict):
+            continue
+        attachment = entry.get("attachment")
+        if (entry.get("type") == "attachment" and isinstance(attachment, dict)
+                and attachment.get("type") == "queued_command" and attachment.get("commandMode") == "prompt"
+                and _is_human(attachment.get("origin")) and isinstance(attachment.get("prompt"), str)):
+            messages.append(_without_injected(attachment["prompt"]))
+            continue
+
+        message = entry.get("message")
         if not isinstance(message, dict):
             continue
         content = message.get("content")
@@ -436,34 +463,32 @@ def user_messages(transcript_path):
             asked.update(block["id"] for block in content
                          if isinstance(block, dict) and block.get("type") == "tool_use"
                          and block.get("name") == "AskUserQuestion" and isinstance(block.get("id"), str))
-        if entry.get("type") != "user" or entry.get("isMeta"):
+        if entry.get("type") != "user" or entry.get("isMeta") or entry.get("isCompactSummary"):
             continue
         origin = entry.get("origin")
-        if origin is not None and (not isinstance(origin, dict) or origin.get("kind") != "human"):
+        if origin is not None and not _is_human(origin):
             continue
         if "toolUseResult" in entry:
-            messages.extend(_dialog_picks(entry, asked))
+            messages.extend(_dialog_words(entry["toolUseResult"], content, asked))
             continue
 
         if isinstance(content, str):
-            text = content
+            text = _without_injected(content)
         elif isinstance(content, list):
             # Concatenate text from all blocks of type "text"
             text_parts = []
             for block in content:
                 if isinstance(block, dict) and block.get("type") == "text":
                     text_part = block.get("text")
-                    if isinstance(text_part, str) and text_part:
-                        text_parts.append(text_part)
-            text = "\n".join(text_parts)
+                    if isinstance(text_part, str):
+                        text_parts.append(_without_injected(text_part))
+            text = "\n".join(part for part in text_parts if part)
         else:
             continue
 
-        text = INJECTED_BLOCK.sub("", text).strip()
-        if text:  # Skip empty texts
-            messages.append(text)
+        messages.append(text)
 
-    return messages
+    return [text for text in messages if text]
 
 
 def _normalize(text):
