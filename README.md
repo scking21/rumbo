@@ -57,7 +57,7 @@ Agents can use the explicit local CLI shown in the quickstart or [the installed 
 
 A separate [source-only opt-in mutation receipt v1 experiment](docs/MUTATION-RECEIPTS-v1.md) preserves full snapshots by default. It is not a deployed or installed-host capability claim.
 
-The candidate Python engine is **0.3.5**, the OpenAI adapter is **0.3.6**, and the Claude adapter is **0.3.6**. See [the current update notes](docs/UPDATE-2026-10-29.md), [the prior update](docs/UPDATE-2026-10-18.md), [the earlier update](docs/UPDATE-2026-10-10.md), [the preserved prior update](docs/UPDATE-2026-10-09-B.md) and [the earlier update and rollback notes](docs/UPDATE-2026-10-09.md). They are versioned independently; a component version does not establish hosted or installed-host verification.
+The candidate Python engine is **0.3.5**, the OpenAI adapter is **0.3.6**, and the Claude adapter is **0.3.7**. See [the current update notes](docs/UPDATE-2026-10-30.md), [the prior update](docs/UPDATE-2026-10-29.md), [the October 18 update](docs/UPDATE-2026-10-18.md), [the earlier update](docs/UPDATE-2026-10-10.md), [the preserved prior update](docs/UPDATE-2026-10-09-B.md) and [the earlier update and rollback notes](docs/UPDATE-2026-10-09.md). They are versioned independently; a component version does not establish hosted or installed-host verification.
 
 Rumbo now has a working provider-neutral contract/evidence engine, CLI, MCP transports, a read-only acceptance board and OpenAI plugin packaging. It records **agreed goal → bounded task → exact artifact → evidence → human decision**.
 

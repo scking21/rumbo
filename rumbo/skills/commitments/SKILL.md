@@ -120,6 +120,7 @@ one line naming what is still open rather than repeating the explanation.
 Resolve each conflict or disclose it, update
 the record, then finish. Never delete or weaken a check to get past the gate, and
 copy quotes exactly from the user's messages or they will be reported as unverified.
+For a decision made in a question dialog, the quote is the exact option label or typed answer.
 
 A quote is also unverified when it starts just after a negation in the same
 clause ("We don't have a venue yet, so let's book the library" does not verify
