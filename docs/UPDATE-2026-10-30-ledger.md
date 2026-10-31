@@ -12,7 +12,7 @@ This source candidate builds on main `144fcde527aaafeb6cc8ffbb14b2bd983e7875e1`.
 
 - A ledger that exists but cannot be used is `LEDGER_UNREADABLE`. That covers a truncated or empty file, bad bytes, a wrong shape, no read permission, a directory and a dangling link. The gate blocks and leaves the file as it is. Before, it read as empty and the gate replaced it, losing the fingerprints of earlier sessions with nothing naming the ledger.
 - A ledger that cannot be saved is `LEDGER_UNWRITABLE`. The gate blocks and the earlier file stays whole. Before, the failure was ignored, and a write that failed part way left a temporary file in `.rumbo/`.
-- Blocks for ledger problems alone have their own limit of 3 per session, so a later conflict still gets its own.
+- Ledger problems have their own limit of 3 blocks per session. Other problems block as they would with a healthy ledger, so a damaged ledger cannot use up the blocks a later conflict needs. While the ledger is unreadable, a quote it would have to verify counts as a ledger problem.
 
 ## Recovery
 
