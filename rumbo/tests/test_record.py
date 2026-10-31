@@ -1489,15 +1489,15 @@ class RecordTest(unittest.TestCase):
             self._set_check(record, "C1", "2026-03-20")
             self.assertIn("C1: FAIL", self._gate(hook, env)["reason"])
 
-    def test_quotes_a_broken_ledger_hides_leave_the_blocks_a_later_conflict_needs(self):
+    def test_new_quote_still_blocks_after_the_ledger_problem_reaches_its_limit(self):
         with tempfile.TemporaryDirectory() as folder, tempfile.TemporaryDirectory() as state:
             env = dict(os.environ, RUMBO_STATE_DIR=state)
-            record, hook = self._broken_ledger(folder, env, "Now draft the invitation.")
-            for _ in range(3):
-                self.assertIn("verified-quotes.json", self._gate(hook, env)["reason"])
-            self.assertIsNone(self._gate(hook, env))
-            self._set_check(record, "C1", "2026-03-20")
-            self.assertIn("C1: FAIL", self._gate(hook, env)["reason"])
+            record, hook = self._broken_ledger(folder, env)
+            for _ in range(4):
+                self._gate(hook, env)
+            record["items"].append({"id": "I2", "text": "Deploy", "quote": "Deploy production", "status": "authorized"})
+            self._write(record)
+            self.assertIn("items[1].quote: UNVERIFIED", self._gate(hook, env)["reason"])
 
     def test_clean_stop_gives_a_later_ledger_problem_its_blocks_back(self):
         with tempfile.TemporaryDirectory() as folder, tempfile.TemporaryDirectory() as state:
