@@ -1937,6 +1937,13 @@ class RecordTest(unittest.TestCase):
         result = {"answers": {"Which gem?": "Sapphire"}, "response": "typed", "afkTimeoutMs": 60000}
         self.assertEqual(self._read_entries(asked(), dict(answered({}), toolUseResult=result)), [])
 
+    def test_answer_a_hook_supplied_counts_for_nothing(self):
+        decision = {"decision": "accept", "source": "hook", "reasonType": "hook"}
+        entry = dict(answered({"Which gem?": "Sapphire"}), permissionDecision=decision)
+        self.assertEqual(self._read_entries(asked(), entry), [])
+        entry = dict(answered({"Which gem?": "Sapphire"}), permissionDecision={"source": "user_temporary"})
+        self.assertEqual(self._read_entries(asked(), entry), ["Sapphire"])
+
     def test_answer_counts_when_any_tool_result_matches(self):
         blocks = [{"type": "tool_result", "tool_use_id": "other", "content": "x"},
                   {"type": "tool_result", "tool_use_id": "toolu_1", "content": "y"}]
