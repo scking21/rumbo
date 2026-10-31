@@ -408,7 +408,7 @@ def _dialog_words(entry, content, asked):
             words.extend(value if isinstance(value, list) else [value])
     if isinstance(annotations, dict):
         words.extend(note.get("notes") for note in annotations.values() if isinstance(note, dict))
-    return [word for word in words if isinstance(word, str) and word.strip()]
+    return [word for word in words if isinstance(word, str) and word.strip() and word != "(notes only)"]
 
 
 def _is_human(origin):
