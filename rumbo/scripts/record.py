@@ -1438,7 +1438,7 @@ def _stop_gate(args, hook_input):
                 continue
             approval = item is not None and item.get("status") in ("commitment", "authorized")
             if (full if approval else core) not in ledger:
-                (parts if saved is not None else ledger_parts).append(_unverified_line(record, path, messages))
+                parts.append(_unverified_line(record, path, messages))
                 continue
             # Verified in an earlier session. That shows the words were said, not
             # that an approval still stands after this session's messages.
