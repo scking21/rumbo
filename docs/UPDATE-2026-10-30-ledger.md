@@ -12,6 +12,7 @@ This source candidate builds on main `144fcde527aaafeb6cc8ffbb14b2bd983e7875e1`.
 
 - A ledger that exists but cannot be used is `LEDGER_UNREADABLE`. That covers a truncated or empty file, bad bytes, a wrong shape, no read permission, a directory and a dangling link. The gate blocks and leaves the file as it is. Before, it read as empty and the gate replaced it, losing the fingerprints of earlier sessions with nothing naming the ledger.
 - A ledger that cannot be saved is `LEDGER_UNWRITABLE`. The gate blocks and the earlier file stays whole. Before, the failure was ignored, and a write that failed part way left a temporary file in `.rumbo/`.
+- Blocks for ledger problems alone have their own limit of 3 per session, so a later conflict still gets its own.
 
 ## Recovery
 
@@ -19,7 +20,7 @@ Restore the file from a copy. Without one, tell the user and move it aside, and 
 
 ## Verification, packaging and rollback
 
-Run the Claude-adapter suite from `rumbo/` on python3 and on Python 3.9, then the release identity checks from the repository root.
+Run the Claude-adapter suite from `rumbo/` on python3 and on Python 3.9, then the release identity checks from the repository root. One release identity test needs the `jsonschema` developer dependency.
 
 ```sh
 (cd rumbo && python3 -m unittest discover -s tests)

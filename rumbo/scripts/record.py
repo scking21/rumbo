@@ -1454,7 +1454,7 @@ def _stop_gate(args, hook_input):
                 parts.append(LEDGER_UNWRITABLE)
 
     if not parts:
-        for suffix in (".blocks", ".failed", ".lastreason"):
+        for suffix in (".blocks", ".ledger-blocks", ".failed", ".lastreason"):
             path = _marker_path(session_id, suffix)
             if path:
                 try:
@@ -1464,17 +1464,19 @@ def _stop_gate(args, hook_input):
         return 0
     present = {c.get("id") for c in record.get("checks") or []}
     remembered = problem_ids + [i for i in _read_failed_ids(session_id) if i not in present]
-    return _block_bounded(session_id, parts, CONFLICT_TAIL, remembered, chained)
+    budget = ".ledger-blocks" if set(parts) <= {LEDGER_UNREADABLE, LEDGER_UNWRITABLE} else ".blocks"
+    return _block_bounded(session_id, parts, CONFLICT_TAIL, remembered, chained, budget)
 
 
 BROKEN_RECORD = "rumbo: the decision record is unreadable or invalid"
 GATE_ERROR = "rumbo: GATE_ERROR: the stop gate hit an internal error and could not check the decision record"
 LEDGER_UNREADABLE = ("verified-quotes.json: LEDGER_UNREADABLE: quotes verified in earlier sessions "
                      "cannot be read and this session's are not saved; the file is left as it is. "
-                     "Restore it, or tell the user and move it aside so the gate starts a new one")
+                     "Restore it, or tell the user and move it aside, not delete it, so the gate "
+                     "starts a new one; earlier quotes must then be said again")
 LEDGER_UNWRITABLE = ("verified-quotes.json: LEDGER_UNWRITABLE: quotes verified this session could not "
-                     "be saved, so a later session will report them as UNVERIFIED. Make .rumbo writable "
-                     "or tell the user")
+                     "be saved, so a later session will report them as UNVERIFIED. Fix the cause "
+                     "(permissions, disk space, file size limit) or tell the user")
 REPEAT_REASON = ("rumbo: still open, unchanged since the last block: %s. Fix them, or if "
                  "your previous reply already told the user, add one line naming what is "
                  "still open. Do not repeat the full explanation.")
@@ -1524,14 +1526,16 @@ def _read_failed_ids(session_id):
     return [i for i in ids if isinstance(i, str)] if isinstance(ids, list) else []
 
 
-def _block_bounded(session_id, parts, tail, problem_ids=None, chained=False):
+def _block_bounded(session_id, parts, tail, problem_ids=None, chained=False, budget=".blocks"):
     """Print a Stop-hook block, at most MAX_BLOCKS times per session; always exit 0.
 
     chained is the harness's stop_hook_active flag: the only loop guard left
-    when the per-session counter cannot be saved.
+    when the per-session counter cannot be saved. budget names the counter, so
+    a ledger problem an agent may not be able to clear cannot use up the blocks
+    a later conflict needs.
     """
     reason = "\n".join(parts) + "\n" + tail
-    blocks_path = _marker_path(session_id, ".blocks")
+    blocks_path = _marker_path(session_id, budget)
     if blocks_path:
         # Same problems as the last block: ask for a one-line status instead of
         # the full explanation again. Nothing passes without a reply.
