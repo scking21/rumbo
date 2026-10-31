@@ -1440,21 +1440,76 @@ class RecordTest(unittest.TestCase):
                               self._gate({"session_id": "s3", "transcript_path": every_quote}, env)["reason"])
                 self.assertEqual(self._ledger_bytes(), damaged)
 
+    def _broken_ledger(self, folder, env, said=None):
+        quote = "Approve the sapphire option by 2026-03-01 or 2026-03-12 or 2026-03-20"
+        record = self._approved_last_session(folder, env, quote)
+        with open(self._ledger_path(), "wb") as handle:
+            handle.write(b"{")
+        current = self._transcript_file(folder, "session-2.jsonl", said or "Pick a gem. " + quote)
+        return record, {"session_id": "s2", "transcript_path": current}
+
+    def _set_check(self, record, check_id, first):
+        check = {"id": check_id, "kind": "before", "label": "deadline", "first": first,
+                 "second": "2026-03-12", "refs": ["I1"]}
+        record["checks"] = [c for c in record["checks"] if c["id"] != check_id] + [check]
+        self._write(record)
+
     def test_ledger_problem_leaves_the_blocks_a_later_conflict_needs(self):
         with tempfile.TemporaryDirectory() as folder, tempfile.TemporaryDirectory() as state:
             env = dict(os.environ, RUMBO_STATE_DIR=state)
-            record = self._approved_last_session(folder, env)
-            with open(self._ledger_path(), "wb") as handle:
-                handle.write(b"{")
-            current = self._transcript_file(folder, "session-2.jsonl", "Pick a gem. Approve the sapphire option")
-            hook = {"session_id": "s2", "transcript_path": current}
+            record, hook = self._broken_ledger(folder, env)
             for _ in range(3):
                 self.assertIn("verified-quotes.json", self._gate(hook, env)["reason"])
             self.assertIsNone(self._gate(hook, env))
-            record["checks"] = [{"id": "C1", "kind": "before", "label": "deadline", "first": "2026-03-20",
-                                 "second": "2026-03-12", "refs": []}]
-            self._write(record)
+            self._set_check(record, "C1", "2026-03-20")
             self.assertIn("C1: FAIL", self._gate(hook, env)["reason"])
+
+    def test_corrected_conflict_frees_its_blocks_while_the_ledger_stays_broken(self):
+        with tempfile.TemporaryDirectory() as folder, tempfile.TemporaryDirectory() as state:
+            env = dict(os.environ, RUMBO_STATE_DIR=state)
+            record, hook = self._broken_ledger(folder, env)
+            self._set_check(record, "C1", "2026-03-20")
+            for _ in range(3):
+                self.assertIn("C1", self._gate(hook, env)["reason"])
+            self._set_check(record, "C1", "2026-03-01")
+            self.assertNotIn("C1", self._gate(hook, env)["reason"])
+            self._set_check(record, "C2", "2026-03-20")
+            self.assertIn("C2: FAIL", self._gate(hook, env)["reason"])
+
+    def test_conflict_that_reopens_gets_its_full_text_while_the_ledger_stays_broken(self):
+        with tempfile.TemporaryDirectory() as folder, tempfile.TemporaryDirectory() as state:
+            env = dict(os.environ, RUMBO_STATE_DIR=state)
+            record, hook = self._broken_ledger(folder, env)
+            for _ in range(4):
+                self._gate(hook, env)
+            self._set_check(record, "C1", "2026-03-20")
+            self.assertIn("C1: FAIL", self._gate(hook, env)["reason"])
+            self._set_check(record, "C1", "2026-03-01")
+            self.assertIsNone(self._gate(hook, env))
+            self._set_check(record, "C1", "2026-03-20")
+            self.assertIn("C1: FAIL", self._gate(hook, env)["reason"])
+
+    def test_quotes_a_broken_ledger_hides_leave_the_blocks_a_later_conflict_needs(self):
+        with tempfile.TemporaryDirectory() as folder, tempfile.TemporaryDirectory() as state:
+            env = dict(os.environ, RUMBO_STATE_DIR=state)
+            record, hook = self._broken_ledger(folder, env, "Now draft the invitation.")
+            for _ in range(3):
+                self.assertIn("verified-quotes.json", self._gate(hook, env)["reason"])
+            self.assertIsNone(self._gate(hook, env))
+            self._set_check(record, "C1", "2026-03-20")
+            self.assertIn("C1: FAIL", self._gate(hook, env)["reason"])
+
+    def test_clean_stop_gives_a_later_ledger_problem_its_blocks_back(self):
+        with tempfile.TemporaryDirectory() as folder, tempfile.TemporaryDirectory() as state:
+            env = dict(os.environ, RUMBO_STATE_DIR=state)
+            _record, hook = self._broken_ledger(folder, env)
+            for _ in range(4):
+                self._gate(hook, env)
+            os.remove(self._ledger_path())
+            self.assertIsNone(self._gate(hook, env))
+            with open(self._ledger_path(), "wb") as handle:
+                handle.write(b"{")
+            self.assertIn("LEDGER_UNREADABLE", self._gate(hook, env)["reason"])
 
     def test_ledger_that_cannot_be_opened_stays_in_place(self):
         def directory(path):
