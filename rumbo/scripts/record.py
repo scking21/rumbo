@@ -637,24 +637,28 @@ def _fingerprints(record, path):
 
 def _read_ledger(record_path):
     """Hashes of quotes the Stop gate found in an earlier session's own transcript."""
+    path = _ledger_path(record_path)
+    if not os.path.lexists(path):
+        return {}
     try:
-        with open(_ledger_path(record_path), encoding="utf-8") as handle:
+        with open(path, encoding="utf-8") as handle:
             ledger = _loads(handle.read())
     except (OSError, ValueError):
-        return {}
+        return None
     quotes = ledger.get("quotes") if isinstance(ledger, dict) else None
-    return quotes if isinstance(quotes, dict) else {}
+    return quotes if isinstance(quotes, dict) else None
 
 
 def _write_ledger(record_path, ledger):
     path = _ledger_path(record_path)
+    fd, temp = tempfile.mkstemp(dir=os.path.dirname(path), prefix=".verified-")
     try:
-        fd, temp = tempfile.mkstemp(dir=os.path.dirname(path), prefix=".verified-")
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
             json.dump({"version": 1, "quotes": ledger}, handle, indent=1, sort_keys=True)
         os.replace(temp, path)
     except OSError:
-        pass
+        os.unlink(temp)
+        raise
 
 
 def _quote_paths(record):
@@ -1406,6 +1410,7 @@ def _stop_gate(args, hook_input):
     for check_id in _read_failed_ids(session_id):
         if check_id not in {c.get("id") for c in record.get("checks") or []}:
             parts.append("%s: check was failing and has been removed from the record" % check_id)
+    ledger_parts = []
     transcript = hook_input.get("transcript_path") if isinstance(hook_input, dict) else None
     messages = user_messages(transcript) if isinstance(transcript, str) else None
     if messages is None:
@@ -1414,7 +1419,10 @@ def _stop_gate(args, hook_input):
                      "the harness or disclose that provenance is unverified")
     else:
         unverified = set(unverified_quotes(record, messages))
-        ledger = _read_ledger(args.record)
+        saved = _read_ledger(args.record)
+        if saved is None:
+            ledger_parts.append(LEDGER_UNREADABLE)
+        ledger = saved or {}
         changed = False
         items = record.get("items") or []
         replaced = {ref for item in items for ref in item.get("replaces") or []}
@@ -1440,25 +1448,38 @@ def _stop_gate(args, hook_input):
                     parts.append('%s: EARLIER_APPROVAL: approved in an earlier session, but this '
                                  'session the user said "%s"; check it still stands, and replace '
                                  'or reject it in the record if it changed' % (path, said))
-        if changed:
-            _write_ledger(args.record, ledger)
+        if changed and saved is not None:
+            try:
+                _write_ledger(args.record, ledger)
+            except OSError:
+                ledger_parts.append(LEDGER_UNWRITABLE)
 
     if not parts:
-        for suffix in (".blocks", ".failed", ".lastreason"):
+        ledger_markers = () if ledger_parts else (".ledger-blocks", ".ledger-lastreason")
+        for suffix in (".blocks", ".failed", ".lastreason") + ledger_markers:
             path = _marker_path(session_id, suffix)
             if path:
                 try:
                     os.remove(path)
                 except OSError:
                     pass
+        if ledger_parts:
+            return _block_bounded(session_id, ledger_parts, CONFLICT_TAIL, chained=chained, marker=".ledger-")
         return 0
     present = {c.get("id") for c in record.get("checks") or []}
     remembered = problem_ids + [i for i in _read_failed_ids(session_id) if i not in present]
-    return _block_bounded(session_id, parts, CONFLICT_TAIL, remembered, chained)
+    return _block_bounded(session_id, ledger_parts + parts, CONFLICT_TAIL, remembered, chained)
 
 
 BROKEN_RECORD = "rumbo: the decision record is unreadable or invalid"
 GATE_ERROR = "rumbo: GATE_ERROR: the stop gate hit an internal error and could not check the decision record"
+LEDGER_UNREADABLE = ("verified-quotes.json: LEDGER_UNREADABLE: quotes verified in earlier sessions "
+                     "cannot be read and this session's are not saved; the file is left as it is. "
+                     "Restore it, or tell the user and move it aside, not delete it, so the gate "
+                     "starts a new one; earlier quotes must then be said again")
+LEDGER_UNWRITABLE = ("verified-quotes.json: LEDGER_UNWRITABLE: quotes verified this session could not "
+                     "be saved, so a later session will report them as UNVERIFIED. Fix the cause "
+                     "(permissions, disk space, file size limit) or tell the user")
 REPEAT_REASON = ("rumbo: still open, unchanged since the last block: %s. Fix them, or if "
                  "your previous reply already told the user, add one line naming what is "
                  "still open. Do not repeat the full explanation.")
@@ -1508,18 +1529,20 @@ def _read_failed_ids(session_id):
     return [i for i in ids if isinstance(i, str)] if isinstance(ids, list) else []
 
 
-def _block_bounded(session_id, parts, tail, problem_ids=None, chained=False):
+def _block_bounded(session_id, parts, tail, problem_ids=None, chained=False, marker="."):
     """Print a Stop-hook block, at most MAX_BLOCKS times per session; always exit 0.
 
     chained is the harness's stop_hook_active flag: the only loop guard left
-    when the per-session counter cannot be saved.
+    when the per-session counter cannot be saved. marker starts the counter's
+    file names: a ledger problem an agent may not be able to clear must not use
+    up the blocks a later conflict needs.
     """
     reason = "\n".join(parts) + "\n" + tail
-    blocks_path = _marker_path(session_id, ".blocks")
+    blocks_path = _marker_path(session_id, marker + "blocks")
     if blocks_path:
         # Same problems as the last block: ask for a one-line status instead of
         # the full explanation again. Nothing passes without a reply.
-        last_path = _marker_path(session_id, ".lastreason")
+        last_path = _marker_path(session_id, marker + "lastreason")
         repeat = False
         try:
             with _open_marker(last_path) as handle:

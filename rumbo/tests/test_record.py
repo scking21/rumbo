@@ -1391,12 +1391,213 @@ class RecordTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder, tempfile.TemporaryDirectory() as state:
             env = dict(os.environ, RUMBO_STATE_DIR=state)
             self._approved_last_session(folder, env)
-            with open(os.path.join(self.dir, ".rumbo", "verified-quotes.json"), encoding="utf-8") as handle:
-                saved = json.load(handle)
+            saved = json.loads(self._ledger_bytes())
             self.assertEqual(len(saved["quotes"]), 4)  # two fingerprints per quote
             self.assertNotIn("sapphire", json.dumps(saved))  # hashes, not text
             second = self._transcript_file(folder, "session-2.jsonl", "Now draft the invitation.")
             self.assertIsNone(self._gate({"session_id": "s2", "transcript_path": second}, env))
+
+    def _ledger_path(self):
+        return os.path.join(self.dir, ".rumbo", "verified-quotes.json")
+
+    def _ledger_bytes(self):
+        with open(self._ledger_path(), "rb") as handle:
+            return handle.read()
+
+    def _leftovers(self):
+        return [name for name in os.listdir(os.path.dirname(self._ledger_path())) if name.startswith(".verified-")]
+
+    def _empty_dot_rumbo(self):
+        shutil.rmtree(os.path.dirname(self._ledger_path()))
+        os.mkdir(os.path.dirname(self._ledger_path()))
+
+    def _add_item(self, record):
+        record["items"].append({"id": "I2", "text": "Engraving", "quote": "Engrave the band", "status": "commitment"})
+        self._write(record)
+
+    def test_unreadable_ledger_is_named_and_left_as_it_was(self):
+        damages = {"truncated": lambda raw: raw[:len(raw) // 2], "empty": lambda raw: b"",
+                   "bad bytes": lambda raw: raw + b"\xff",
+                   "too deep": lambda raw: b'{"version": 1, "quotes": {"key": ' + b"[" * 70 + b"]" * 70 + b"}}",
+                   "not an object": lambda raw: b"[]",
+                   "quotes not an object": lambda raw: b'{"version": 1, "quotes": []}'}
+        for name, damage in damages.items():
+            with self.subTest(name), tempfile.TemporaryDirectory() as folder, tempfile.TemporaryDirectory() as state:
+                self._empty_dot_rumbo()
+                env = dict(os.environ, RUMBO_STATE_DIR=state)
+                self._approved_last_session(folder, env)
+                damaged = damage(self._ledger_bytes())
+                with open(self._ledger_path(), "wb") as handle:
+                    handle.write(damaged)
+                later = self._transcript_file(folder, "session-2.jsonl", "Now draft the invitation.")
+                hook = {"session_id": "s2", "transcript_path": later}
+                reason = self._gate(hook, env)["reason"]
+                self.assertIn("verified-quotes.json: LEDGER_UNREADABLE", reason)
+                self.assertIn("items[0].quote: UNVERIFIED", reason)
+                self.assertRegex(self._gate(hook, env)["reason"], "still open.*verified-quotes.json")
+                every_quote = self._transcript_file(folder, "session-3.jsonl", "Pick a gem. Approve the sapphire option")
+                self.assertIn("LEDGER_UNREADABLE",
+                              self._gate({"session_id": "s3", "transcript_path": every_quote}, env)["reason"])
+                self.assertEqual(self._ledger_bytes(), damaged)
+
+    def _broken_ledger(self, folder, env, said=None):
+        quote = "Approve the sapphire option by 2026-03-01 or 2026-03-12 or 2026-03-20"
+        record = self._approved_last_session(folder, env, quote)
+        with open(self._ledger_path(), "wb") as handle:
+            handle.write(b"{")
+        current = self._transcript_file(folder, "session-2.jsonl", said or "Pick a gem. " + quote)
+        return record, {"session_id": "s2", "transcript_path": current}
+
+    def _set_check(self, record, check_id, first):
+        check = {"id": check_id, "kind": "before", "label": "deadline", "first": first,
+                 "second": "2026-03-12", "refs": ["I1"]}
+        record["checks"] = [c for c in record["checks"] if c["id"] != check_id] + [check]
+        self._write(record)
+
+    def test_ledger_problem_leaves_the_blocks_a_later_conflict_needs(self):
+        with tempfile.TemporaryDirectory() as folder, tempfile.TemporaryDirectory() as state:
+            env = dict(os.environ, RUMBO_STATE_DIR=state)
+            record, hook = self._broken_ledger(folder, env)
+            for _ in range(3):
+                self.assertIn("verified-quotes.json", self._gate(hook, env)["reason"])
+            self.assertIsNone(self._gate(hook, env))
+            self._set_check(record, "C1", "2026-03-20")
+            self.assertIn("C1: FAIL", self._gate(hook, env)["reason"])
+
+    def test_corrected_conflict_frees_its_blocks_while_the_ledger_stays_broken(self):
+        with tempfile.TemporaryDirectory() as folder, tempfile.TemporaryDirectory() as state:
+            env = dict(os.environ, RUMBO_STATE_DIR=state)
+            record, hook = self._broken_ledger(folder, env)
+            self._set_check(record, "C1", "2026-03-20")
+            for _ in range(3):
+                self.assertIn("C1", self._gate(hook, env)["reason"])
+            self._set_check(record, "C1", "2026-03-01")
+            self.assertNotIn("C1", self._gate(hook, env)["reason"])
+            self._set_check(record, "C2", "2026-03-20")
+            self.assertIn("C2: FAIL", self._gate(hook, env)["reason"])
+
+    def test_conflict_that_reopens_gets_its_full_text_while_the_ledger_stays_broken(self):
+        with tempfile.TemporaryDirectory() as folder, tempfile.TemporaryDirectory() as state:
+            env = dict(os.environ, RUMBO_STATE_DIR=state)
+            record, hook = self._broken_ledger(folder, env)
+            for _ in range(4):
+                self._gate(hook, env)
+            self._set_check(record, "C1", "2026-03-20")
+            self.assertIn("C1: FAIL", self._gate(hook, env)["reason"])
+            self._set_check(record, "C1", "2026-03-01")
+            self.assertIsNone(self._gate(hook, env))
+            self._set_check(record, "C1", "2026-03-20")
+            self.assertIn("C1: FAIL", self._gate(hook, env)["reason"])
+
+    def test_new_quote_still_blocks_after_the_ledger_problem_reaches_its_limit(self):
+        with tempfile.TemporaryDirectory() as folder, tempfile.TemporaryDirectory() as state:
+            env = dict(os.environ, RUMBO_STATE_DIR=state)
+            record, hook = self._broken_ledger(folder, env)
+            for _ in range(4):
+                self._gate(hook, env)
+            record["items"].append({"id": "I2", "text": "Deploy", "quote": "Deploy production", "status": "authorized"})
+            self._write(record)
+            self.assertIn("items[1].quote: UNVERIFIED", self._gate(hook, env)["reason"])
+
+    def test_clean_stop_gives_a_later_ledger_problem_its_blocks_back(self):
+        with tempfile.TemporaryDirectory() as folder, tempfile.TemporaryDirectory() as state:
+            env = dict(os.environ, RUMBO_STATE_DIR=state)
+            _record, hook = self._broken_ledger(folder, env)
+            for _ in range(4):
+                self._gate(hook, env)
+            os.remove(self._ledger_path())
+            self.assertIsNone(self._gate(hook, env))
+            with open(self._ledger_path(), "wb") as handle:
+                handle.write(b"{")
+            self.assertIn("LEDGER_UNREADABLE", self._gate(hook, env)["reason"])
+
+    def test_ledger_that_cannot_be_opened_stays_in_place(self):
+        def directory(path):
+            os.remove(path)
+            os.mkdir(path)
+
+        def dangling_link(path):
+            os.remove(path)
+            os.symlink(path + ".gone", path)
+
+        for damage in (directory, dangling_link):
+            with self.subTest(damage.__name__), tempfile.TemporaryDirectory() as folder, \
+                    tempfile.TemporaryDirectory() as state:
+                self._empty_dot_rumbo()
+                env = dict(os.environ, RUMBO_STATE_DIR=state)
+                self._approved_last_session(folder, env)
+                damage(self._ledger_path())
+                before = os.lstat(self._ledger_path()).st_ino
+                current = self._transcript_file(folder, "session-2.jsonl", "Pick a gem. Approve the sapphire option")
+                self.assertIn("verified-quotes.json: LEDGER_UNREADABLE",
+                              self._gate({"session_id": "s2", "transcript_path": current}, env)["reason"])
+                self.assertEqual(os.lstat(self._ledger_path()).st_ino, before)
+                self.assertEqual(self._leftovers(), [])
+
+    @unittest.skipIf(os.geteuid() == 0, "root ignores file modes")
+    def test_ledger_without_read_permission_keeps_its_fingerprints(self):
+        with tempfile.TemporaryDirectory() as folder, tempfile.TemporaryDirectory() as state:
+            env = dict(os.environ, RUMBO_STATE_DIR=state)
+            self._approved_last_session(folder, env)
+            intact = self._ledger_bytes()
+            os.chmod(self._ledger_path(), 0)
+            current = self._transcript_file(folder, "session-2.jsonl", "Pick a gem. Approve the sapphire option")
+            self.assertIn("LEDGER_UNREADABLE",
+                          self._gate({"session_id": "s2", "transcript_path": current}, env)["reason"])
+            os.chmod(self._ledger_path(), 0o600)
+            self.assertEqual(self._ledger_bytes(), intact)
+            later = self._transcript_file(folder, "session-3.jsonl", "Now draft the invitation.")
+            self.assertIsNone(self._gate({"session_id": "s3", "transcript_path": later}, env))
+
+    def test_moving_an_unreadable_ledger_aside_starts_a_new_one(self):
+        with tempfile.TemporaryDirectory() as folder, tempfile.TemporaryDirectory() as state:
+            env = dict(os.environ, RUMBO_STATE_DIR=state)
+            self._approved_last_session(folder, env)
+            with open(self._ledger_path(), "wb") as handle:
+                handle.write(b"{")
+            os.rename(self._ledger_path(), self._ledger_path() + ".bad")
+            current = self._transcript_file(folder, "session-2.jsonl", "Pick a gem. Approve the sapphire option")
+            self.assertIsNone(self._gate({"session_id": "s2", "transcript_path": current}, env))
+            self.assertEqual(len(json.loads(self._ledger_bytes())["quotes"]), 4)
+
+    @unittest.skipIf(os.geteuid() == 0, "root ignores file modes")
+    def test_ledger_that_cannot_be_saved_blocks_and_keeps_the_old_file(self):
+        with tempfile.TemporaryDirectory() as folder, tempfile.TemporaryDirectory() as state:
+            env = dict(os.environ, RUMBO_STATE_DIR=state)
+            self._add_item(self._approved_last_session(folder, env))
+            kept = self._ledger_bytes()
+            current = self._transcript_file(folder, "session-2.jsonl",
+                                            "Pick a gem. Approve the sapphire option. Engrave the band")
+            hook = {"session_id": "s2", "transcript_path": current}
+            dot = os.path.dirname(self._ledger_path())
+            os.chmod(dot, 0o500)
+            self.addCleanup(os.chmod, dot, 0o700)
+            reason = self._gate(hook, env)["reason"]
+            self.assertIn("verified-quotes.json: LEDGER_UNWRITABLE", reason)
+            self.assertNotIn(".quote: UNVERIFIED", reason)
+            self.assertEqual(self._ledger_bytes(), kept)
+            os.chmod(dot, 0o700)
+            self.assertIsNone(self._gate(hook, env))
+            self.assertEqual(len(json.loads(self._ledger_bytes())["quotes"]), 6)
+
+    def test_ledger_write_that_fails_part_way_leaves_no_temp_file(self):
+        import resource
+
+        def small_files():
+            resource.setrlimit(resource.RLIMIT_FSIZE, (64, resource.getrlimit(resource.RLIMIT_FSIZE)[1]))
+
+        with tempfile.TemporaryDirectory() as folder, tempfile.TemporaryDirectory() as state:
+            env = dict(os.environ, RUMBO_STATE_DIR=state)
+            self._add_item(self._approved_last_session(folder, env))
+            kept = self._ledger_bytes()
+            current = self._transcript_file(folder, "session-2.jsonl",
+                                            "Pick a gem. Approve the sapphire option. Engrave the band")
+            proc = subprocess.run([sys.executable, "scripts/record.py", "stop-gate", "--record", self.record_path],
+                                  input=json.dumps({"session_id": "s2", "transcript_path": current}), text=True,
+                                  capture_output=True, env=env, preexec_fn=small_files)
+            self.assertIn("LEDGER_UNWRITABLE", json.loads(proc.stdout)["reason"])
+            self.assertEqual(self._leftovers(), [])
+            self.assertEqual(self._ledger_bytes(), kept)
 
     def test_planted_transcript_files_never_verify_a_quote(self):
         with tempfile.TemporaryDirectory() as folder, tempfile.TemporaryDirectory() as state:
