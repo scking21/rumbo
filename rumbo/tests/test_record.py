@@ -1417,7 +1417,8 @@ class RecordTest(unittest.TestCase):
 
     def test_unreadable_ledger_is_named_and_left_as_it_was(self):
         damages = {"truncated": lambda raw: raw[:len(raw) // 2], "empty": lambda raw: b"",
-                   "bad bytes": lambda raw: raw + b"\xff", "too deep": lambda raw: b"[" * 70 + b"]" * 70,
+                   "bad bytes": lambda raw: raw + b"\xff",
+                   "too deep": lambda raw: b'{"version": 1, "quotes": {"key": ' + b"[" * 70 + b"]" * 70 + b"}}",
                    "not an object": lambda raw: b"[]",
                    "quotes not an object": lambda raw: b'{"version": 1, "quotes": []}'}
         for name, damage in damages.items():
@@ -1438,6 +1439,22 @@ class RecordTest(unittest.TestCase):
                 self.assertIn("LEDGER_UNREADABLE",
                               self._gate({"session_id": "s3", "transcript_path": every_quote}, env)["reason"])
                 self.assertEqual(self._ledger_bytes(), damaged)
+
+    def test_ledger_problem_leaves_the_blocks_a_later_conflict_needs(self):
+        with tempfile.TemporaryDirectory() as folder, tempfile.TemporaryDirectory() as state:
+            env = dict(os.environ, RUMBO_STATE_DIR=state)
+            record = self._approved_last_session(folder, env)
+            with open(self._ledger_path(), "wb") as handle:
+                handle.write(b"{")
+            current = self._transcript_file(folder, "session-2.jsonl", "Pick a gem. Approve the sapphire option")
+            hook = {"session_id": "s2", "transcript_path": current}
+            for _ in range(3):
+                self.assertIn("verified-quotes.json", self._gate(hook, env)["reason"])
+            self.assertIsNone(self._gate(hook, env))
+            record["checks"] = [{"id": "C1", "kind": "before", "label": "deadline", "first": "2026-03-20",
+                                 "second": "2026-03-12", "refs": []}]
+            self._write(record)
+            self.assertIn("C1: FAIL", self._gate(hook, env)["reason"])
 
     def test_ledger_that_cannot_be_opened_stays_in_place(self):
         def directory(path):
