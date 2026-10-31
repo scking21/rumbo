@@ -24,7 +24,7 @@ class ReleaseIdentityTests(unittest.TestCase):
         claude = json.loads((ROOT/'rumbo/.claude-plugin/plugin.json').read_text())
         self.assertEqual(portable['version'], '0.3.6')
         self.assertEqual(codex['version'], portable['version'])
-        self.assertEqual(claude['version'], '0.3.6')
+        self.assertEqual(claude['version'], '0.3.7')
         self.assertTrue(portable['extensions']['com.openai']['publication']['release_notes'].startswith('0.3.6 '))
 
     def test_release_notes_disclose_optional_receipts_and_catalog_change(self):
