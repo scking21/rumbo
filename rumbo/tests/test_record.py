@@ -1933,6 +1933,20 @@ class RecordTest(unittest.TestCase):
         messages = self._read_entries(asked(), dict(answered({}), toolUseResult=result))
         self.assertEqual(sorted(messages), ["Only for the hall", "Sapphire", "Use the blue one"])
 
+    def test_dialog_with_no_annotations_reads_its_answers(self):
+        result = {"answers": {"Which gem?": "Sapphire"}}
+        self.assertEqual(self._read_entries(asked(), dict(answered({}), toolUseResult=result)), ["Sapphire"])
+
+    def test_harness_placeholder_for_notes_is_no_pick(self):
+        result = {"answers": {"Which gem?": "(notes only)"},
+                  "annotations": {"Which gem?": {"notes": "Only for the hall"}}}
+        self.assertEqual(self._read_entries(asked(), dict(answered({}), toolUseResult=result)), ["Only for the hall"])
+
+    def test_only_string_text_blocks_are_read_and_lines_keep_them_apart(self):
+        blocks = [{"type": "text", "text": "spend $90"}, {"type": "text", "text": 7},
+                  {"type": "image", "text": "budget $7000"}, {"type": "text", "text": "0"}]
+        self.assertEqual(self._read_entries(typed(blocks)), ["spend $90\n0"])
+
     def test_dialog_resolved_while_the_user_was_idle_counts_for_nothing(self):
         result = {"answers": {"Which gem?": "Sapphire"}, "response": "typed", "afkTimeoutMs": 60000}
         self.assertEqual(self._read_entries(asked(), dict(answered({}), toolUseResult=result)), [])
