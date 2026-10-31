@@ -389,8 +389,12 @@ def _without_injected(text):
         start = closing + len(opening.group(1)) + 3
 
 
-def _dialog_words(result, content, asked):
+def _dialog_words(entry, content, asked):
+    result = entry["toolUseResult"]
     if not isinstance(result, dict) or "afkTimeoutMs" in result or not isinstance(content, list):
+        return []
+    decision = entry.get("permissionDecision")
+    if isinstance(decision, dict) and decision.get("source") == "hook":
         return []
     if not any(isinstance(block, dict) and block.get("type") == "tool_result"
                and isinstance(block.get("tool_use_id"), str) and block["tool_use_id"] in asked
@@ -484,7 +488,7 @@ def user_messages(transcript_path):
         if origin is not None and not _is_human(origin):
             continue
         if "toolUseResult" in entry:
-            messages.extend(_dialog_words(entry["toolUseResult"], content, asked))
+            messages.extend(_dialog_words(entry, content, asked))
             continue
 
         messages.append(_message_text(content))
