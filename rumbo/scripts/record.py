@@ -314,6 +314,15 @@ def _stated_minutes(source_text):
         # The "an hour" inside "half an hour" or "a quarter of an hour" is not 60.
         return re.search(r"(?:half|quarters?(?:\s+of)?)\s*$", text[max(0, m.start() - 24):m.start()], flags) is not None
 
+    # A spelled count must be the user's whole number: "one hours" inside "one hundred
+    # and one hours" is not 1. Digits and "a"/"an" stand alone.
+    whole_numbers = {(start, end) for start, end, _ in _word_numbers(text)}
+
+    def is_whole(m, group):
+        word = m.group(group)
+        return (word is None or word.lower() in ("a", "an") or re.fullmatch(r"[\d.]+", word) is not None
+                or (m.start(group), m.end(group)) in whole_numbers)
+
     def has_fraction(m):
         # "an hour and a half" and "2 hours and a quarter" never state the whole hours alone.
         return re.match(r"\s+and\s+an?\s+(?:half|quarter)\b", text[m.end():], flags) is not None
@@ -324,7 +333,8 @@ def _stated_minutes(source_text):
                          text, flags):
         hours = _amount(m.group(1))
         article = m.group(1).lower() in ("a", "an")
-        if hours is None or has_fraction(m) or is_rate(m.start(), article) or (article and is_part(m)):
+        if (hours is None or not is_whole(m, 1) or not is_whole(m, 2) or has_fraction(m)
+                or is_rate(m.start(), article) or (article and is_part(m))):
             continue
         extra = m.group(2) or m.group(3)
         extra = _amount(extra) if extra else decimal.Decimal(0)
@@ -334,7 +344,7 @@ def _stated_minutes(source_text):
     # "an hour and a half", "2 and a half hours", "one and a half hours".
     for m in re.finditer(lead + num + r"\s+(?:hours?\s+)?and\s+a\s+half(?:\s+hours?)?\b", text, flags):
         tail = m.group(0).lower()
-        if "hour" not in tail or is_rate(m.start(), m.group(1).lower() in ("a", "an")):
+        if "hour" not in tail or not is_whole(m, 1) or is_rate(m.start(), m.group(1).lower() in ("a", "an")):
             continue
         hours = _amount(m.group(1))
         if hours is not None:

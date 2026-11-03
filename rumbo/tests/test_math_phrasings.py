@@ -66,11 +66,17 @@ class DurationPhrasingTests(unittest.TestCase):
             ('9:00 start, three quarters of an hour of drills, done 11:00.', [45], '11:00'),
             ('Talk at 9:00, one and a half hours, room booked till 11:00.', [90], '11:00'),
             ('Talk at 9:00, one hour and a half, room booked till 11:00.', [90], '11:00'),
+            ('Session 9:00, one hour twenty minutes, ends 11:00.', [80], '11:00'),
             ('Lab from 9:00, 2 hours and a half, vacate by 11:30.', [150], '11:30'),
         )
         for words, segments, end in cases:
             with self.subTest(words=words):
                 self.assertEqual(verdict(words, window('09:00', end, segments)), ('PASS', ''))
+
+    def test_whole_spelled_counts_source_their_minutes(self):
+        for words, minutes in (('twenty-four hours', 1440), ('one hundred hours', 6000), ('one hundred and one hours', 6060)):
+            with self.subTest(words=words):
+                self.assertEqual(record._is_minutes_sourced(minutes, words), minutes == 1440)
 
     def test_a_colon_after_a_time_is_punctuation_not_seconds(self):
         self.assertEqual(verdict('Agenda 9:00: welcome, 30 minutes. 9:30: done.', window('09:00', '09:30', [30])), ('PASS', ''))
@@ -94,6 +100,10 @@ class DurationPhrasingTests(unittest.TestCase):
             ('a shuttle every half hour, 9:00 to 11:00', 30),
             ('meds every 2 hours, 9:00 to 11:00', 120),
             ('$95 per hour and a half, 9:00 to 11:00', 90),
+            ('one hundred and one hours of rehearsals, 9:00 to 11:00', 60),
+            ('two thousand and five hours, 9:00 to 11:00', 300),
+            ('one hundred and two and a half hours, 9:00 to 11:00', 150),
+            ('1 hour one hundred and five minutes, 9:00 to 11:00', 65),
             ('$80 per 2 hours, 9:00 to 11:00', 120),
             ('The tutor charges 150 dollars an hour; available 9:00 to 11:00', 60),
             ('fifty dollars an hour, 9:00 to 11:00', 60),
