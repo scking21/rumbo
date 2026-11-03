@@ -327,35 +327,52 @@ def _stated_minutes(source_text):
         # "an hour and a half" and "2 hours and a quarter" never state the whole hours alone.
         return re.match(r"\s+and\s+an?\s+(?:half|quarter)\b", text[m.end():], flags) is not None
 
+    # Every duration phrase is a candidate span with its minutes, or None when it is a
+    # rate or otherwise states nothing. Only the longest phrases count: a span inside a
+    # longer one ("half-hour" in "two-and-a-half-hour", "an hour" in "half an hour")
+    # is part of it, never a duration of its own.
+    found = []
+
+    def continues(start):
+        # A fraction after "word-" or "and" belongs to a longer phrase.
+        return re.search(r"(?:[A-Za-z]-|\band[\s-]+(?:an?[\s-]+)?)$", text[max(0, start - 12):start], flags) is not None
+
     # Hours, optionally followed by minutes: "2 hours", "an hour 15 minutes", "2h30".
     for m in re.finditer(lead + num + r"[\s-]*" + HOUR_UNIT
                          + r"(?:[\s,]*(?:and\s+)?(\d{1,2}|%s)[\s-]*%s|(?<=h)(\d{2})\b)?" % (NUMBER_WORD, MINUTE_UNIT),
                          text, flags):
         hours = _amount(m.group(1))
         article = m.group(1).lower() in ("a", "an")
-        if (hours is None or not is_whole(m, 1) or not is_whole(m, 2) or has_fraction(m)
-                or is_rate(m.start(), article) or (article and is_part(m))):
-            continue
         extra = m.group(2) or m.group(3)
-        if extra is None:
-            yield hours * 60
-        elif _amount(extra) is not None:
+        value = None
+        if not (hours is None or not is_whole(m, 1) or not is_whole(m, 2) or has_fraction(m)
+                or is_rate(m.start(), article) or (article and is_part(m))):
             # "1 hour 15 minutes" states 75, never the whole hours alone.
-            yield hours * 60 + _amount(extra)
-    # "an hour and a half", "2 and a half hours", "one and a half hours".
-    for m in re.finditer(lead + num + r"\s+(?:hours?\s+)?and\s+a\s+half(?:\s+hours?)?\b", text, flags):
+            value = hours * 60 if extra is None else (None if _amount(extra) is None else hours * 60 + _amount(extra))
+        found.append((m.start(), m.end(), value))
+    # "an hour and a half", "2 and a half hours", "two-and-a-half-hour".
+    for m in re.finditer(lead + num + r"[\s-]+(?:hours?[\s-]+)?and[\s-]+a[\s-]+half(?:[\s-]+hours?)?\b", text, flags):
         tail = m.group(0).lower()
-        if "hour" not in tail or not is_whole(m, 1) or is_rate(m.start(), m.group(1).lower() in ("a", "an")):
-            continue
         hours = _amount(m.group(1))
-        if hours is not None:
-            yield hours * 60 + 30
+        ok = ("hour" in tail and hours is not None and is_whole(m, 1)
+              and not is_rate(m.start(), m.group(1).lower() in ("a", "an")))
+        found.append((m.start(), m.end(), hours * 60 + 30 if ok else None))
     for m in re.finditer(r"\b(?:(?:a|one)\s+)?half(?:\s+an?|-|\s+)?\s*hour\b", text, flags):
-        if not is_rate(m.start(), True):
-            yield decimal.Decimal(30)
+        ok = not is_rate(m.start(), True) and not continues(m.start())
+        found.append((m.start(), m.end(), decimal.Decimal(30) if ok else None))
     for m in re.finditer(r"\b(?:(?:a|one)\s+)?(three[\s-]+)?quarters?(?:\s+of\s+an?|-|\s+)?\s*hour\b", text, flags):
-        if not is_rate(m.start(), True):
-            yield decimal.Decimal(45 if m.group(1) else 15)
+        ok = not is_rate(m.start(), True) and not continues(m.start())
+        found.append((m.start(), m.end(), decimal.Decimal(45 if m.group(1) else 15) if ok else None))
+
+    # Sweep in start order (longest first at a tie): a span is inside a longer one when
+    # an earlier span reaches past its end, or reaches its end from an earlier start.
+    best_end, best_start = -1, -1
+    for start, end, value in sorted(found, key=lambda span: (span[0], -span[1])):
+        inside = best_end > end or (best_end == end and best_start < start)
+        if end > best_end:
+            best_end, best_start = end, start
+        if not inside and value is not None:
+            yield value
 
 
 def _is_minutes_sourced(minutes, source_text):
