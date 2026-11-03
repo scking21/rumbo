@@ -290,7 +290,8 @@ def _stated_minutes(source_text):
     "a half-hour", "a quarter of an hour", "three quarters of an hour",
     "an hour and a half", "2 and a half hours", "1 hour 15 minutes", "2h30".
     A range ("1-2 hours"), a signed value or part of a longer token ("1e2 hours",
-    "v2 hours") states nothing, and neither does a rate ("$150 an hour"). Hours
+    "v2 hours") states nothing, and neither does a rate or frequency ("$150 an
+    hour", "$150 per half hour", "every 2 hours"). Hours
     followed by "and a half" or "and a quarter" never state the whole hours alone.
     """
     flags = re.IGNORECASE
@@ -298,9 +299,17 @@ def _stated_minutes(source_text):
     lead = r"(?<![\w.:,\u2212-])"
     text = source_text
 
-    def is_rate_or_part(m):
-        # "$150 an hour" is a rate, and "half an hour" is not 60.
-        return re.search(r"(?:\d|per|half|quarters?(?:\s+of)?)\s*$", text[max(0, m.start() - 24):m.start()], flags) is not None
+    def is_rate(start, after_price):
+        # A price or frequency names a rate, not a duration: "$150 an hour", "$150 per
+        # half hour", "a shuttle every hour", "$20/half hour". A price directly before
+        # counts only for a phrase without its own number; clock digits ("9:00") are not a price.
+        before = text[max(0, start - 24):start]
+        price = r"|(?<![\d:.])\d+(?:\.\d+)?[kK]?" if after_price else ""
+        return re.search(r"(?:\bper|\bevery|/%s)\s*(?:an?\s+)?$" % price, before, flags) is not None
+
+    def is_part(m):
+        # The "an hour" inside "half an hour" or "a quarter of an hour" is not 60.
+        return re.search(r"(?:half|quarters?(?:\s+of)?)\s*$", text[max(0, m.start() - 24):m.start()], flags) is not None
 
     def has_fraction(m):
         # "an hour and a half" and "2 hours and a quarter" never state the whole hours alone.
@@ -311,7 +320,8 @@ def _stated_minutes(source_text):
                          + r"(?:[\s,]*(?:and\s+)?(\d{1,2}|%s)[\s-]*%s|(?<=h)(\d{2})\b)?" % (NUMBER_WORD, MINUTE_UNIT),
                          text, flags):
         hours = _amount(m.group(1))
-        if hours is None or has_fraction(m) or (m.group(1).lower() in ("a", "an") and is_rate_or_part(m)):
+        article = m.group(1).lower() in ("a", "an")
+        if hours is None or has_fraction(m) or is_rate(m.start(), article) or (article and is_part(m)):
             continue
         extra = m.group(2) or m.group(3)
         extra = _amount(extra) if extra else decimal.Decimal(0)
@@ -321,15 +331,17 @@ def _stated_minutes(source_text):
     # "an hour and a half", "2 and a half hours", "one and a half hours".
     for m in re.finditer(lead + num + r"\s+(?:hours?\s+)?and\s+a\s+half(?:\s+hours?)?\b", text, flags):
         tail = m.group(0).lower()
-        if "hour" not in tail:
+        if "hour" not in tail or is_rate(m.start(), m.group(1).lower() in ("a", "an")):
             continue
         hours = _amount(m.group(1))
         if hours is not None:
             yield hours * 60 + 30
     for m in re.finditer(r"\b(?:(?:a|one)\s+)?half(?:\s+an?|-|\s+)?\s*hour\b", text, flags):
-        yield decimal.Decimal(30)
-    for m in re.finditer(r"\b(three[\s-]+)?quarters?(?:\s+of\s+an?|-|\s+)?\s*hour\b", text, flags):
-        yield decimal.Decimal(45 if m.group(1) else 15)
+        if not is_rate(m.start(), True):
+            yield decimal.Decimal(30)
+    for m in re.finditer(r"\b(?:(?:a|one)\s+)?(three[\s-]+)?quarters?(?:\s+of\s+an?|-|\s+)?\s*hour\b", text, flags):
+        if not is_rate(m.start(), True):
+            yield decimal.Decimal(45 if m.group(1) else 15)
 
 
 def _is_minutes_sourced(minutes, source_text):
