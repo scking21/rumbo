@@ -290,7 +290,8 @@ def _stated_minutes(source_text):
     "a half-hour", "a quarter of an hour", "three quarters of an hour",
     "an hour and a half", "2 and a half hours", "1 hour 15 minutes", "2h30".
     A range ("1-2 hours"), a signed value or part of a longer token ("1e2 hours",
-    "v2 hours") states nothing, and neither does a rate ("$150 an hour").
+    "v2 hours") states nothing, and neither does a rate ("$150 an hour"). Hours
+    followed by "and a half" or "and a quarter" never state the whole hours alone.
     """
     flags = re.IGNORECASE
     num = r"(\d+(?:\.\d+)?|%s|an?)" % NUMBER_WORD
@@ -298,16 +299,19 @@ def _stated_minutes(source_text):
     text = source_text
 
     def is_rate_or_part(m):
-        # "$150 an hour" is a rate; "half an hour" and "an hour and a half" are not 60.
-        return (re.search(r"(?:\d|per|half|quarters?(?:\s+of)?)\s*$", text[max(0, m.start() - 24):m.start()], flags) is not None
-                or re.match(r"\s+and\s+a\s+half", text[m.end():], flags) is not None)
+        # "$150 an hour" is a rate, and "half an hour" is not 60.
+        return re.search(r"(?:\d|per|half|quarters?(?:\s+of)?)\s*$", text[max(0, m.start() - 24):m.start()], flags) is not None
+
+    def has_fraction(m):
+        # "an hour and a half" and "2 hours and a quarter" never state the whole hours alone.
+        return re.match(r"\s+and\s+an?\s+(?:half|quarter)\b", text[m.end():], flags) is not None
 
     # Hours, optionally followed by minutes: "2 hours", "an hour 15 minutes", "2h30".
     for m in re.finditer(lead + num + r"[\s-]*" + HOUR_UNIT
                          + r"(?:[\s,]*(?:and\s+)?(\d{1,2}|%s)[\s-]*%s|(?<=h)(\d{2})\b)?" % (NUMBER_WORD, MINUTE_UNIT),
                          text, flags):
         hours = _amount(m.group(1))
-        if hours is None or (m.group(1).lower() in ("a", "an") and is_rate_or_part(m)):
+        if hours is None or has_fraction(m) or (m.group(1).lower() in ("a", "an") and is_rate_or_part(m)):
             continue
         extra = m.group(2) or m.group(3)
         extra = _amount(extra) if extra else decimal.Decimal(0)

@@ -61,6 +61,8 @@ class DurationPhrasingTests(unittest.TestCase):
             ('9:00 start, a quarter-hour break, sixty minutes of yoga, free until 11:00.', [15, 60], '11:00'),
             ('9:00 start, three quarters of an hour of drills, done 11:00.', [45], '11:00'),
             ('Talk at 9:00, one and a half hours, room booked till 11:00.', [90], '11:00'),
+            ('Talk at 9:00, one hour and a half, room booked till 11:00.', [90], '11:00'),
+            ('Lab from 9:00, 2 hours and a half, vacate by 11:30.', [150], '11:30'),
         )
         for words, segments, end in cases:
             with self.subTest(words=words):
@@ -78,6 +80,10 @@ class DurationPhrasingTests(unittest.TestCase):
             ('the DJ is $150 an hour, 9:00 to 11:00', 60),
             ('half an hour of setup, 9:00 to 11:00', 60),
             ('an hour and a half, 9:00 to 11:00', 60),
+            ('one hour and a half, 9:00 to 11:00', 60),
+            ('1 hour and a half, 9:00 to 11:00', 60),
+            ('2 hours and a half, 9:00 to 11:00', 120),
+            ('2 hours and a quarter, 9:00 to 11:00', 120),
             ('3-5 hours, 9:00 to 11:00', 180),
             ('3-5 hours, 9:00 to 11:00', 300),
             ('two and a half hours, 9:00 to 11:00', 30),
