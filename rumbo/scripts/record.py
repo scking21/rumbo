@@ -338,8 +338,11 @@ def _stated_minutes(source_text):
     found = []
 
     def continues(start):
-        # A fraction after "word-" or "and" belongs to a longer phrase.
-        return re.search(r"(?:[A-Za-z]-|\band[\s-]+(?:an?[\s-]+)?)$", text[max(0, start - 12):start], flags) is not None
+        # A fraction after "word-" ("two-and-a-half-hour"), or after "and" that follows a
+        # number or an hour word ("one hundred and a half hours"), belongs to a longer
+        # phrase. After any other "and" it is a duration of its own ("a talk and a half-hour break").
+        return re.search(r"(?:[A-Za-z]-|(?:\d|\b(?:%s|hundred|thousand|hours?|hrs?))[\s-]+and[\s-]+(?:an?[\s-]+)?)$"
+                         % NUMBER_WORD, text[max(0, start - 40):start], flags) is not None
 
     # Hours, optionally followed by minutes: "2 hours", "an hour 15 minutes", "2h30".
     for m in re.finditer(lead + num + r"[\s-]*" + HOUR_UNIT

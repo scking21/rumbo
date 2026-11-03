@@ -74,6 +74,9 @@ class DurationPhrasingTests(unittest.TestCase):
             ('Start 9:00, an hour and a quarter of rehearsal, finish by 11:00.', [75], '11:00'),
             ('Start 9:00, 1 hour plus 15 minutes, finish by 11:00.', [75], '11:00'),
             ('Start 9:00, 2 hours and 3 breaks, finish by 11:00.', [120], '11:00'),
+            ('Start 9:00, a 45-minute talk and a half-hour break, finish by 11:00.', [45, 30], '11:00'),
+            ('Start 9:00, an hour of setup and half an hour of rehearsal, finish by 11:00.', [60, 30], '11:00'),
+            ('Start 9:00, lunch and a quarter-hour walk, finish by 11:00.', [15], '11:00'),
         )
         for words, segments, end in cases:
             with self.subTest(words=words):
