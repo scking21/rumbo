@@ -70,6 +70,10 @@ class DurationPhrasingTests(unittest.TestCase):
             ('Lab from 9:00, 2 hours and a half, vacate by 11:30.', [150], '11:30'),
             ('Start 9:00, a two-and-a-half-hour workshop, finish by 11:30.', [150], '11:30'),
             ('Start 9:00, a one-and-a-half-hour talk, finish by 11:00.', [90], '11:00'),
+            ('Start 9:00, an hour and three quarters of rehearsal, finish by 11:00.', [105], '11:00'),
+            ('Start 9:00, an hour and a quarter of rehearsal, finish by 11:00.', [75], '11:00'),
+            ('Start 9:00, 1 hour plus 15 minutes, finish by 11:00.', [75], '11:00'),
+            ('Start 9:00, 2 hours and 3 breaks, finish by 11:00.', [120], '11:00'),
         )
         for words, segments, end in cases:
             with self.subTest(words=words):
@@ -115,6 +119,11 @@ class DurationPhrasingTests(unittest.TestCase):
             ('one hundred and a half hours, 9:00 to 11:00', 30),
             ('$95 per two-and-a-half-hour session, 9:00 to 11:00', 30),
             ('$95 per two-and-a-half-hour session, 9:00 to 11:00', 150),
+            ('Start 9:00, an hour and three quarters of rehearsal, finish by 11:00', 60),
+            ('an hour and a third, 9:00 to 11:00', 60),
+            ('1 hour and 20, 9:00 to 11:00', 60),
+            ('1 hour plus 15 minutes, 9:00 to 11:00', 60),
+            ('2 hours plus a half, 9:00 to 11:00', 120),
             ('$80 per 2 hours, 9:00 to 11:00', 120),
             ('The tutor charges 150 dollars an hour; available 9:00 to 11:00', 60),
             ('fifty dollars an hour, 9:00 to 11:00', 60),

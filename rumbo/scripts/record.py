@@ -324,8 +324,12 @@ def _stated_minutes(source_text):
                 or (m.start(group), m.end(group)) in whole_numbers)
 
     def has_fraction(m):
-        # "an hour and a half" and "2 hours and a quarter" never state the whole hours alone.
-        return re.match(r"\s+and\s+an?\s+(?:half|quarter)\b", text[m.end():], flags) is not None
+        # Whole hours that the user continued ("an hour and three quarters", "1 hour and
+        # 20", "2 hours plus a third") never state the whole hours alone; the full phrase
+        # is read below when it can be, and otherwise states nothing.
+        return re.match(r"\s*,?\s*(?:and|plus)[\s-]+(?:(?:(?:an?|one|two|three)[\s-]+)?(?:half|halves|quarters?|thirds?)\b"
+                        r"|(?:\d+|%s)\s*(?:[,.;)]|$|minutes?\b|mins?\b))" % NUMBER_WORD,
+                        text[m.end():m.end() + 40], flags) is not None
 
     # Every duration phrase is a candidate span with its minutes, or None when it is a
     # rate or otherwise states nothing. Only the longest phrases count: a span inside a
@@ -339,7 +343,7 @@ def _stated_minutes(source_text):
 
     # Hours, optionally followed by minutes: "2 hours", "an hour 15 minutes", "2h30".
     for m in re.finditer(lead + num + r"[\s-]*" + HOUR_UNIT
-                         + r"(?:[\s,]*(?:and\s+)?(\d{1,2}|%s)[\s-]*%s|(?<=h)(\d{2})\b)?" % (NUMBER_WORD, MINUTE_UNIT),
+                         + r"(?:[\s,]*(?:(?:and|plus)\s+)?(\d{1,2}|%s)[\s-]*%s|(?<=h)(\d{2})\b)?" % (NUMBER_WORD, MINUTE_UNIT),
                          text, flags):
         hours = _amount(m.group(1))
         article = m.group(1).lower() in ("a", "an")
@@ -350,13 +354,20 @@ def _stated_minutes(source_text):
             # "1 hour 15 minutes" states 75, never the whole hours alone.
             value = hours * 60 if extra is None else (None if _amount(extra) is None else hours * 60 + _amount(extra))
         found.append((m.start(), m.end(), value))
-    # "an hour and a half", "2 and a half hours", "two-and-a-half-hour".
-    for m in re.finditer(lead + num + r"[\s-]+(?:hours?[\s-]+)?and[\s-]+a[\s-]+half(?:[\s-]+hours?)?\b", text, flags):
+    # "an hour and a half", "2 and a half hours", "two-and-a-half-hour",
+    # "an hour and a quarter", "an hour and three quarters".
+    fractions = {"half": 30, "quarter": 15, "quarters": 45}
+    for m in re.finditer(lead + num + r"[\s-]+(?:hours?[\s-]+)?and[\s-]+(?:an?|three)[\s-]+(half|quarters?)\b"
+                         r"(?:[\s-]+(?:of[\s-]+an?[\s-]+)?hours?\b)?", text, flags):
         tail = m.group(0).lower()
         hours = _amount(m.group(1))
+        three = re.search(r"\bthree[\s-]+quarters\b", tail) is not None
+        if m.group(2).lower() == "quarters" and not three or three and m.group(2).lower() != "quarters":
+            found.append((m.start(), m.end(), None))
+            continue
         ok = ("hour" in tail and hours is not None and is_whole(m, 1)
               and not is_rate(m.start(), m.group(1).lower() in ("a", "an")))
-        found.append((m.start(), m.end(), hours * 60 + 30 if ok else None))
+        found.append((m.start(), m.end(), hours * 60 + fractions[m.group(2).lower()] if ok else None))
     for m in re.finditer(r"\b(?:(?:a|one)\s+)?half(?:\s+an?|-|\s+)?\s*hour\b", text, flags):
         ok = not is_rate(m.start(), True) and not continues(m.start())
         found.append((m.start(), m.end(), decimal.Decimal(30) if ok else None))
