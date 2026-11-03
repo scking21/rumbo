@@ -337,10 +337,11 @@ def _stated_minutes(source_text):
                 or is_rate(m.start(), article) or (article and is_part(m))):
             continue
         extra = m.group(2) or m.group(3)
-        extra = _amount(extra) if extra else decimal.Decimal(0)
-        if extra is not None:
-            yield hours * 60 + extra
+        if extra is None:
             yield hours * 60
+        elif _amount(extra) is not None:
+            # "1 hour 15 minutes" states 75, never the whole hours alone.
+            yield hours * 60 + _amount(extra)
     # "an hour and a half", "2 and a half hours", "one and a half hours".
     for m in re.finditer(lead + num + r"\s+(?:hours?\s+)?and\s+a\s+half(?:\s+hours?)?\b", text, flags):
         tail = m.group(0).lower()
