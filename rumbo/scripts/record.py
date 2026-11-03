@@ -160,6 +160,72 @@ def _source_text(record, check):
     return "\n".join(quotes)
 
 
+UNIT_WORDS = {w: i for i, w in enumerate(
+    "zero one two three four five six seven eight nine ten eleven twelve thirteen "
+    "fourteen fifteen sixteen seventeen eighteen nineteen".split())}
+TENS_WORDS = {w: 10 * i for i, w in enumerate(
+    "twenty thirty forty fifty sixty seventy eighty ninety".split(), 2)}
+SCALE_WORDS = {"thousand": 1000, "million": 10 ** 6, "billion": 10 ** 9}
+# Written after a number: "$1.5k", "1.8 million", "$2.5M" (bare "5m" is meters or minutes).
+SCALE_SUFFIX = re.compile(r"(?:\s*(thousand|million|billion)\b|([kK])\b|([mM]|bn)\b)", re.IGNORECASE)
+
+
+def _word_numbers(text):
+    """Yield (start, end, Decimal) for each spelled cardinal number in text.
+
+    "twenty-five", "four hundred fifty", "one hundred and twenty", "a thousand",
+    "five thousand". Two units or two tens in a row end a number ("five six" is
+    5 and 6), and "and" joins only after hundred or a scale word.
+    """
+    tokens = [(m.group(0).lower(), m.start(), m.end()) for m in re.finditer(r"[A-Za-z]+", text)]
+    i = 0
+    while i < len(tokens):
+        word, start, end = tokens[i]
+        article = word in ("a", "an") and i + 1 < len(tokens) and tokens[i + 1][0] in ("hundred", *SCALE_WORDS)
+        if word not in UNIT_WORDS and word not in TENS_WORDS and not article:
+            i += 1
+            continue
+        total, current, last, j, stop = 0, 0, None, i, end
+        if article:
+            current, last, j = 1, "unit", i + 1
+        while j < len(tokens):
+            word, w_start, w_end = tokens[j]
+            gap = text[stop:w_start] if j > i else ""
+            if j > i and not re.fullmatch(r"\s+|\s*-\s*", gap):
+                break
+            if word in UNIT_WORDS:
+                value = UNIT_WORDS[word]
+                if last == "unit" or (last == "tens" and value >= 10) or last == "tens+unit":
+                    break
+                last = "tens+unit" if last == "tens" else "unit"
+                current += value
+            elif word in TENS_WORDS:
+                if last in ("unit", "tens", "tens+unit"):
+                    break
+                current += TENS_WORDS[word]
+                last = "tens"
+            elif word == "hundred":
+                if last not in ("unit",) or not 1 <= current <= 9:
+                    break
+                current *= 100
+                last = "hundred"
+            elif word in SCALE_WORDS:
+                if last is None or last == "scale" or current == 0:
+                    break
+                total += current * SCALE_WORDS[word]
+                current, last = 0, "scale"
+            elif word == "and" and last in ("hundred", "scale") and j + 1 < len(tokens) \
+                    and (tokens[j + 1][0] in UNIT_WORDS or tokens[j + 1][0] in TENS_WORDS):
+                pass
+            else:
+                break
+            stop = w_end
+            j += 1
+        if last is not None:
+            yield start, stop, decimal.Decimal(total + current)
+        i = max(j, i + 1)
+
+
 def _is_number_sourced(num, source_text):
     """Return True if num is sourced in source_text per spec.
     The amount 0 is always sourced.
@@ -174,31 +240,105 @@ def _is_number_sourced(num, source_text):
     target = decimal.Decimal(str(num))
     for match in re.finditer(r"(?<![\d.:])(\d+(?:\.\d+)?(?:[eE][-+]?\d+)?)(?![\d:]|\.\d)", no_commas):
         value = decimal.Decimal(match.group(1))
-        # "$1.5k" is 1500, never 1.5.
-        if re.match(r"[kK]\b", no_commas[match.end():]):
-            value *= 1000
-        # A minus sign (or "-$") not preceded by a digit negates; "30-50" stays a range.
-        if re.search(r"(?:^|[^\d])[-\u2212]\$?$", no_commas[:match.start()]):
+        # Only the last few characters matter; a leading space stands for the start.
+        before = (" " + no_commas)[max(0, match.start() - 2):match.start() + 1]
+        # "$1.5k" is 1500 and "1.8 million" is 1800000, never 1.5 or 1.8. A bare "M"
+        # scales only after a currency sign: "$2.5M" is money, "5m" is a length.
+        scale = SCALE_SUFFIX.match(no_commas, match.end())
+        if scale and (scale.group(1) or scale.group(2) or re.search(r"[$\u20ac\u00a3]$", before)):
+            word = (scale.group(1) or scale.group(2) or scale.group(3)).lower()
+            value *= {"k": 1000, "m": 10 ** 6, "bn": 10 ** 9}.get(word) or SCALE_WORDS[word]
+        # A minus sign (or "-$", "-\u20ac") not preceded by a digit negates; "30-50" stays a range.
+        if re.search(r"(?:^|[^\d])[-\u2212][$\u20ac\u00a3]?$", before):
+            value = -value
+        if value == target:
+            return True
+    # Spelled numbers: "twelve", "four hundred fifty dollars", "five thousand".
+    for start, end, value in _word_numbers(source_text):
+        before = source_text[max(0, start - 8):start]
+        if re.search(r"[-\u2212]\s*$", before) and not re.search(r"[A-Za-z]-\s*$", before):
             value = -value
         if value == target:
             return True
     return False
 
 
+HOUR_UNIT = r"(?:hours?\b|hrs?\b|h(?=\d{2}(?:m\b|\b))|h\b)\.?"
+MINUTE_UNIT = r"(?:minutes?|mins?|m)\b\.?"
+NUMBER_WORD = r"(?:%s)(?:[\s-]+(?:%s))?" % ("|".join(sorted(TENS_WORDS, key=len, reverse=True)),
+                                              "|".join(sorted(UNIT_WORDS, key=len, reverse=True)))
+NUMBER_WORD = r"(?:%s|%s)" % (NUMBER_WORD, "|".join(sorted(UNIT_WORDS, key=len, reverse=True)))
+
+
+def _amount(text):
+    """Decimal value of a digit string or a spelled number, or None."""
+    text = text.strip()
+    if re.fullmatch(r"\d+(?:\.\d+)?", text):
+        return decimal.Decimal(text)
+    if text.lower() in ("a", "an"):
+        return decimal.Decimal(1)
+    found = list(_word_numbers(text))
+    if len(found) == 1 and found[0][0] == 0 and found[0][1] == len(text):
+        return found[0][2]
+    return None
+
+
+def _stated_minutes(source_text):
+    """Yield every duration, in minutes, that source_text states in hours.
+
+    "2-hour", "1.5 hours", "2h", "two hours", "an hour", "half an hour",
+    "a half-hour", "a quarter of an hour", "three quarters of an hour",
+    "an hour and a half", "2 and a half hours", "1 hour 15 minutes", "2h30".
+    A range ("1-2 hours"), a signed value or part of a longer token ("1e2 hours",
+    "v2 hours") states nothing, and neither does a rate ("$150 an hour").
+    """
+    flags = re.IGNORECASE
+    num = r"(\d+(?:\.\d+)?|%s|an?)" % NUMBER_WORD
+    lead = r"(?<![\w.:,\u2212-])"
+    text = source_text
+
+    def is_rate_or_part(m):
+        # "$150 an hour" is a rate; "half an hour" and "an hour and a half" are not 60.
+        return (re.search(r"(?:\d|per|half|quarters?(?:\s+of)?)\s*$", text[max(0, m.start() - 24):m.start()], flags) is not None
+                or re.match(r"\s+and\s+a\s+half", text[m.end():], flags) is not None)
+
+    # Hours, optionally followed by minutes: "2 hours", "an hour 15 minutes", "2h30".
+    for m in re.finditer(lead + num + r"[\s-]*" + HOUR_UNIT
+                         + r"(?:[\s,]*(?:and\s+)?(\d{1,2}|%s)[\s-]*%s|(?<=h)(\d{2})\b)?" % (NUMBER_WORD, MINUTE_UNIT),
+                         text, flags):
+        hours = _amount(m.group(1))
+        if hours is None or (m.group(1).lower() in ("a", "an") and is_rate_or_part(m)):
+            continue
+        extra = m.group(2) or m.group(3)
+        extra = _amount(extra) if extra else decimal.Decimal(0)
+        if extra is not None:
+            yield hours * 60 + extra
+            yield hours * 60
+    # "an hour and a half", "2 and a half hours", "one and a half hours".
+    for m in re.finditer(lead + num + r"\s+(?:hours?\s+)?and\s+a\s+half(?:\s+hours?)?\b", text, flags):
+        tail = m.group(0).lower()
+        if "hour" not in tail:
+            continue
+        hours = _amount(m.group(1))
+        if hours is not None:
+            yield hours * 60 + 30
+    for m in re.finditer(r"\b(?:(?:a|one)\s+)?half(?:\s+an?|-|\s+)?\s*hour\b", text, flags):
+        yield decimal.Decimal(30)
+    for m in re.finditer(r"\b(three[\s-]+)?quarters?(?:\s+of\s+an?|-|\s+)?\s*hour\b", text, flags):
+        yield decimal.Decimal(45 if m.group(1) else 15)
+
+
 def _is_minutes_sourced(minutes, source_text):
-    """True when a duration in minutes is stated in minutes or as hours ("2-hour", "1.5 hours")."""
+    """True when a duration in minutes is stated in minutes or in hours ("2-hour", "an hour and a half")."""
     if _is_number_sourced(minutes, source_text):
         return True
-    for match in re.finditer(r"(?<![\w.:,\u2212-])(\d+(?:\.\d+)?)[\s-]*(?:hours?|hrs?)\b", source_text, re.IGNORECASE):
-        if decimal.Decimal(match.group(1)) * 60 == minutes:
-            return True
-    return False
+    return any(value == minutes for value in _stated_minutes(source_text))
 
 
 def _is_time_sourced(time_str, source_text):
     """Return True if time_str (HH:MM) is sourced in source_text.
     Parse the check time as (h, m) from "HH:MM"; return False if malformed.
-    Find time tokens with re.finditer("(?<![0-9:])([0-9]{1,2}):([0-9]{2})(?::([0-9]{2}))?(?![0-9:])(?:\\s*([AaPp])\\.?\\s*[Mm]\\b\\.)?", text).
+    Find time tokens with re.finditer("(?<![0-9:])([0-9]{1,2}):([0-9]{2})(?::([0-9]{2}))?(?![0-9]|:[0-9])(?:\\s*([AaPp])\\.?\\s*[Mm]\\b\\.)?", text).
     Skip a token whose seconds group is present and not "00". Meridiem: p/P and hour < 12 -> hour + 12; a/A and hour == 12 -> 0. Skip hours > 23 or minutes > 59.
     Sourced if any token's (hour, minute) == (h, m).
     """
@@ -213,7 +353,7 @@ def _is_time_sourced(time_str, source_text):
         return False
 
     # Find time tokens with the specified regex
-    for match in re.finditer(r"(?<![0-9:])([0-9]{1,2}):([0-9]{2})(?::([0-9]{2}))?(?![0-9:])(?:\s*([AaPp])\.?\s*[Mm]\b\.?)?", source_text):
+    for match in re.finditer(r"(?<![0-9:])([0-9]{1,2}):([0-9]{2})(?::([0-9]{2}))?(?![0-9]|:[0-9])(?:\s*([AaPp])\.?\s*[Mm]\b\.?)?", source_text):
         hour_group = match.group(1)
         minute_group = match.group(2)
         seconds_group = match.group(3)
@@ -280,9 +420,16 @@ def _is_date_sourced(date_str, source_text):
     sept = r"|Sept\.?" if date.month == 9 else ""
     month = rf"(?:{name}|{name[:3]}\.?{sept})"
     day = rf"0?{date.day}(?:st|nd|rd|th)?"
+    other = r"\d{1,2}(?:st|nd|rd|th)?"
+    dash = r"\s*[-\u2013\u2014]\s*"
     patterns = [
         rf"\b{month}\s+{day}\b",
         rf"(?<![\d/.:-]){day}\s+(?:of\s+)?{month}(?![a-z])",
+        # Both ends of a range, never the days between: "June 3-5", "12–14 July".
+        rf"\b{month}\s+{day}{dash}{other}\b",
+        rf"\b{month}\s+{other}{dash}{day}\b",
+        rf"(?<![\d/.:-]){day}{dash}{other}\s+(?:of\s+)?{month}(?![a-z])",
+        rf"(?<![\d/.:-]){other}{dash}{day}\s+(?:of\s+)?{month}(?![a-z])",
         rf"\b{date.month:02d}-{date.day:02d}\b",
         rf"(?<![\d/.:-])0?{date.month}/0?{date.day}(?!\d)",
         rf"(?<![\d/.:-])0?{date.day}/0?{date.month}(?!\d)",
@@ -324,7 +471,12 @@ def unsourced_values(record, check):
     elif kind == "within_budget":
         # amounts N for each amount
         for amt in check["amounts"]:
-            if not _is_number_sourced(amt, source):
+            if isinstance(amt, dict):
+                # The script multiplies; the user must have said both factors.
+                for key in ("unit", "quantity"):
+                    if not _is_number_sourced(amt[key], source):
+                        unsourced.append(f"amounts {key} {fmt_num(amt[key])}")
+            elif not _is_number_sourced(amt, source):
                 unsourced.append(f"amounts {fmt_num(amt)}")
         # total_cap N
         cap = check["total_cap"]
@@ -355,14 +507,26 @@ def parse_time(text):
 
 
 def fmt_minutes(total):
-    return "%02d:%02d" % divmod(total, 60)
+    """Clock time for minutes since the first midnight: "12:35", "01:30 next day"."""
+    days, minutes = divmod(total, 24 * 60)
+    text = "%02d:%02d" % divmod(minutes, 60)
+    if days == 1:
+        text += " next day"
+    elif days > 1:
+        text += " %d days later" % days
+    return text
 
 
-def parse_date(text):
+def parse_date(text, leap=False):
+    """Return a date, or None when malformed.
+
+    MM-DD dates (no year stated) compare within reference year 2001, or within
+    leap year 2000 when either date in the comparison is 02-29, which the user
+    may state without a year.
+    """
     if not isinstance(text, str):
         return None
-    # MM-DD dates (no year stated) compare within non-leap reference year 2001.
-    candidate = text if _has_year(text) else "2001-" + text
+    candidate = text if _has_year(text) else ("2000-" if leap or text == "02-29" else "2001-") + text
     if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", candidate):
         return None
     try:
@@ -862,6 +1026,14 @@ def _validate_check_values(base, kind, check):
                 )
             elif parse_time(check[field]) is None:
                 bad("%s.%s" % (base, field), "use HH:MM 24-hour, e.g. 09:45")
+        next_day = check.get("end_next_day", False)
+        if not isinstance(next_day, bool):
+            bad("%s.end_next_day" % base, "use true when the window ends after midnight, or leave it out")
+        elif (not next_day and parse_time(check.get("start")) is not None
+              and parse_time(check.get("end")) is not None
+              and parse_time(check["end"]) < parse_time(check["start"])):
+            bad("%s.end" % base, "end %s is before start %s; if the window runs past midnight, "
+                "set end_next_day: true, otherwise fix the times" % (check["end"], check["start"]))
         segments = check.get("segments_min")
         if segments is None:
             faults.append(
@@ -922,11 +1094,16 @@ def _validate_check_values(base, kind, check):
             bad("%s.amounts" % base, "use a list of non-negative numbers")
         else:
             for amount_index, amount in enumerate(amounts):
-                if not _is_number(amount) or amount < 0:
-                    bad(
-                        "%s.amounts[%d]" % (base, amount_index),
-                        "use a non-negative number",
-                    )
+                path = "%s.amounts[%d]" % (base, amount_index)
+                if isinstance(amount, dict):
+                    if set(amount) != {"unit", "quantity"}:
+                        bad(path, 'use {"unit": N, "quantity": N} with exactly those two keys')
+                        continue
+                    for key in ("unit", "quantity"):
+                        if not _is_number(amount[key]) or amount[key] < 0:
+                            bad("%s.%s" % (path, key), "use a non-negative number")
+                elif not _is_number(amount) or amount < 0:
+                    bad(path, 'use a non-negative number, or {"unit": N, "quantity": N} for a price per unit')
         cap = check.get("total_cap")
         if cap is None:
             faults.append("%s.total_cap: RECORD_MISSING_FIELD: add a number" % base)
@@ -949,6 +1126,8 @@ def evaluate_check(check):
     if kind == "fits_window":
         start = parse_time(check["start"])
         end = parse_time(check["end"])
+        if check.get("end_next_day"):
+            end += 24 * 60
         total = sum(check["segments_min"])
         computed = start + total
         if computed <= end:
@@ -958,22 +1137,40 @@ def evaluate_check(check):
             total,
             fmt_minutes(computed),
             computed - end,
-            check["end"],
+            fmt_minutes(end),
         )
         return False, detail
 
     if kind == "before":
-        first = parse_date(check["first"])
-        second = parse_date(check["second"])
+        leap = "02-29" in (check["first"], check["second"])
+        first = parse_date(check["first"], leap)
+        second = parse_date(check["second"], leap)
         if first <= second:
             return True, None
         # Calculate day difference
         days = (first - second).days
         unit = "day" if days == 1 else "days"
         detail = "%s is %d %s after %s" % (check["first"], days, unit, check["second"])
+        if not _has_year(check["first"]) and days > 182:
+            # More than half a year "after" usually means the dates cross a new year.
+            detail += (" in the same year; if %s is in the following year, ask the user "
+                       "for both years" % check["second"])
         return False, detail
 
-    amounts = [decimal.Decimal(str(value)) for value in check["amounts"]]
+    amounts, labels = [], []
+    for value in check["amounts"]:
+        if isinstance(value, dict):
+            unit = decimal.Decimal(str(value["unit"]))
+            quantity = decimal.Decimal(str(value["quantity"]))
+            with decimal.localcontext() as context:
+                # Enough digits for an exact product.
+                context.prec = len(unit.as_tuple().digits) + len(quantity.as_tuple().digits) + 2
+                line = unit * quantity
+            amounts.append(line)
+            labels.append("%s x %s = %s" % (fmt_num(unit), fmt_num(quantity), fmt_num(line)))
+        else:
+            amounts.append(decimal.Decimal(str(value)))
+            labels.append(None)
     cap = decimal.Decimal(str(check["total_cap"]))
     item_cap = check.get("item_cap")
     if item_cap is not None:
@@ -988,16 +1185,18 @@ def evaluate_check(check):
         total = sum(amounts, decimal.Decimal(0))
         problems = []
         if total > cap:
+            lines = [label for label in labels if label]
             problems.append(
-                "total %s exceeds total_cap %s by %s"
-                % (fmt_num(total), fmt_num(cap), fmt_num(total - cap))
+                "total %s exceeds total_cap %s by %s%s"
+                % (fmt_num(total), fmt_num(cap), fmt_num(total - cap),
+                   " (%s)" % "; ".join(lines) if lines else "")
             )
         if item_cap is not None:
-            for amount in amounts:
+            for amount, label in zip(amounts, labels):
                 if amount > item_cap:
                     problems.append(
                         "amount %s exceeds item_cap %s"
-                        % (fmt_num(amount), fmt_num(item_cap))
+                        % (label or fmt_num(amount), fmt_num(item_cap))
                     )
         if not problems:
             return True, None

@@ -82,18 +82,27 @@ Whenever the record holds a schedule, a deadline relative to an event, or a
 budget cap, add a check:
 
 - `fits_window` — `start`, `end` as `HH:MM`, `segments_min` as a list of minutes.
+  If the window runs past midnight ("9pm to 1am"), add `"end_next_day": true`.
 - `before` — `first`, `second` as either both `MM-DD` or both `YYYY-MM-DD`.
-- `within_budget` — `amounts`, `total_cap`, optional `item_cap`.
+- `within_budget` — `amounts`, `total_cap`, optional `item_cap`. For a price
+  per unit ("$45 per person for 12", "$150 an hour for 4 hours") write the
+  entry as `{"unit": 45, "quantity": 12}` and let the script multiply; never
+  put a product you computed in `amounts`.
 
 Run `check` before delivering any plan, schedule or summary. A FAIL line is a
 conflict: resolve it, or state it plainly to the user.
 
-A value is sourced however the user wrote it: "March 20th", "20 March" or "3/20"
-for `03-20`; "9am" or "noon" for `09:00` or `12:00`; "2-hour" for 120 minutes;
-"$1.5k" for 1500. A bare "at 9" does not say morning or evening: ask.
+A value is sourced however the user wrote it: "March 20th", "20 March", "3/20"
+or the end of "March 18–20" for `03-20`; "9am" or "noon" for `09:00` or `12:00`;
+"2-hour", "two hours" or "1 hour 15 minutes" for minutes ("an hour and a
+half" is 90, "half an hour" 30); "twenty-minute" for 20;
+"$1.5k", "1.5 thousand" or "$1.5M" for 1500 or 1500000. Copy the user's numbers
+exactly; do not convert them yourself. A bare "at 9" does not say morning or
+evening: ask.
 
 Write dates as MM-DD unless the user stated the year; never add a year the user
-did not say; if the dates cross a year boundary, you need the user's years.
+did not say; if the dates cross a year boundary, you need the user's years. A
+`before` failure that says "in the same year" is that case: ask the user.
 
 ## Tell the user
 
