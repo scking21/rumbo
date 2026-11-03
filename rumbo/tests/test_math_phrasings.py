@@ -54,6 +54,7 @@ class DurationPhrasingTests(unittest.TestCase):
             ('From 9:00: half an hour of setup, then a 45-minute talk, until 11:00.', [30, 45], '11:00'),
             ('At 9:00 half an hour of setup, then a 45-minute talk, until 11:00.', [30, 45], '11:00'),
             ('Two sessions from 9:00, each an hour, done by 11:00.', [60, 60], '11:00'),
+            ('Two sessions from 9:00, an hour each, done by 11:00; 150 dollars total.', [60, 60], '11:00'),
             ('The DJ is $150 an hour for 2 hours from 9:00 to 11:00.', [120], '11:00'),
             ('Start 9:00, an hour of trail, breakfast at 11:00.', [60], '11:00'),
             ('Rehearsal at 9:00 runs an hour and a half; the hall closes at 11:00.', [90], '11:00'),
@@ -94,6 +95,11 @@ class DurationPhrasingTests(unittest.TestCase):
             ('meds every 2 hours, 9:00 to 11:00', 120),
             ('$95 per hour and a half, 9:00 to 11:00', 90),
             ('$80 per 2 hours, 9:00 to 11:00', 120),
+            ('The tutor charges 150 dollars an hour; available 9:00 to 11:00', 60),
+            ('fifty dollars an hour, 9:00 to 11:00', 60),
+            ('four hundred fifty dollars an hour, 9:00 to 11:00', 60),
+            ('twenty-five bucks a half hour, 9:00 to 11:00', 30),
+            ('40 euros a quarter hour, 9:00 to 11:00', 15),
             ('3-5 hours, 9:00 to 11:00', 180),
             ('3-5 hours, 9:00 to 11:00', 300),
             ('two and a half hours, 9:00 to 11:00', 30),
@@ -189,6 +195,17 @@ class MidnightTests(unittest.TestCase):
         self.assertEqual(status, 'INVALID')
         self.assertIn('checks[0].end: CHECK_BAD_VALUE: end 01:00 is before start 21:00; '
                       'if the window runs past midnight, set end_next_day: true', detail)
+
+    def test_end_next_day_cannot_extend_a_same_day_window(self):
+        for end in ('10:00', '09:00'):
+            with self.subTest(end=end):
+                status, detail = verdict('Workshop from 9:00 to 10:00, 90 minutes of activities, or until 09:00',
+                                         window('09:00', end, [90], end_next_day=True))
+                self.assertEqual(status, 'INVALID')
+                self.assertIn('checks[0].end_next_day: CHECK_BAD_VALUE: end %s is not before start 09:00, '
+                              'so the window does not cross midnight; remove end_next_day' % end, detail)
+        self.assertEqual(verdict('Workshop from 9:00 to 10:00, 90 minutes of activities', window('09:00', '10:00', [90])),
+                         ('FAIL', '09:00 + 90 min ends 10:30, 30 min after 10:00'))
 
     def test_end_next_day_is_a_boolean(self):
         status, detail = verdict('9pm to 1am, 60 minutes', window('21:00', '01:00', [60], end_next_day='yes'))

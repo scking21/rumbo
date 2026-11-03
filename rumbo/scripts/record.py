@@ -300,11 +300,14 @@ def _stated_minutes(source_text):
     text = source_text
 
     def is_rate(start, after_price):
-        # A price or frequency names a rate, not a duration: "$150 an hour", "$150 per
-        # half hour", "a shuttle every hour", "$20/half hour". A price directly before
+        # A price or frequency names a rate, not a duration: "$150 an hour", "fifty
+        # dollars an hour", "$150 per half hour", "a shuttle every hour", "$20/half hour".
+        # A price directly before
         # counts only for a phrase without its own number; clock digits ("9:00") are not a price.
-        before = text[max(0, start - 24):start]
-        price = r"|(?<![\d:.])\d+(?:\.\d+)?[kK]?" if after_price else ""
+        before = text[max(0, start - 48):start]
+        price = (r"|(?:(?<![\d:.])\d+(?:\.\d+)?[kK]?|\b%s(?:[\s-]+(?:%s|hundred|thousand|and))*)"
+                 r"(?:\s*(?:dollars?|bucks|euros?|pounds?|quid|usd|eur|gbp|cents?)\b)?" % (NUMBER_WORD, NUMBER_WORD)
+                 if after_price else "")
         return re.search(r"(?:\bper|\bevery|/%s)\s*(?:an?\s+)?$" % price, before, flags) is not None
 
     def is_part(m):
@@ -1043,13 +1046,18 @@ def _validate_check_values(base, kind, check):
             elif parse_time(check[field]) is None:
                 bad("%s.%s" % (base, field), "use HH:MM 24-hour, e.g. 09:45")
         next_day = check.get("end_next_day", False)
+        start_min, end_min = parse_time(check.get("start")), parse_time(check.get("end"))
         if not isinstance(next_day, bool):
             bad("%s.end_next_day" % base, "use true when the window ends after midnight, or leave it out")
-        elif (not next_day and parse_time(check.get("start")) is not None
-              and parse_time(check.get("end")) is not None
-              and parse_time(check["end"]) < parse_time(check["start"])):
-            bad("%s.end" % base, "end %s is before start %s; if the window runs past midnight, "
-                "set end_next_day: true, otherwise fix the times" % (check["end"], check["start"]))
+        elif start_min is not None and end_min is not None:
+            # The clock times must say the window crosses midnight; the flag only confirms
+            # it, so it can never add a day to a window the user gave as same-day.
+            if not next_day and end_min < start_min:
+                bad("%s.end" % base, "end %s is before start %s; if the window runs past midnight, "
+                    "set end_next_day: true, otherwise fix the times" % (check["end"], check["start"]))
+            elif next_day and end_min >= start_min:
+                bad("%s.end_next_day" % base, "end %s is not before start %s, so the window does not "
+                    "cross midnight; remove end_next_day" % (check["end"], check["start"]))
         segments = check.get("segments_min")
         if segments is None:
             faults.append(
