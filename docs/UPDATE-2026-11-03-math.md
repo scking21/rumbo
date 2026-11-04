@@ -21,6 +21,18 @@ Recorded use of the adapter showed two kinds of wrong answer. Agents made a fail
 - **Agenda colons.** "9:00: welcome" sources 09:00. Only a colon followed by a digit starts seconds.
 - **Cost.** The source check took time quadratic in the length of the quoted text. On 0.3.8, 80 KB of quoted numbers took about 47 s, past the hooks' 10 s timeout, and a hook that times out does not block. It is now linear (under a second for 250 KB).
 
+## Hardened during review
+
+Codex review found 18 ways the wider reading could be wrong, and each is fixed with a regression test. Most let a value the agent chose pass as the user's. A few blocked an honest record. Every fix errs on the strict side: a phrase the reader cannot read whole sources nothing. The rules that came out of it:
+
+- Only the longest duration phrase counts, never a fragment of it. "two-and-a-half-hour" is 150, never 30, and "one hundred and one hours" is never 60.
+- Whole hours continued by a fraction or a bare number ("an hour and a third", "1 hour and 20") source nothing alone. A fraction with its own "hour" ("1 hour, and a half-hour break") is a separate duration.
+- A rate or frequency states no duration: "$150 an hour", "fifty dollars an hour", "per half hour", "every 2 hours", "twice an hour". A number counts as a price only with a currency sign, a currency word or "a"/"an", so "two half-hour sessions" is two durations.
+- "three-quarter hour" and "three quarters of an hour" are 45. "three quarter-hour breaks" is three of 15. "three quarter hour", with no hyphen, sources nothing.
+- A fraction followed by another unit ("two hours and a half day") sources nothing. A period after "hour" ends the sentence, so "1 hour. 15 minutes" is two durations.
+- For amounts, "fifteen hundred" is 1500. A number that cannot be read whole, continued by a fraction ("one and a half thousand"), after a spelled decimal point ("five million" in "one point five million") or before a plural fraction ("three quarters"), sources nothing.
+- `end_next_day` is valid only when the end clock time is before the start.
+
 ## Drift hooks from recent research
 
 Three changes follow 2026 studies of agent drift. Each is backed by a single preprint, and none has been tried in an installed Claude Code session yet.
