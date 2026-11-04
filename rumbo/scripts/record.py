@@ -243,9 +243,12 @@ AMOUNT_CONTINUED = re.compile(
 # Nor is the part after a spelled decimal point: "five million" in "one point five million".
 AMOUNT_AFTER_POINT = re.compile(r"\b(?:point|dot)[\s-]+$", re.IGNORECASE)
 # A scaled amount that runs into another number is one amount, "1 million 500 thousand"
-# (1500000) or "2 thousand 500 dollars" (2500): neither group is the user's amount alone.
+# (1500000), "1 million five hundred thousand" or "2 thousand 500 dollars" (2500): no
+# group is the user's amount alone, in digits or words.
+_SPELLED = "|".join(sorted(list(UNIT_WORDS) + list(TENS_WORDS), key=len, reverse=True))
 SCALED_CONTINUED = re.compile(
-    r"[\s,]*(?:and\s+)?\d+(?:\.\d+)?\s*(?:thousand|million|billion|hundred|k\b|dollars?|euros?|pounds?|bucks)",
+    r"[\s,]*(?:and\s+)?(?:\d+(?:\.\d+)?|(?:%s)(?:[\s-]+(?:%s|hundred|and))*)"
+    r"\s*(?:thousand|million|billion|hundred|k\b|dollars?|euros?|pounds?|bucks)" % (_SPELLED, _SPELLED),
     re.IGNORECASE)
 AFTER_SCALE = re.compile(r"\b(?:thousand|million|billion)[\s,]*(?:and\s+)?$", re.IGNORECASE)
 
@@ -287,8 +290,11 @@ def _is_number_sourced(num, source_text):
             return True
     # Spelled numbers: "twelve", "four hundred fifty dollars", "five thousand".
     for start, end, value in _word_numbers(source_text):
+        ends_scaled = re.search(r"(?:thousand|million|billion)$", source_text[start:end], re.IGNORECASE)
         if (AMOUNT_CONTINUED.match(source_text, end)
-                or AMOUNT_AFTER_POINT.search(source_text[max(0, start - 8):start])):
+                or AMOUNT_AFTER_POINT.search(source_text[max(0, start - 8):start])
+                or AFTER_SCALE.search(source_text[max(0, start - 16):start])
+                or (ends_scaled and SCALED_CONTINUED.match(source_text, end))):
             continue
         before = source_text[max(0, start - 8):start]
         if re.search(r"[-\u2212]\s*$", before) and not re.search(r"[A-Za-z]-\s*$", before):
@@ -452,12 +458,15 @@ def _stated_minutes(source_text):
 
     # Sweep in start order (longest first at a tie): a span is inside a longer one when
     # an earlier span reaches past its end, or reaches its end from an earlier start.
+    # A phrase followed by minutes it did not read ("one and a half hours and fifteen
+    # minutes") is not the user's whole duration, whatever its form: it states nothing.
+    more_minutes = re.compile(r"\s+(?:and\s+|plus\s+)?(?:\d{1,3}|%s)[\s-]*(?:minutes?|mins?)\b" % NUMBER_WORD, flags)
     best_end, best_start = -1, -1
     for start, end, value in sorted(found, key=lambda span: (span[0], -span[1])):
         inside = best_end > end or (best_end == end and best_start < start)
         if end > best_end:
             best_end, best_start = end, start
-        if not inside and value is not None:
+        if not inside and value is not None and not more_minutes.match(text, end):
             yield value
 
 
