@@ -263,7 +263,7 @@ def _is_number_sourced(num, source_text):
     return False
 
 
-HOUR_UNIT = r"(?:hours?\b|hrs?\b|h(?=\d{2}(?:m\b|\b))|h\b)\.?"
+HOUR_UNIT = r"(?:hours?\b|hrs?\b\.?|h(?=\d{2}(?:m\b|\b))|h\b\.?)"
 MINUTE_UNIT = r"(?:minutes?|mins?|m)\b\.?"
 NUMBER_WORD = r"(?:%s)(?:[\s-]+(?:%s))?" % ("|".join(sorted(TENS_WORDS, key=len, reverse=True)),
                                               "|".join(sorted(UNIT_WORDS, key=len, reverse=True)))
@@ -301,14 +301,16 @@ def _stated_minutes(source_text):
 
     def is_rate(start, after_price):
         # A price or frequency names a rate, not a duration: "$150 an hour", "fifty
-        # dollars an hour", "$150 per half hour", "a shuttle every hour", "$20/half hour".
+        # dollars an hour", "$150 per half hour", "a shuttle every hour", "twice an
+        # hour", "3 times an hour", "$20/half hour".
         # A price directly before
         # counts only for a phrase without its own number; clock digits ("9:00") are not a price.
         before = text[max(0, start - 48):start]
         price = (r"|(?:(?<![\d:.])\d+(?:\.\d+)?[kK]?|\b%s(?:[\s-]+(?:%s|hundred|thousand|and))*)"
                  r"(?:\s*(?:dollars?|bucks|euros?|pounds?|quid|usd|eur|gbp|cents?)\b)?" % (NUMBER_WORD, NUMBER_WORD)
                  if after_price else "")
-        return re.search(r"(?:\bper|\bevery|/%s)\s*(?:an?\s+)?$" % price, before, flags) is not None
+        return re.search(r"(?:\bper|\bevery|\bonce|\btwice|\bthrice|\btimes|/%s)\s*(?:an?\s+)?$" % price,
+                         before, flags) is not None
 
     def is_part(m):
         # The "an hour" inside "half an hour" or "a quarter of an hour" is not 60.
