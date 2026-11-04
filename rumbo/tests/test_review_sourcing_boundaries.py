@@ -234,6 +234,28 @@ class ReviewSourcingBoundaryTests(unittest.TestCase):
                             dict(kind='fits_window',start='09:00',end='10:30',segments_min=[minutes]))
                         self.assertIn('UNSOURCED',result.stdout)
 
+    def test_compound_fraction_other_unit_never_sources_hours(self):
+        for phrase in ('one hour and a quarter of a day', 'one hour and a quarter of one day', 'one hour and a quarter of 2.5 days', 'one hour and a half of an evening', 'one hour and a quarter of a week', 'one hour and a half day', 'one hour and a quarter of a minute'):
+            n=90 if 'half' in phrase else 75
+            with self.subTest(phrase=phrase):
+                result=self.check_output('Start 9:00; '+phrase+' of rehearsal; finish 10:30.',
+                    dict(kind='fits_window',start='09:00',end='10:30',segments_min=[n]))
+                self.assertIn('UNSOURCED',result.stdout)
+
+    def test_decimal_word_minute_continuation_never_sources_prefix(self):
+        for phrase in ('one hour and two point five minutes','one hour plus two dot five minutes','one hour and two-point-five minutes','one and a half hours and two point five minutes','half an hour plus two point five minutes'):
+            n=90 if phrase.startswith('one and') else 30 if phrase.startswith('half') else 60
+            with self.subTest(phrase=phrase):
+                result=self.check_output('Start 9:00; '+phrase+'; finish 10:30.',
+                    dict(kind='fits_window',start='09:00',end='10:30',segments_min=[n]))
+                self.assertIn('UNSOURCED',result.stdout)
+
+    def test_complete_fraction_hours_keep_activity_context(self):
+        for phrase,n in (('one and a half hours of rehearsal',90),('two and a half hours of work',150)):
+            result=self.check_output('Start 9:00; '+phrase+'; finish 12:00.',
+                dict(kind='fits_window',start='09:00',end='12:00',segments_min=[n]))
+            self.assertIn('PASS',result.stdout)
+
 
 if __name__ == '__main__':
     unittest.main()

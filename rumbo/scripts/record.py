@@ -448,6 +448,8 @@ def _stated_minutes(source_text):
 
     adjacent_minutes_pattern = re.compile(r"[\s-]*" + MINUTE_UNIT, flags)
 
+    decimal_continuation_pattern = re.compile(r"[\s-]+(?:point|dot)\b", flags)
+
     fraction_unit_pattern = re.compile(r"[\s-]+(?:of[\s-]+an?[\s-]+)?hour\b", flags)
 
     def has_fraction(m):
@@ -459,6 +461,8 @@ def _stated_minutes(source_text):
         start = continuation.end()
         count = count_pattern.match(text, start)
         end = count.end() if count else number_ends.get(start)
+        if end is not None and decimal_continuation_pattern.match(text, end):
+            return True
         fraction_start = start if end is None else end
         while fraction_start < len(text) and (text[fraction_start].isspace() or text[fraction_start] == "-"):
             fraction_start += 1
@@ -523,8 +527,9 @@ def _stated_minutes(source_text):
         tail = m.group(0).lower()
         hours = _amount(m.group(1))
         top, part = m.group("top").lower(), m.group("part").lower()
-        other_unit = re.match(r"[\s-]+(?:days?|weeks?|months?|years?|nights?|minutes?|mins?|seconds?|secs?)\b",
-                              text[m.end():m.end() + 20], flags) is not None
+        other_unit = m.group("tail") is None and re.compile(
+            r"[\s-]+(?:(?:of[\s-]+(?:an?|\d+(?:\.\d+)?|%s)[\s-]+)(?!hours?\b)[A-Za-z]+\b" % NUMBER_WORD
+            + r"|(?:days?|weeks?|months?|years?|nights?|minutes?|mins?|seconds?|secs?)\b)", flags).match(text, m.end()) is not None
         if top == "three":
             fraction = 45 if part.startswith("quarter") else None
         else:
@@ -571,6 +576,8 @@ def _stated_minutes(source_text):
         start = continuation.end()
         count = count_pattern.match(text, start)
         count_end = count.end() if count else number_ends.get(start)
+        if count_end is not None and decimal_continuation_pattern.match(text, count_end):
+            return True
         if count_end is not None and adjacent_minutes_pattern.match(text, count_end) is not None:
             return True
         # A further fraction without its own hour unit cannot certify this
