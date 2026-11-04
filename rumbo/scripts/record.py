@@ -241,7 +241,7 @@ def _word_numbers(text):
 # amount.
 AMOUNT_CONTINUED = re.compile(
     r"[\s-]+(?:and[\s-]+(?:an?|one|two|three)[\s-]+(?:half|halves|quarters?|thirds?)\b|(?:point|dot)\b"
-    r"|(?:halves|quarters|thirds|fifths|eighths)\b)",
+    r"|(?:half|halves|quarters?|thirds?|fourths?|fifths?|sixths?|sevenths?|eighths?|ninths?|tenths?)\b(?!-(?:hours?|days?|weeks?|minutes?)\b))",
     re.IGNORECASE)
 # Nor is the part after a spelled decimal point: "five million" in "one point five million".
 AMOUNT_AFTER_POINT = re.compile(r"\b(?:point|dot)[\s-]+$", re.IGNORECASE)
@@ -295,8 +295,11 @@ def _is_number_sourced(num, source_text):
             if AMOUNT_CONTINUED.match(no_commas, scale.end()) or SCALED_CONTINUED.match(no_commas, scale.end()):
                 continue
         # A minus not preceded by a digit negates; "30-50" stays a range.
+        before_sign = pos - 1
+        while before_sign >= 0 and no_commas[before_sign].isspace():
+            before_sign -= 1
         if (pos >= 0 and no_commas[pos] in "-−"
-                and (pos == 0 or not no_commas[pos - 1].isdecimal())):
+                and (before_sign < 0 or not no_commas[before_sign].isdecimal())):
             value = -value
         if value == target:
             return True
@@ -519,7 +522,7 @@ def _stated_minutes(source_text):
     # an earlier span reaches past its end, or reaches its end from an earlier start.
     # A phrase followed by minutes it did not read ("one and a half hours and fifteen
     # minutes") is not the user's whole duration, whatever its form: it states nothing.
-    more_minutes_prefix = re.compile(r"\s+(?:(?:and|plus)\s+)?", flags)
+    more_minutes_prefix = re.compile(r"\s*(?:,\s*)?(?:(?:and|plus)\s+)?", flags)
 
     def has_more_minutes(end):
         continuation = more_minutes_prefix.match(text, end)

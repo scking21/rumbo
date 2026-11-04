@@ -155,6 +155,28 @@ class ReviewSourcingBoundaryTests(unittest.TestCase):
                         dict(kind='fits_window', start='09:00', end='10:30', segments_min=[minutes]))
                     self.assertIn('UNSOURCED', result.stdout)
 
+    def test_simple_fraction_amount_does_not_source_numerator(self):
+        for phrase in ('one-half', 'one half', 'one third', 'one-quarter', 'two fifths'):
+            with self.subTest(phrase=phrase):
+                n = 2 if phrase.startswith('two') else 1
+                result = self.check_output('Fee is %s dollar; cap $10.' % phrase,
+                    dict(kind='within_budget', amounts=[n], total_cap=10))
+                self.assertIn('UNSOURCED', result.stdout)
+
+    def test_whitespace_numeric_range_keeps_positive_endpoint(self):
+        for phrase in ('30 - 50', '30- 50', '30 -50', '30 − 50', '$30 - € 50'):
+            with self.subTest(phrase=phrase):
+                result = self.check_output('Fee range is %s dollars; cap $100.' % phrase,
+                    dict(kind='within_budget', amounts=[50], total_cap=100))
+                self.assertIn('PASS', result.stdout)
+
+    def test_comma_continued_minutes_do_not_source_shorter_fraction(self):
+        for joining in (', plus ', ', and ', ', ', ' , plus '):
+            with self.subTest(joining=joining):
+                result = self.check_output('Start 9:00; one and a half hours%sfifteen minutes of rehearsal; finish 10:30.' % joining,
+                    dict(kind='fits_window', start='09:00', end='10:30', segments_min=[90]))
+                self.assertIn('UNSOURCED', result.stdout)
+
     def test_non_duration_continuation_preserves_hours(self):
         result = self.check_output('Start 9:00; an hour and four breaks; finish 10:00.',
             dict(kind='fits_window', start='09:00', end='10:00', segments_min=[60]))
