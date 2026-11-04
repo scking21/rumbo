@@ -303,14 +303,20 @@ def _stated_minutes(source_text):
         # A price or frequency names a rate, not a duration: "$150 an hour", "fifty
         # dollars an hour", "$150 per half hour", "a shuttle every hour", "twice an
         # hour", "3 times an hour", "$20/half hour".
-        # A price directly before
-        # counts only for a phrase without its own number; clock digits ("9:00") are not a price.
+        # A price directly before counts only for a phrase without its own number, and
+        # only with evidence it is a price: a currency sign ("$150 a half hour"), a
+        # currency word ("fifty dollars an hour") or an article ("150 an hour"). A bare
+        # count is not a price ("two half-hour sessions"), nor are clock digits ("9:00").
         before = text[max(0, start - 48):start]
-        price = (r"|(?:(?<![\d:.])\d+(?:\.\d+)?[kK]?|\b%s(?:[\s-]+(?:%s|hundred|thousand|and))*)"
-                 r"(?:\s*(?:dollars?|bucks|euros?|pounds?|quid|usd|eur|gbp|cents?)\b)?" % (NUMBER_WORD, NUMBER_WORD)
-                 if after_price else "")
-        return re.search(r"(?:\bper|\bevery|\bonce|\btwice|\bthrice|\btimes|/%s)\s*(?:an?\s+)?$" % price,
-                         before, flags) is not None
+        markers = r"(?:\bper|\bevery|\bonce|\btwice|\bthrice|\btimes|/)\s*(?:an?\s+)?"
+        if after_price:
+            amount = r"(?:(?<![\d:.])\d+(?:\.\d+)?[kK]?|\b%s(?:[\s-]+(?:%s|hundred|thousand|and))*)" % (
+                NUMBER_WORD, NUMBER_WORD)
+            currency = r"\s*(?:dollars?|bucks|euros?|pounds?|quid|usd|eur|gbp|cents?)\b"
+            markers += (r"|[$\u20ac\u00a3]\s*\d+(?:\.\d+)?[kK]?(?:%s)?\s*(?:an?\s+)?" % currency
+                        + r"|%s%s\s*(?:an?\s+)?" % (amount, currency)
+                        + r"|%s\s+an?\s+" % amount)
+        return re.search(r"(?:%s)$" % markers, before, flags) is not None
 
     def is_part(m):
         # The "an hour" inside "half an hour" or "a quarter of an hour" is not 60.
@@ -367,7 +373,10 @@ def _stated_minutes(source_text):
         tail = m.group(0).lower()
         hours = _amount(m.group(1))
         three = re.search(r"\bthree[\s-]+quarters\b", tail) is not None
-        if m.group(2).lower() == "quarters" and not three or three and m.group(2).lower() != "quarters":
+        other_unit = re.match(r"[\s-]+(?:days?|weeks?|months?|years?|nights?|minutes?|mins?|seconds?|secs?)\b",
+                              text[m.end():m.end() + 20], flags) is not None
+        if m.group(2).lower() == "quarters" and not three or three and m.group(2).lower() != "quarters" or other_unit:
+            # "two hours and a half day" is not 150 minutes; it states nothing.
             found.append((m.start(), m.end(), None))
             continue
         ok = ("hour" in tail and hours is not None and is_whole(m, 1)
