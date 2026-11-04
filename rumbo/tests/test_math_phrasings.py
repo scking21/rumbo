@@ -321,11 +321,17 @@ class DatePhrasingTests(unittest.TestCase):
                                      ('Festival 12–14 July, vendor forms due the 1st of July.', '07-01', '07-14'),
                                      ('Festival 12–14 July, setup on 1 July.', '07-01', '07-12'),
                                      ('Away Aug 10–17; report due August 9.', '08-09', '08-17'),
-                                     ('Away Aug 10 — 17; report due August 9.', '08-09', '08-10')):
+                                     ('Away Aug 10 — 17; report due August 9.', '08-09', '08-10'),
+                                     ('The workshop runs June 30\u20132 July; report due July 5.', '06-30', '07-02'),
+                                     ('The workshop runs June 30\u20132 July; report due July 5.', '07-02', '07-05')):
             with self.subTest(words=words):
                 self.assertEqual(verdict(words, dict(kind='before', first=first, second=second)), ('PASS', ''))
         for words, date in (('The conference runs June 3-5.', '06-04'), ('Festival 12–14 July.', '07-13'),
-                            ('June 3-15 people', '06-01')):
+                            ('June 3-15 people', '06-01'),
+                            ('The workshop runs June 30\u20132 July; report due July 5.', '07-30'),
+                            ('The workshop runs June 30\u20132 July; report due July 5.', '06-02'),
+                            ('Away Jun. 28 - 3 Aug.', '08-28'),
+                            ('Away Jun. 28 - 3 Aug.', '06-03')):
             with self.subTest(words=words):
                 status, detail = verdict(words, dict(kind='before', first=date, second=date))
                 self.assertEqual(status, 'UNSOURCED')

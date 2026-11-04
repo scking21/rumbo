@@ -544,19 +544,33 @@ def _is_date_sourced(date_str, source_text):
     day = rf"0?{date.day}(?:st|nd|rd|th)?"
     other = r"\d{1,2}(?:st|nd|rd|th)?"
     dash = r"\s*[-\u2013\u2014]\s*"
+    any_month = (r"(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?"
+                 r"|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\.?(?![a-z])")
     patterns = [
         rf"\b{month}\s+{day}\b",
         rf"(?<![\d/.:-]){day}\s+(?:of\s+)?{month}(?![a-z])",
-        # Both ends of a range, never the days between: "June 3-5", "12–14 July".
+        # Both ends of a range, never the days between: "June 3-5", "12–14 July". An end
+        # takes the shared month only when the other end has none of its own, so "June
+        # 30–2 July" is June 30 and July 2, never June 2 or July 30.
         rf"\b{month}\s+{day}{dash}{other}\b",
-        rf"\b{month}\s+{other}{dash}{day}\b",
+        rf"\b{month}\s+{other}{dash}{day}\b(?!\s+(?:of\s+)?{any_month})",
         rf"(?<![\d/.:-]){day}{dash}{other}\s+(?:of\s+)?{month}(?![a-z])",
         rf"(?<![\d/.:-]){other}{dash}{day}\s+(?:of\s+)?{month}(?![a-z])",
         rf"\b{date.month:02d}-{date.day:02d}\b",
         rf"(?<![\d/.:-])0?{date.month}/0?{date.day}(?!\d)",
         rf"(?<![\d/.:-])0?{date.day}/0?{date.month}(?!\d)",
     ]
-    month_day = any(re.search(p, source_text, re.IGNORECASE) for p in patterns)
+    month_day = False
+    for index, pattern in enumerate(patterns):
+        for found in re.finditer(pattern, source_text, re.IGNORECASE):
+            # The start of a day-first range must not carry a month of its own.
+            if index == 4 and re.search(rf"{any_month}\s*$", source_text[max(0, found.start() - 12):found.start()],
+                                        re.IGNORECASE):
+                continue
+            month_day = True
+            break
+        if month_day:
+            break
     year = _has_year(date_str) and re.search(rf"(?<!\d){date.year}(?!\d)", source_text) is not None
     return (month_day, year)
 
