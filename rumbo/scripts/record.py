@@ -389,30 +389,49 @@ def _stated_minutes(source_text):
         found.append((m.start(), m.end(), value))
     # "an hour and a half", "2 and a half hours", "two-and-a-half-hour",
     # "an hour and a quarter", "an hour and three quarters".
-    fractions = {"half": 30, "quarter": 15, "quarters": 45}
-    for m in re.finditer(lead + num + r"[\s-]+(hours?[\s-]+)?and[\s-]+(?:an?|three)[\s-]+(half|quarters?)\b"
-                         r"([\s-]+(?:of[\s-]+an?[\s-]+)?hours?\b)?", text, flags):
-        if m.group(2) and m.group(4) and not m.group(4).lower().endswith("hours"):
+    # The fraction comes from its words: "a half" 30, "a quarter" 15, "three quarters"
+    # or "three-quarter" 45, whether "quarter" is singular or plural.
+    for m in re.finditer(lead + num + r"[\s-]+(?P<unit>hours?[\s-]+)?and[\s-]+(?P<top>an?|three)[\s-]+"
+                         r"(?P<part>half|quarters?)\b(?P<tail>[\s-]+(?:of[\s-]+an?[\s-]+)?hours?\b)?", text, flags):
+        if m.group("unit") and m.group("tail") and not m.group("tail").lower().endswith("hours"):
             # "1 hour and a half-hour break" names two durations, each with its own unit.
             continue
         tail = m.group(0).lower()
         hours = _amount(m.group(1))
-        three = re.search(r"\bthree[\s-]+quarters\b", tail) is not None
+        top, part = m.group("top").lower(), m.group("part").lower()
         other_unit = re.match(r"[\s-]+(?:days?|weeks?|months?|years?|nights?|minutes?|mins?|seconds?|secs?)\b",
                               text[m.end():m.end() + 20], flags) is not None
-        if m.group(3).lower() == "quarters" and not three or three and m.group(3).lower() != "quarters" or other_unit:
-            # "two hours and a half day" is not 150 minutes; it states nothing.
+        if top == "three":
+            fraction = 45 if part.startswith("quarter") else None
+        else:
+            fraction = {"half": 30, "quarter": 15}.get(part)
+        if fraction is None or other_unit:
+            # "two hours and a half day", "an hour and three halves": state nothing.
             found.append((m.start(), m.end(), None))
             continue
         ok = ("hour" in tail and hours is not None and is_whole(m, 1)
               and not is_rate(m.start(), m.group(1).lower() in ("a", "an")))
-        found.append((m.start(), m.end(), hours * 60 + fractions[m.group(3).lower()] if ok else None))
+        found.append((m.start(), m.end(), hours * 60 + fraction if ok else None))
     for m in re.finditer(r"\b(?:(?:a|one)\s+)?half(?:\s+an?|-|\s+)?\s*hour\b", text, flags):
         ok = not is_rate(m.start(), True) and not continues(m.start())
         found.append((m.start(), m.end(), decimal.Decimal(30) if ok else None))
-    for m in re.finditer(r"\b(?:(?:a|one)\s+)?(three[\s-]+)?quarters?(?:\s+of\s+an?|-|\s+)?\s*hour\b", text, flags):
-        ok = not is_rate(m.start(), True) and not continues(m.start())
-        found.append((m.start(), m.end(), decimal.Decimal(45 if m.group(1) else 15) if ok else None))
+    # "a quarter-hour" and "a quarter of an hour" are 15; "three-quarter hour" and "three
+    # quarters of an hour" are 45; "three quarter-hour breaks" are three of 15 (the count
+    # is not this phrase's); "three quarter hour", with no hyphen to tell, states nothing.
+    for m in re.finditer(r"\b(?:(?:a|one)\s+)?(?:(?P<three>three)(?P<join>[\s-]+))?(?P<part>quarters?)"
+                         r"(?P<sep>\s+of\s+an?\s+|\s*-\s*|\s+)hour\b", text, flags):
+        plural = m.group("part").lower() == "quarters"
+        if m.group("three"):
+            if "-" in m.group("join") or plural:
+                minutes = 45
+            elif "-" in m.group("sep"):
+                minutes = 15
+            else:
+                minutes = None
+        else:
+            minutes = None if plural else 15
+        ok = minutes is not None and not is_rate(m.start(), True) and not continues(m.start())
+        found.append((m.start(), m.end(), decimal.Decimal(minutes) if ok else None))
 
     # Sweep in start order (longest first at a tie): a span is inside a longer one when
     # an earlier span reaches past its end, or reaches its end from an earlier start.
