@@ -490,9 +490,9 @@ def _stated_minutes(source_text):
         return re.search(r"(?:[A-Za-z]-|(?:\d|\b(?:%s|hundred|thousand))[\s-]+and[\s-]+(?:an?[\s-]+)?)$"
                          % NUMBER_WORD, text[max(0, start - 40):start], flags) is not None
 
-    def is_signed_fraction(start):
-        # Standalone fractions must obey the same minus-sign rule as numeric
-        # hours. Inspect only adjacent whitespace, not the entire quote prefix.
+    def is_signed_duration(start):
+        # All duration forms reject an adjacent minus even through whitespace.
+        # Inspect only adjacent whitespace, not the entire quote prefix.
         pos = start - 1
         while pos >= 0 and text[pos].isspace():
             pos -= 1
@@ -506,7 +506,7 @@ def _stated_minutes(source_text):
         article = m.group(1).lower() in ("a", "an")
         extra = m.group(2) or m.group(3)
         value = None
-        if not (hours is None or not is_whole(m, 1) or not is_whole(m, 2) or has_fraction(m)
+        if not (is_signed_duration(m.start()) or hours is None or not is_whole(m, 1) or not is_whole(m, 2) or has_fraction(m)
                 or is_rate(m.start(), article) or is_part(m)):
             # "1 hour 15 minutes" states 75, never the whole hours alone.
             value = hours * 60 if extra is None else (None if _amount(extra) is None else hours * 60 + _amount(extra))
@@ -533,11 +533,11 @@ def _stated_minutes(source_text):
             # "two hours and a half day", "an hour and three halves": state nothing.
             found.append((m.start(), m.end(), None))
             continue
-        ok = ("hour" in tail and hours is not None and is_whole(m, 1)
+        ok = (not is_signed_duration(m.start()) and "hour" in tail and hours is not None and is_whole(m, 1)
               and not is_rate(m.start(), m.group(1).lower() in ("a", "an")))
         found.append((m.start(), m.end(), hours * 60 + fraction if ok else None))
     for m in re.finditer(r"\b(?:(?:a|one)\s+)?half(?:\s+an?|-)?\s*hour\b", text, flags):
-        ok = not is_signed_fraction(m.start()) and not is_rate(m.start(), True) and not continues(m.start())
+        ok = not is_signed_duration(m.start()) and not is_rate(m.start(), True) and not continues(m.start())
         found.append((m.start(), m.end(), decimal.Decimal(30) if ok else None))
     # "a quarter-hour" and "a quarter of an hour" are 15; "three-quarter hour" and "three
     # quarters of an hour" are 45; "three quarter-hour breaks" are three of 15 (the count
@@ -554,7 +554,7 @@ def _stated_minutes(source_text):
                 minutes = None
         else:
             minutes = None if plural else 15
-        ok = (minutes is not None and not is_signed_fraction(m.start())
+        ok = (minutes is not None and not is_signed_duration(m.start())
               and not is_rate(m.start(), True) and not continues(m.start()))
         found.append((m.start(), m.end(), decimal.Decimal(minutes) if ok else None))
 

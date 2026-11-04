@@ -225,6 +225,15 @@ class ReviewSourcingBoundaryTests(unittest.TestCase):
                     dict(kind='fits_window',start='09:00',end='10:00',segments_min=[minutes]))
                 self.assertIn('PASS',result.stdout)
 
+    def test_spaced_signed_hours_never_source_positive_duration(self):
+        for sign in ('-', '−'):
+            for gap in (' ', '   ', '\t'):
+                for phrase, minutes in (('one and a half hours',90),('1 and a half hours',90),('one hour',60),('1 hour',60),('an hour',60),('a hour',60),('1.5 hours',90),('1 hour 15 minutes',75)):
+                    with self.subTest(sign=sign,gap=gap,phrase=phrase):
+                        result=self.check_output('Start 9:00; duration '+sign+gap+phrase+'; finish 10:30.',
+                            dict(kind='fits_window',start='09:00',end='10:30',segments_min=[minutes]))
+                        self.assertIn('UNSOURCED',result.stdout)
+
 
 if __name__ == '__main__':
     unittest.main()
