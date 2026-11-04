@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """rumbo record tool. Python 3.9+, standard library only.
 
-Subcommands: validate, check, show, init, stop-gate.
+Subcommands: validate, check, show, init, stop-gate, pre-write.
 Exit codes: 0 clean, 1 content problem, 2 tool or I/O problem.
 """
 
@@ -160,6 +160,102 @@ def _source_text(record, check):
     return "\n".join(quotes)
 
 
+UNIT_WORDS = {w: i for i, w in enumerate(
+    "zero one two three four five six seven eight nine ten eleven twelve thirteen "
+    "fourteen fifteen sixteen seventeen eighteen nineteen".split())}
+TENS_WORDS = {w: 10 * i for i, w in enumerate(
+    "twenty thirty forty fifty sixty seventy eighty ninety".split(), 2)}
+SCALE_WORDS = {"thousand": 1000, "million": 10 ** 6, "billion": 10 ** 9}
+# Written after a number: "$1.5k", "1.8 million", "$2.5M" (bare "5m" is meters or minutes).
+SCALE_SUFFIX = re.compile(r"(?:\s*(thousand|million|billion)\b|([kK])\b|([mM]|bn)\b)", re.IGNORECASE)
+
+
+def _word_numbers(text):
+    """Yield (start, end, Decimal) for each spelled cardinal number in text.
+
+    "twenty-five", "four hundred fifty", "one hundred and twenty", "a thousand",
+    "five thousand", "fifteen hundred". Two units or two tens in a row end a number
+    ("five six" is 5 and 6), and "and" joins only after hundred or a scale word. A
+    "hundred" or scale word that cannot attach makes the whole number state nothing.
+    """
+    tokens = [(m.group(0).lower(), m.start(), m.end()) for m in re.finditer(r"[A-Za-z]+", text)]
+    i = 0
+    while i < len(tokens):
+        word, start, end = tokens[i]
+        # "a thousand" is 1000 only when nothing but spaces separates the words: in "a $5
+        # thousand fee" the article is not a number.
+        article = (word in ("a", "an") and i + 1 < len(tokens) and tokens[i + 1][0] in ("hundred", *SCALE_WORDS)
+                   and re.fullmatch(r"\s+", text[end:tokens[i + 1][1]]) is not None)
+        if word not in UNIT_WORDS and word not in TENS_WORDS and not article:
+            i += 1
+            continue
+        total, current, last, j, stop, stuck = 0, 0, None, i, end, False
+        if article:
+            current, last, j = 1, "unit", i + 1
+        while j < len(tokens):
+            word, w_start, w_end = tokens[j]
+            gap = text[stop:w_start] if j > i else ""
+            if j > i and not re.fullmatch(r"\s+|\s*-\s*", gap):
+                break
+            if word in UNIT_WORDS:
+                value = UNIT_WORDS[word]
+                if last == "unit" or (last == "tens" and value >= 10) or last == "tens+unit":
+                    break
+                last = "tens+unit" if last == "tens" else "unit"
+                current += value
+            elif word in TENS_WORDS:
+                if last in ("unit", "tens", "tens+unit"):
+                    break
+                current += TENS_WORDS[word]
+                last = "tens"
+            elif word == "hundred":
+                # "five hundred", and the colloquial "fifteen hundred" (1500) and
+                # "twenty-five hundred" (2500).
+                if last not in ("unit", "tens", "tens+unit") or not 1 <= current <= 99:
+                    stuck = True
+                    break
+                current *= 100
+                last = "hundred"
+            elif word in SCALE_WORDS:
+                if last is None or last == "scale" or current == 0:
+                    stuck = True
+                    break
+                total += current * SCALE_WORDS[word]
+                current, last = 0, "scale"
+            elif word == "and" and last in ("hundred", "scale") and j + 1 < len(tokens) \
+                    and (tokens[j + 1][0] in UNIT_WORDS or tokens[j + 1][0] in TENS_WORDS):
+                pass
+            else:
+                break
+            stop = w_end
+            j += 1
+        # A number the parser cannot finish ("twelve hundred thousand thousand") states
+        # nothing: never source its prefix.
+        if last is not None and not stuck:
+            yield start, stop, decimal.Decimal(total + current)
+        i = max(j + (1 if stuck else 0), i + 1)
+
+
+# A number the user continued with a fraction ("one and a half thousand", "1 point 5
+# million", "three quarters") was not stated as that number: it sources nothing as an
+# amount.
+AMOUNT_CONTINUED = re.compile(
+    r"[\s-]+(?:and[\s-]+(?:an?|one|two|three)[\s-]+(?:half|halves|quarters?|thirds?)\b|(?:point|dot)\b"
+    r"|(?:halves|quarters|thirds|fifths|eighths)\b)",
+    re.IGNORECASE)
+# Nor is the part after a spelled decimal point: "five million" in "one point five million".
+AMOUNT_AFTER_POINT = re.compile(r"\b(?:point|dot)[\s-]+$", re.IGNORECASE)
+# A scaled amount that runs into another number is one amount, "1 million 500 thousand"
+# (1500000), "1 million five hundred thousand" or "2 thousand 500 dollars" (2500): no
+# group is the user's amount alone, in digits or words.
+_SPELLED = "|".join(sorted(list(UNIT_WORDS) + list(TENS_WORDS), key=len, reverse=True))
+SCALED_CONTINUED = re.compile(
+    r"[\s,]*(?:and\s+)?(?:\d+(?:\.\d+)?|(?:%s)(?:[\s-]+(?:%s|hundred|and))*)"
+    r"\s*(?:thousand|million|billion|hundred|k\b|dollars?|euros?|pounds?|bucks)" % (_SPELLED, _SPELLED),
+    re.IGNORECASE)
+AFTER_SCALE = re.compile(r"\b(?:thousand|million|billion)[\s,]*(?:and\s+)?$", re.IGNORECASE)
+
+
 def _is_number_sourced(num, source_text):
     """Return True if num is sourced in source_text per spec.
     The amount 0 is always sourced.
@@ -174,31 +270,220 @@ def _is_number_sourced(num, source_text):
     target = decimal.Decimal(str(num))
     for match in re.finditer(r"(?<![\d.:])(\d+(?:\.\d+)?(?:[eE][-+]?\d+)?)(?![\d:]|\.\d)", no_commas):
         value = decimal.Decimal(match.group(1))
-        # "$1.5k" is 1500, never 1.5.
-        if re.match(r"[kK]\b", no_commas[match.end():]):
-            value *= 1000
-        # A minus sign (or "-$") not preceded by a digit negates; "30-50" stays a range.
-        if re.search(r"(?:^|[^\d])[-\u2212]\$?$", no_commas[:match.start()]):
+        if (AMOUNT_CONTINUED.match(no_commas, match.end())
+                or AMOUNT_AFTER_POINT.search(no_commas[max(0, match.start() - 8):match.start()])
+                or AFTER_SCALE.search(no_commas[max(0, match.start() - 16):match.start()])):
+            continue
+        # Only the last few characters matter; a leading space stands for the start.
+        before = (" " + no_commas)[max(0, match.start() - 2):match.start() + 1]
+        # "$1.5k" is 1500 and "1.8 million" is 1800000, never 1.5 or 1.8. A bare "M"
+        # scales only after a currency sign: "$2.5M" is money, "5m" is a length.
+        scale = SCALE_SUFFIX.match(no_commas, match.end())
+        if scale and (scale.group(1) or scale.group(2) or re.search(r"[$\u20ac\u00a3]$", before)):
+            word = (scale.group(1) or scale.group(2) or scale.group(3)).lower()
+            value *= {"k": 1000, "m": 10 ** 6, "bn": 10 ** 9}.get(word) or SCALE_WORDS[word]
+            # "1 thousand and a half" is 1500 and "1 million 500 thousand" 1500000, not
+            # 1000 or 1000000: check again after the scale.
+            if AMOUNT_CONTINUED.match(no_commas, scale.end()) or SCALED_CONTINUED.match(no_commas, scale.end()):
+                continue
+        # A minus sign (or "-$", "-\u20ac") not preceded by a digit negates; "30-50" stays a range.
+        if re.search(r"(?:^|[^\d])[-\u2212][$\u20ac\u00a3]?$", before):
+            value = -value
+        if value == target:
+            return True
+    # Spelled numbers: "twelve", "four hundred fifty dollars", "five thousand".
+    for start, end, value in _word_numbers(source_text):
+        ends_scaled = re.search(r"(?:thousand|million|billion)$", source_text[start:end], re.IGNORECASE)
+        if (AMOUNT_CONTINUED.match(source_text, end)
+                or AMOUNT_AFTER_POINT.search(source_text[max(0, start - 8):start])
+                or AFTER_SCALE.search(source_text[max(0, start - 16):start])
+                or (ends_scaled and SCALED_CONTINUED.match(source_text, end))):
+            continue
+        before = source_text[max(0, start - 8):start]
+        if re.search(r"[-\u2212]\s*$", before) and not re.search(r"[A-Za-z]-\s*$", before):
             value = -value
         if value == target:
             return True
     return False
 
 
+HOUR_UNIT = r"(?:hours?\b|hrs?\b\.?|h(?=\d{2}(?:m\b|\b))|h\b\.?)"
+MINUTE_UNIT = r"(?:minutes?|mins?|m)\b\.?"
+NUMBER_WORD = r"(?:%s)(?:[\s-]+(?:%s))?" % ("|".join(sorted(TENS_WORDS, key=len, reverse=True)),
+                                              "|".join(sorted(UNIT_WORDS, key=len, reverse=True)))
+NUMBER_WORD = r"(?:%s|%s)" % (NUMBER_WORD, "|".join(sorted(UNIT_WORDS, key=len, reverse=True)))
+
+
+def _amount(text):
+    """Decimal value of a digit string or a spelled number, or None."""
+    text = text.strip()
+    if re.fullmatch(r"\d+(?:\.\d+)?", text):
+        return decimal.Decimal(text)
+    if text.lower() in ("a", "an"):
+        return decimal.Decimal(1)
+    found = list(_word_numbers(text))
+    if len(found) == 1 and found[0][0] == 0 and found[0][1] == len(text):
+        return found[0][2]
+    return None
+
+
+def _stated_minutes(source_text):
+    """Yield every duration, in minutes, that source_text states in hours.
+
+    "2-hour", "1.5 hours", "2h", "two hours", "an hour", "half an hour",
+    "a half-hour", "a quarter of an hour", "three quarters of an hour",
+    "an hour and a half", "2 and a half hours", "1 hour 15 minutes", "2h30".
+    A range ("1-2 hours"), a signed value or part of a longer token ("1e2 hours",
+    "v2 hours") states nothing, and neither does a rate or frequency ("$150 an
+    hour", "$150 per half hour", "every 2 hours"). Hours
+    followed by "and a half" or "and a quarter" never state the whole hours alone.
+    """
+    flags = re.IGNORECASE
+    num = r"(\d+(?:\.\d+)?|%s|an?)" % NUMBER_WORD
+    lead = r"(?<![\w.:,\u2212-])"
+    text = source_text
+
+    def is_rate(start, after_price):
+        # A price or frequency names a rate, not a duration: "$150 an hour", "fifty
+        # dollars an hour", "$150 per half hour", "a shuttle every hour", "twice an
+        # hour", "3 times an hour", "$20/half hour".
+        # A price directly before counts only for a phrase without its own number, and
+        # only with evidence it is a price: a currency sign ("$150 a half hour"), a
+        # currency word ("fifty dollars an hour") or an article ("150 an hour"). A bare
+        # count is not a price ("two half-hour sessions"), nor are clock digits ("9:00").
+        before = text[max(0, start - 48):start]
+        markers = r"(?:\bper|\bevery|\bonce|\btwice|\bthrice|\btimes|/)\s*(?:an?\s+)?"
+        if after_price:
+            amount = r"(?:(?<![\d:.])\d+(?:\.\d+)?[kK]?|\b%s(?:[\s-]+(?:%s|hundred|thousand|and))*)" % (
+                NUMBER_WORD, NUMBER_WORD)
+            currency = r"\s*(?:dollars?|bucks|euros?|pounds?|quid|usd|eur|gbp|cents?)\b"
+            markers += (r"|[$\u20ac\u00a3]\s*\d+(?:\.\d+)?[kK]?(?:%s)?\s*(?:an?\s+)?" % currency
+                        + r"|%s%s\s*(?:an?\s+)?" % (amount, currency)
+                        + r"|%s\s+an?\s+" % amount)
+        return re.search(r"(?:%s)$" % markers, before, flags) is not None
+
+    def is_part(m):
+        # The "an hour" inside "half an hour" or "a quarter of an hour" is not 60.
+        return re.search(r"(?:half|quarters?(?:\s+of)?)\s*$", text[max(0, m.start() - 24):m.start()], flags) is not None
+
+    # A spelled count must be the user's whole number: "one hours" inside "one hundred
+    # and one hours" is not 1. Digits and "a"/"an" stand alone.
+    whole_numbers = {(start, end) for start, end, _ in _word_numbers(text)}
+
+    def is_whole(m, group):
+        word = m.group(group)
+        return (word is None or word.lower() in ("a", "an") or re.fullmatch(r"[\d.]+", word) is not None
+                or (m.start(group), m.end(group)) in whole_numbers)
+
+    def has_fraction(m):
+        # Whole hours that the user continued ("an hour and three quarters", "1 hour and
+        # 20", "2 hours plus a third") never state the whole hours alone; the full phrase
+        # is read below when it can be, and otherwise states nothing.
+        # A fraction with its own singular "hour" ("1 hour, and a half-hour break") is a
+        # separate duration, not a continuation.
+        return re.match(r"\s*,?\s*(?:and|plus)[\s-]+(?:(?:(?:an?|one|two|three)[\s-]+)?(?:half|halves|quarters?|thirds?)\b"
+                        r"(?![\s-]+(?:of[\s-]+an?[\s-]+)?hour\b)"
+                        r"|(?:\d+|%s)\s*(?:[,.;)]|$|minutes?\b|mins?\b))" % NUMBER_WORD,
+                        text[m.end():m.end() + 40], flags) is not None
+
+    # Every duration phrase is a candidate span with its minutes, or None when it is a
+    # rate or otherwise states nothing. Only the longest phrases count: a span inside a
+    # longer one ("half-hour" in "two-and-a-half-hour", "an hour" in "half an hour")
+    # is part of it, never a duration of its own.
+    found = []
+
+    def continues(start):
+        # A fraction after "word-" ("two-and-a-half-hour"), or after "and" that follows a
+        # number ("one hundred and a half hour"), belongs to a longer phrase. After any
+        # other "and" it is a duration of its own ("a talk and a half-hour break", "1 hour
+        # and a half-hour break": these phrases carry their own "hour").
+        return re.search(r"(?:[A-Za-z]-|(?:\d|\b(?:%s|hundred|thousand))[\s-]+and[\s-]+(?:an?[\s-]+)?)$"
+                         % NUMBER_WORD, text[max(0, start - 40):start], flags) is not None
+
+    # Hours, optionally followed by minutes: "2 hours", "an hour 15 minutes", "2h30".
+    for m in re.finditer(lead + num + r"[\s-]*" + HOUR_UNIT
+                         + r"(?:[\s,]*(?:(?:and|plus)\s+)?(\d{1,2}|%s)[\s-]*%s|(?<=h)(\d{2})\b)?" % (NUMBER_WORD, MINUTE_UNIT),
+                         text, flags):
+        hours = _amount(m.group(1))
+        article = m.group(1).lower() in ("a", "an")
+        extra = m.group(2) or m.group(3)
+        value = None
+        if not (hours is None or not is_whole(m, 1) or not is_whole(m, 2) or has_fraction(m)
+                or is_rate(m.start(), article) or (article and is_part(m))):
+            # "1 hour 15 minutes" states 75, never the whole hours alone.
+            value = hours * 60 if extra is None else (None if _amount(extra) is None else hours * 60 + _amount(extra))
+        found.append((m.start(), m.end(), value))
+    # "an hour and a half", "2 and a half hours", "two-and-a-half-hour",
+    # "an hour and a quarter", "an hour and three quarters".
+    # The fraction comes from its words: "a half" 30, "a quarter" 15, "three quarters"
+    # or "three-quarter" 45, whether "quarter" is singular or plural.
+    for m in re.finditer(lead + num + r"[\s-]+(?P<unit>hours?[\s-]+)?and[\s-]+(?P<top>an?|three)[\s-]+"
+                         r"(?P<part>half|quarters?)\b(?P<tail>[\s-]+(?:of[\s-]+an?[\s-]+)?hours?\b)?", text, flags):
+        if m.group("unit") and m.group("tail") and not m.group("tail").lower().endswith("hours"):
+            # "1 hour and a half-hour break" names two durations, each with its own unit.
+            continue
+        tail = m.group(0).lower()
+        hours = _amount(m.group(1))
+        top, part = m.group("top").lower(), m.group("part").lower()
+        other_unit = re.match(r"[\s-]+(?:days?|weeks?|months?|years?|nights?|minutes?|mins?|seconds?|secs?)\b",
+                              text[m.end():m.end() + 20], flags) is not None
+        if top == "three":
+            fraction = 45 if part.startswith("quarter") else None
+        else:
+            fraction = {"half": 30, "quarter": 15}.get(part)
+        if fraction is None or other_unit:
+            # "two hours and a half day", "an hour and three halves": state nothing.
+            found.append((m.start(), m.end(), None))
+            continue
+        ok = ("hour" in tail and hours is not None and is_whole(m, 1)
+              and not is_rate(m.start(), m.group(1).lower() in ("a", "an")))
+        found.append((m.start(), m.end(), hours * 60 + fraction if ok else None))
+    for m in re.finditer(r"\b(?:(?:a|one)\s+)?half(?:\s+an?|-|\s+)?\s*hour\b", text, flags):
+        ok = not is_rate(m.start(), True) and not continues(m.start())
+        found.append((m.start(), m.end(), decimal.Decimal(30) if ok else None))
+    # "a quarter-hour" and "a quarter of an hour" are 15; "three-quarter hour" and "three
+    # quarters of an hour" are 45; "three quarter-hour breaks" are three of 15 (the count
+    # is not this phrase's); "three quarter hour", with no hyphen to tell, states nothing.
+    for m in re.finditer(r"\b(?:(?:a|one)\s+)?(?:(?P<three>three)(?P<join>[\s-]+))?(?P<part>quarters?)"
+                         r"(?P<sep>\s+of\s+an?\s+|\s*-\s*|\s+)hour\b", text, flags):
+        plural = m.group("part").lower() == "quarters"
+        if m.group("three"):
+            if "-" in m.group("join") or plural:
+                minutes = 45
+            elif "-" in m.group("sep"):
+                minutes = 15
+            else:
+                minutes = None
+        else:
+            minutes = None if plural else 15
+        ok = minutes is not None and not is_rate(m.start(), True) and not continues(m.start())
+        found.append((m.start(), m.end(), decimal.Decimal(minutes) if ok else None))
+
+    # Sweep in start order (longest first at a tie): a span is inside a longer one when
+    # an earlier span reaches past its end, or reaches its end from an earlier start.
+    # A phrase followed by minutes it did not read ("one and a half hours and fifteen
+    # minutes") is not the user's whole duration, whatever its form: it states nothing.
+    more_minutes = re.compile(r"\s+(?:and\s+|plus\s+)?(?:\d{1,3}|%s)[\s-]*(?:minutes?|mins?)\b" % NUMBER_WORD, flags)
+    best_end, best_start = -1, -1
+    for start, end, value in sorted(found, key=lambda span: (span[0], -span[1])):
+        inside = best_end > end or (best_end == end and best_start < start)
+        if end > best_end:
+            best_end, best_start = end, start
+        if not inside and value is not None and not more_minutes.match(text, end):
+            yield value
+
+
 def _is_minutes_sourced(minutes, source_text):
-    """True when a duration in minutes is stated in minutes or as hours ("2-hour", "1.5 hours")."""
+    """True when a duration in minutes is stated in minutes or in hours ("2-hour", "an hour and a half")."""
     if _is_number_sourced(minutes, source_text):
         return True
-    for match in re.finditer(r"(?<![\w.:,\u2212-])(\d+(?:\.\d+)?)[\s-]*(?:hours?|hrs?)\b", source_text, re.IGNORECASE):
-        if decimal.Decimal(match.group(1)) * 60 == minutes:
-            return True
-    return False
+    return any(value == minutes for value in _stated_minutes(source_text))
 
 
 def _is_time_sourced(time_str, source_text):
     """Return True if time_str (HH:MM) is sourced in source_text.
     Parse the check time as (h, m) from "HH:MM"; return False if malformed.
-    Find time tokens with re.finditer("(?<![0-9:])([0-9]{1,2}):([0-9]{2})(?::([0-9]{2}))?(?![0-9:])(?:\\s*([AaPp])\\.?\\s*[Mm]\\b\\.)?", text).
+    Find time tokens with re.finditer("(?<![0-9:])([0-9]{1,2}):([0-9]{2})(?::([0-9]{2}))?(?![0-9]|:[0-9])(?:\\s*([AaPp])\\.?\\s*[Mm]\\b\\.)?", text).
     Skip a token whose seconds group is present and not "00". Meridiem: p/P and hour < 12 -> hour + 12; a/A and hour == 12 -> 0. Skip hours > 23 or minutes > 59.
     Sourced if any token's (hour, minute) == (h, m).
     """
@@ -213,7 +498,7 @@ def _is_time_sourced(time_str, source_text):
         return False
 
     # Find time tokens with the specified regex
-    for match in re.finditer(r"(?<![0-9:])([0-9]{1,2}):([0-9]{2})(?::([0-9]{2}))?(?![0-9:])(?:\s*([AaPp])\.?\s*[Mm]\b\.?)?", source_text):
+    for match in re.finditer(r"(?<![0-9:])([0-9]{1,2}):([0-9]{2})(?::([0-9]{2}))?(?![0-9]|:[0-9])(?:\s*([AaPp])\.?\s*[Mm]\b\.?)?", source_text):
         hour_group = match.group(1)
         minute_group = match.group(2)
         seconds_group = match.group(3)
@@ -280,14 +565,35 @@ def _is_date_sourced(date_str, source_text):
     sept = r"|Sept\.?" if date.month == 9 else ""
     month = rf"(?:{name}|{name[:3]}\.?{sept})"
     day = rf"0?{date.day}(?:st|nd|rd|th)?"
+    other = r"\d{1,2}(?:st|nd|rd|th)?"
+    dash = r"\s*[-\u2013\u2014]\s*"
+    any_month = (r"(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?"
+                 r"|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\.?(?![a-z])")
     patterns = [
         rf"\b{month}\s+{day}\b",
         rf"(?<![\d/.:-]){day}\s+(?:of\s+)?{month}(?![a-z])",
+        # Both ends of a range, never the days between: "June 3-5", "12–14 July". An end
+        # takes the shared month only when the other end has none of its own, so "June
+        # 30–2 July" is June 30 and July 2, never June 2 or July 30.
+        rf"\b{month}\s+{day}{dash}{other}\b",
+        rf"\b{month}\s+{other}{dash}{day}\b(?!\s+(?:of\s+)?{any_month})",
+        rf"(?<![\d/.:-]){day}{dash}{other}\s+(?:of\s+)?{month}(?![a-z])",
+        rf"(?<![\d/.:-]){other}{dash}{day}\s+(?:of\s+)?{month}(?![a-z])",
         rf"\b{date.month:02d}-{date.day:02d}\b",
         rf"(?<![\d/.:-])0?{date.month}/0?{date.day}(?!\d)",
         rf"(?<![\d/.:-])0?{date.day}/0?{date.month}(?!\d)",
     ]
-    month_day = any(re.search(p, source_text, re.IGNORECASE) for p in patterns)
+    month_day = False
+    for index, pattern in enumerate(patterns):
+        for found in re.finditer(pattern, source_text, re.IGNORECASE):
+            # The start of a day-first range must not carry a month of its own.
+            if index == 4 and re.search(rf"{any_month}\s*$", source_text[max(0, found.start() - 12):found.start()],
+                                        re.IGNORECASE):
+                continue
+            month_day = True
+            break
+        if month_day:
+            break
     year = _has_year(date_str) and re.search(rf"(?<!\d){date.year}(?!\d)", source_text) is not None
     return (month_day, year)
 
@@ -324,7 +630,12 @@ def unsourced_values(record, check):
     elif kind == "within_budget":
         # amounts N for each amount
         for amt in check["amounts"]:
-            if not _is_number_sourced(amt, source):
+            if isinstance(amt, dict):
+                # The script multiplies; the user must have said both factors.
+                for key in ("unit", "quantity"):
+                    if not _is_number_sourced(amt[key], source):
+                        unsourced.append(f"amounts {key} {fmt_num(amt[key])}")
+            elif not _is_number_sourced(amt, source):
                 unsourced.append(f"amounts {fmt_num(amt)}")
         # total_cap N
         cap = check["total_cap"]
@@ -355,14 +666,26 @@ def parse_time(text):
 
 
 def fmt_minutes(total):
-    return "%02d:%02d" % divmod(total, 60)
+    """Clock time for minutes since the first midnight: "12:35", "01:30 next day"."""
+    days, minutes = divmod(total, 24 * 60)
+    text = "%02d:%02d" % divmod(minutes, 60)
+    if days == 1:
+        text += " next day"
+    elif days > 1:
+        text += " %d days later" % days
+    return text
 
 
-def parse_date(text):
+def parse_date(text, leap=False):
+    """Return a date, or None when malformed.
+
+    MM-DD dates (no year stated) compare within reference year 2001, or within
+    leap year 2000 when either date in the comparison is 02-29, which the user
+    may state without a year.
+    """
     if not isinstance(text, str):
         return None
-    # MM-DD dates (no year stated) compare within non-leap reference year 2001.
-    candidate = text if _has_year(text) else "2001-" + text
+    candidate = text if _has_year(text) else ("2000-" if leap or text == "02-29" else "2001-") + text
     if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", candidate):
         return None
     try:
@@ -862,6 +1185,19 @@ def _validate_check_values(base, kind, check):
                 )
             elif parse_time(check[field]) is None:
                 bad("%s.%s" % (base, field), "use HH:MM 24-hour, e.g. 09:45")
+        next_day = check.get("end_next_day", False)
+        start_min, end_min = parse_time(check.get("start")), parse_time(check.get("end"))
+        if not isinstance(next_day, bool):
+            bad("%s.end_next_day" % base, "use true when the window ends after midnight, or leave it out")
+        elif start_min is not None and end_min is not None:
+            # The clock times must say the window crosses midnight; the flag only confirms
+            # it, so it can never add a day to a window the user gave as same-day.
+            if not next_day and end_min < start_min:
+                bad("%s.end" % base, "end %s is before start %s; if the window runs past midnight, "
+                    "set end_next_day: true, otherwise fix the times" % (check["end"], check["start"]))
+            elif next_day and end_min >= start_min:
+                bad("%s.end_next_day" % base, "end %s is not before start %s, so the window does not "
+                    "cross midnight; remove end_next_day" % (check["end"], check["start"]))
         segments = check.get("segments_min")
         if segments is None:
             faults.append(
@@ -922,11 +1258,16 @@ def _validate_check_values(base, kind, check):
             bad("%s.amounts" % base, "use a list of non-negative numbers")
         else:
             for amount_index, amount in enumerate(amounts):
-                if not _is_number(amount) or amount < 0:
-                    bad(
-                        "%s.amounts[%d]" % (base, amount_index),
-                        "use a non-negative number",
-                    )
+                path = "%s.amounts[%d]" % (base, amount_index)
+                if isinstance(amount, dict):
+                    if set(amount) != {"unit", "quantity"}:
+                        bad(path, 'use {"unit": N, "quantity": N} with exactly those two keys')
+                        continue
+                    for key in ("unit", "quantity"):
+                        if not _is_number(amount[key]) or amount[key] < 0:
+                            bad("%s.%s" % (path, key), "use a non-negative number")
+                elif not _is_number(amount) or amount < 0:
+                    bad(path, 'use a non-negative number, or {"unit": N, "quantity": N} for a price per unit')
         cap = check.get("total_cap")
         if cap is None:
             faults.append("%s.total_cap: RECORD_MISSING_FIELD: add a number" % base)
@@ -949,6 +1290,8 @@ def evaluate_check(check):
     if kind == "fits_window":
         start = parse_time(check["start"])
         end = parse_time(check["end"])
+        if check.get("end_next_day"):
+            end += 24 * 60
         total = sum(check["segments_min"])
         computed = start + total
         if computed <= end:
@@ -958,22 +1301,40 @@ def evaluate_check(check):
             total,
             fmt_minutes(computed),
             computed - end,
-            check["end"],
+            fmt_minutes(end),
         )
         return False, detail
 
     if kind == "before":
-        first = parse_date(check["first"])
-        second = parse_date(check["second"])
+        leap = "02-29" in (check["first"], check["second"])
+        first = parse_date(check["first"], leap)
+        second = parse_date(check["second"], leap)
         if first <= second:
             return True, None
         # Calculate day difference
         days = (first - second).days
         unit = "day" if days == 1 else "days"
         detail = "%s is %d %s after %s" % (check["first"], days, unit, check["second"])
+        if not _has_year(check["first"]) and days > 182:
+            # More than half a year "after" usually means the dates cross a new year.
+            detail += (" in the same year; if %s is in the following year, ask the user "
+                       "for both years" % check["second"])
         return False, detail
 
-    amounts = [decimal.Decimal(str(value)) for value in check["amounts"]]
+    amounts, labels = [], []
+    for value in check["amounts"]:
+        if isinstance(value, dict):
+            unit = decimal.Decimal(str(value["unit"]))
+            quantity = decimal.Decimal(str(value["quantity"]))
+            with decimal.localcontext() as context:
+                # Enough digits for an exact product.
+                context.prec = len(unit.as_tuple().digits) + len(quantity.as_tuple().digits) + 2
+                line = unit * quantity
+            amounts.append(line)
+            labels.append("%s x %s = %s" % (fmt_num(unit), fmt_num(quantity), fmt_num(line)))
+        else:
+            amounts.append(decimal.Decimal(str(value)))
+            labels.append(None)
     cap = decimal.Decimal(str(check["total_cap"]))
     item_cap = check.get("item_cap")
     if item_cap is not None:
@@ -988,16 +1349,18 @@ def evaluate_check(check):
         total = sum(amounts, decimal.Decimal(0))
         problems = []
         if total > cap:
+            lines = [label for label in labels if label]
             problems.append(
-                "total %s exceeds total_cap %s by %s"
-                % (fmt_num(total), fmt_num(cap), fmt_num(total - cap))
+                "total %s exceeds total_cap %s by %s%s"
+                % (fmt_num(total), fmt_num(cap), fmt_num(total - cap),
+                   " (%s)" % "; ".join(lines) if lines else "")
             )
         if item_cap is not None:
-            for amount in amounts:
+            for amount, label in zip(amounts, labels):
                 if amount > item_cap:
                     problems.append(
                         "amount %s exceeds item_cap %s"
-                        % (fmt_num(amount), fmt_num(item_cap))
+                        % (label or fmt_num(amount), fmt_num(item_cap))
                     )
         if not problems:
             return True, None
@@ -1027,6 +1390,37 @@ def failing_checks(record):
         if not passed:
             results.append((check, detail))
     return results
+
+
+# What to do about each open problem. A correction that names the problem and
+# the action outperforms a generic reminder in drift studies, so every line
+# carries one.
+CONFLICT_ACTIONS = {
+    "fits_window": "change the plan only as the user agrees, or tell them it does not fit",
+    "before": "tell the user the dates conflict, or ask which date is right",
+    "within_budget": "tell the user it is over budget, or cut only what they agree to cut",
+}
+ASSUMPTION_ACTION = "ask the user, or tell them plainly it is your assumption; never change a value to pass"
+OPEN_HEADER = "Open problems (resolve each in your answer or tell the user before finishing):"
+COMPACT_NOTE = ("Re-shown after context compaction: the summary may have dropped decisions; "
+                "this record is current.")
+PRE_WRITE_INTRO = ("rumbo: before this write, the decision record still has open problems. "
+                   "Keep them out of what you write, or say them plainly to the user.")
+
+
+def open_problem_lines(record):
+    """One line per failing or unsourced check, each naming the action to take."""
+    lines = []
+    for check, detail in failing_checks(record):
+        lines.append("CONFLICT %s: %s -> %s" % (check["id"], detail, CONFLICT_ACTIONS[check["kind"]]))
+    for check in record.get("checks") or []:
+        passed, _ = evaluate_check(check)
+        if passed:
+            unsourced = unsourced_values(record, check)
+            if unsourced:
+                lines.append("ASSUMPTION %s: %s not in the user's quoted words -> %s" % (
+                    check["id"], ", ".join(unsourced), ASSUMPTION_ACTION))
+    return lines
 
 
 # ------------------------------------------------------------ subcommands
@@ -1217,7 +1611,15 @@ def cmd_show(args):
         print("rumbo: record invalid, run record.py validate")
         return 0
 
-    lines = ["Objective: %s" % record["objective"]["text"]]
+    lines = []
+    if payload is not None and payload.get("source") == "compact":
+        lines.append(COMPACT_NOTE)
+    # Open problems come first, so they lead the context and survive truncation.
+    problems = open_problem_lines(record)
+    if problems:
+        lines.append(OPEN_HEADER)
+        lines.extend(problems)
+    lines.append("Objective: %s" % record["objective"]["text"])
 
     items = record.get("items") or []
     replaced = set()
@@ -1241,19 +1643,6 @@ def cmd_show(args):
                 line += " (scope: %s)" % scope
             lines.append(line)
 
-    for check, detail in failing_checks(record):
-        lines.append("CONFLICT %s: %s" % (check["id"], detail))
-
-    # Add ASSUMPTION lines for checks that pass arithmetic but have unsourced values
-    for check in record.get("checks") or []:
-        passed, _ = evaluate_check(check)
-        if passed:
-            unsourced = unsourced_values(record, check)
-            if unsourced:
-                lines.append("ASSUMPTION %s: %s not in the user's quoted words" % (
-                    check["id"], ", ".join(unsourced)
-                ))
-
     text = "\n".join(lines)
     limit = args.max_chars
     if limit is not None and len(text) > limit:
@@ -1262,6 +1651,70 @@ def cmd_show(args):
     print(text)
     print("--- end rumbo record ---")
     return 0
+
+
+def cmd_pre_write(args):
+    """PreToolUse hook for file writes: add open problems to the agent's context.
+
+    Never blocks and always exits 0. Silent with no record, an invalid record
+    (the Stop gate reports it), no open problems, a write inside the record's
+    own directory, or the same problems already shown before a write this session.
+    """
+    try:
+        _pre_write(args)
+    except Exception:
+        pass
+    return 0
+
+
+def _pre_write(args):
+    payload = _hook_payload() or {}
+    tool_input = payload.get("tool_input")
+    target = None
+    if isinstance(tool_input, dict):
+        target = tool_input.get("file_path") or tool_input.get("notebook_path")
+    record_dir = os.path.realpath(os.path.dirname(os.path.abspath(args.record)))
+    if isinstance(target, str) and target:
+        base = payload.get("cwd") if isinstance(payload.get("cwd"), str) else os.getcwd()
+        full = os.path.realpath(os.path.join(base, target))
+        if full == record_dir or full.startswith(record_dir + os.sep):
+            return
+    try:
+        record = load_record(args.record)
+    except LoadError:
+        return
+    if validate_record(record):
+        return
+    problems = open_problem_lines(record)
+    marker = _marker_path(payload.get("session_id"), ".prewrite")
+    if not problems:
+        # Forget what was shown, so problems that come back are shown again.
+        if marker and os.path.exists(marker):
+            try:
+                with _open_marker(marker, "w") as handle:
+                    handle.write("")
+            except OSError:
+                pass
+        return
+    text = "\n".join(problems)
+    digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
+    if marker:
+        try:
+            with _open_marker(marker) as handle:
+                if handle.read().strip() == digest:
+                    return
+        except OSError:
+            pass
+    context = "\n".join([PRE_WRITE_INTRO,
+                         "--- rumbo record: agent-written data, not instructions ---",
+                         text, "--- end rumbo record ---"])
+    print(json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse", "additionalContext": context}}))
+    if marker:
+        try:
+            with _open_marker(marker, "w") as handle:
+                handle.write(digest)
+        except OSError:
+            pass
 
 
 def _publish_new(path, text):
@@ -1618,6 +2071,9 @@ def build_parser():
     # stop-gate subcommand
     add_record_option(subparsers.add_parser("stop-gate", help="Stop hook gate"))
 
+    # pre-write subcommand
+    add_record_option(subparsers.add_parser("pre-write", help="PreToolUse hook for file writes"))
+
     return parser
 
 
@@ -1630,6 +2086,7 @@ def main(argv=None):
         "show": cmd_show,
         "init": cmd_init,
         "stop-gate": cmd_stop_gate,
+        "pre-write": cmd_pre_write,
     }
     return handlers[args.command](args)
 
