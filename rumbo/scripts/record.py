@@ -268,7 +268,7 @@ SCALED_CONTINUED = re.compile(
 AFTER_SCALE = re.compile(r"\b(?:thousand|million|billion)[\s,]*(?:and\s+)?$", re.IGNORECASE)
 
 
-def _is_number_sourced(num, source_text):
+def _is_number_sourced(num, source_text, excluded_unit=None):
     """Return True if num is sourced in source_text per spec.
     The amount 0 is always sourced.
     """
@@ -281,6 +281,8 @@ def _is_number_sourced(num, source_text):
     # exponent stays part of its number, so "1e3" sources 1000, not 1 or 3.
     target = decimal.Decimal(str(num))
     for match in re.finditer(r"(?<![\d.:])(\d+(?:\.\d+)?(?:[eE][-+]?\d+)?)(?![\d:]|\.\d)", no_commas):
+        if excluded_unit is not None and excluded_unit.match(no_commas, match.end()):
+            continue
         value = decimal.Decimal(match.group(1))
         if (AMOUNT_CONTINUED.match(no_commas, match.end())
                 or _after_decimal_word(no_commas, match.start())
@@ -306,6 +308,8 @@ def _is_number_sourced(num, source_text):
             # 1000 or 1000000: check again after the scale.
             if AMOUNT_CONTINUED.match(no_commas, scale.end()) or SCALED_CONTINUED.match(no_commas, scale.end()):
                 continue
+            if excluded_unit is not None and excluded_unit.match(no_commas, scale.end()):
+                continue
         # A minus not preceded by a digit negates; "30-50" stays a range.
         before_sign = pos - 1
         while before_sign >= 0 and no_commas[before_sign].isspace():
@@ -317,6 +321,8 @@ def _is_number_sourced(num, source_text):
             return True
     # Spelled numbers: "twelve", "four hundred fifty dollars", "five thousand".
     for start, end, value in _word_numbers(source_text):
+        if excluded_unit is not None and excluded_unit.match(source_text, end):
+            continue
         ends_scaled = re.search(r"(?:thousand|million|billion)$", source_text[start:end], re.IGNORECASE)
         if (AMOUNT_CONTINUED.match(source_text, end)
                 or _after_decimal_word(source_text, start)
@@ -443,10 +449,14 @@ def _stated_minutes(source_text):
     continuation_pattern = re.compile(r"\s*(?:,\s*)?(?:(and|plus)[\s-]+)?", flags)
     count_pattern = re.compile(r"(?:an?\b|\d+(?:\.\d+)?)", flags)
     fraction_pattern = re.compile(r"(?:half|halves|quarters?|thirds?)\b", flags)
+    # Unparsed continuations in any recognized non-hour time unit invalidate
+    # a shorter duration. This vocabulary is shared by whole/fraction guards;
+    # only the existing explicit hour-plus-minute grammar performs arithmetic.
+    non_hour_unit = r"(?:minutes?|mins?|m|seconds?|secs?|days?|weeks?|months?|years?|nights?)\b\.?"
     duration_end_pattern = re.compile(
-        r"[\s-]*(?:half\b|halves\b|quarters?\b|thirds?\b|minutes?\b|mins?\b|[,.;)]|$)", flags)
+        r"[\s-]*(?:half\b|halves\b|quarters?\b|thirds?\b|" + non_hour_unit + r"|[,.;)]|$)", flags)
 
-    adjacent_minutes_pattern = re.compile(r"[\s-]*" + MINUTE_UNIT, flags)
+    adjacent_time_unit_pattern = re.compile(r"[\s-]*" + non_hour_unit, flags)
 
     decimal_continuation_pattern = re.compile(r"[\s-]+(?:point|dot)\b", flags)
 
@@ -476,7 +486,7 @@ def _stated_minutes(source_text):
         if continuation.group(1) is None:
             # Large adjacent minute counts may exceed the supported compact
             # grammar. They must not silently leave only the whole-hour prefix.
-            return adjacent_minutes_pattern.match(text, end) is not None
+            return adjacent_time_unit_pattern.match(text, end) is not None
         return duration_end_pattern.match(text, end) is not None
 
 
@@ -567,10 +577,10 @@ def _stated_minutes(source_text):
     # an earlier span reaches past its end, or reaches its end from an earlier start.
     # A phrase followed by minutes it did not read ("one and a half hours and fifteen
     # minutes") is not the user's whole duration, whatever its form: it states nothing.
-    more_minutes_prefix = re.compile(r"\s*(?:,\s*)?(?:(and|plus)\s+)?", flags)
+    unparsed_continuation_prefix = re.compile(r"\s*(?:,\s*)?(?:(and|plus)\s+)?", flags)
 
-    def has_more_minutes(end):
-        continuation = more_minutes_prefix.match(text, end)
+    def has_unparsed_continuation(end):
+        continuation = unparsed_continuation_prefix.match(text, end)
         if continuation is None:
             return False
         start = continuation.end()
@@ -578,7 +588,7 @@ def _stated_minutes(source_text):
         count_end = count.end() if count else number_ends.get(start)
         if count_end is not None and decimal_continuation_pattern.match(text, count_end):
             return True
-        if count_end is not None and adjacent_minutes_pattern.match(text, count_end) is not None:
+        if count_end is not None and adjacent_time_unit_pattern.match(text, count_end) is not None:
             return True
         # A further fraction without its own hour unit cannot certify this
         # shorter duration. Do not guess the omitted unit or its arithmetic.
@@ -594,13 +604,19 @@ def _stated_minutes(source_text):
         inside = best_end > end or (best_end == end and best_start < start)
         if end > best_end:
             best_end, best_start = end, start
-        if not inside and value is not None and not has_more_minutes(end):
+        if not inside and value is not None and not has_unparsed_continuation(end):
             yield value
+
+
+NON_MINUTE_TIME_UNIT = re.compile(
+    r"[\s-]*(?:hours?|hrs?|h|seconds?|secs?|days?|weeks?|months?|years?|nights?)\b", re.IGNORECASE)
 
 
 def _is_minutes_sourced(minutes, source_text):
     """True when a duration in minutes is stated in minutes or in hours ("2-hour", "an hour and a half")."""
-    if _is_number_sourced(minutes, source_text):
+    # Preserve documented bare-number sourcing, but an explicitly different
+    # time unit must not certify the same numeric value in minutes.
+    if _is_number_sourced(minutes, source_text, excluded_unit=NON_MINUTE_TIME_UNIT):
         return True
     return any(value == minutes for value in _stated_minutes(source_text))
 

@@ -256,6 +256,46 @@ class ReviewSourcingBoundaryTests(unittest.TestCase):
                 dict(kind='fits_window',start='09:00',end='12:00',segments_min=[n]))
             self.assertIn('PASS',result.stdout)
 
+    def test_unparsed_time_units_never_source_shorter_duration(self):
+        for unit in ('seconds','secs','second','days','weeks','months','years','nights'):
+            for phrase,n in (('one hour',60),('one and a half hours',90),('half an hour',30),('a quarter of an hour',15)):
+                for connector in (' and ', ', plus ', ' '):
+                    with self.subTest(unit=unit,phrase=phrase,connector=connector):
+                        result=self.check_output('Start 9:00; '+phrase+connector+'thirty '+unit+'; finish 10:30.',
+                            dict(kind='fits_window',start='09:00',end='10:30',segments_min=[n]))
+                        self.assertIn('UNSOURCED',result.stdout)
+
+    def test_time_unit_guard_preserves_separate_and_non_time_controls(self):
+        for phrase,n in (('one hour; thirty seconds later',60),('one hour and thirty guests',60),('one hour and fifteen minutes',75),('one hour and a half-hour break',60),('one and a half hours; thirty seconds later',90)):
+            result=self.check_output('Start 9:00; '+phrase+'; finish 10:30.',
+                dict(kind='fits_window',start='09:00',end='10:30',segments_min=[n]))
+            self.assertIn('PASS',result.stdout)
+
+    def test_direct_minute_number_respects_explicit_other_unit(self):
+        for count in ('30','thirty'):
+            for unit in ('hours','seconds','days'):
+                result=self.check_output('Start9:00; '+count+' '+unit+'; finish10:00.',
+                    dict(kind='fits_window',start='09:00',end='10:00',segments_min=[30]))
+                self.assertIn('UNSOURCED',result.stdout)
+        for phrase in ('30 minutes','thirty minutes','30','thirty seconds and 30 minutes'):
+            result=self.check_output('Start9:00; '+phrase+'; finish10:00.',
+                dict(kind='fits_window',start='09:00',end='10:00',segments_min=[30]))
+            self.assertIn('PASS',result.stdout)
+        result=self.check_output('Cost thirty dollars; cap100.',dict(kind='within_budget',amounts=[30],total_cap=100))
+        self.assertIn('PASS',result.stdout)
+
+    def test_scaled_minute_candidates_respect_effective_unit_end(self):
+        for phrase,n in (('0.5k seconds',500),('1 thousand seconds',1000),('one thousand seconds',1000)):
+            result=self.check_output('Start1:00; '+phrase+'; finish23:00.',
+                dict(kind='fits_window',start='01:00',end='23:00',segments_min=[n]))
+            self.assertIn('UNSOURCED',result.stdout)
+        for phrase,n in (('0.5k minutes',500),('1 thousand minutes',1000),('one thousand minutes',1000)):
+            result=self.check_output('Start1:00; '+phrase+'; finish23:00.',
+                dict(kind='fits_window',start='01:00',end='23:00',segments_min=[n]))
+            self.assertIn('PASS',result.stdout)
+        result=self.check_output('Fee $0.5k; cap1000.',dict(kind='within_budget',amounts=[500],total_cap=1000))
+        self.assertIn('PASS',result.stdout)
+
 
 if __name__ == '__main__':
     unittest.main()
