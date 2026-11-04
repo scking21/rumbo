@@ -191,6 +191,8 @@ class AmountPhrasingTests(unittest.TestCase):
             ('Founded nineteen hundred and fifty; budget $2,000.', [1950], 2000),
             ('Tables are twelve hundred, budget $2,000.', [1200], 2000),
             ('Venue is 1 thousand dollars and a half day of setup, budget $2,000.', [1000], 2000),
+            ('Venue is 5 thousand, 3 people attending, budget $9,000.', [5000], 9000),
+            ('Fit-out is one million five hundred thousand dollars of a $2,000,000 budget.', [1500000], 2000000),
             ('Two speakers at $500 and one and a half days of prep, budget $2,000.', [500, 500], 2000),
             ('2 half-hour sessions at $40 each, budget $100.', [{'unit': 40, 'quantity': 2}], 100),
         )
@@ -221,6 +223,10 @@ class AmountPhrasingTests(unittest.TestCase):
             ('$2k and a half, budget $1000000000', 2000),
             ('3 million point five, budget $1000000000', 3000000),
             ('one thousand and a half dollars, budget $1000000000', 1000),
+            ('Catering costs 1 million 500 thousand dollars; budget $1000000000', 1000000),
+            ('Catering costs 1 million 500 thousand dollars; budget $1000000000', 500000),
+            ('2 thousand 500 dollars, budget $1000000000', 2000),
+            ('2 thousand 500 dollars, budget $1000000000', 500),
             ('a refund of -twenty, budget $1000000000', 20),
             ('a refund of -€50, budget $1000000000', 50),
         )

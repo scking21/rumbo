@@ -242,6 +242,12 @@ AMOUNT_CONTINUED = re.compile(
     re.IGNORECASE)
 # Nor is the part after a spelled decimal point: "five million" in "one point five million".
 AMOUNT_AFTER_POINT = re.compile(r"\b(?:point|dot)[\s-]+$", re.IGNORECASE)
+# A scaled amount that runs into another number is one amount, "1 million 500 thousand"
+# (1500000) or "2 thousand 500 dollars" (2500): neither group is the user's amount alone.
+SCALED_CONTINUED = re.compile(
+    r"[\s,]*(?:and\s+)?\d+(?:\.\d+)?\s*(?:thousand|million|billion|hundred|k\b|dollars?|euros?|pounds?|bucks)",
+    re.IGNORECASE)
+AFTER_SCALE = re.compile(r"\b(?:thousand|million|billion)[\s,]*(?:and\s+)?$", re.IGNORECASE)
 
 
 def _is_number_sourced(num, source_text):
@@ -259,7 +265,8 @@ def _is_number_sourced(num, source_text):
     for match in re.finditer(r"(?<![\d.:])(\d+(?:\.\d+)?(?:[eE][-+]?\d+)?)(?![\d:]|\.\d)", no_commas):
         value = decimal.Decimal(match.group(1))
         if (AMOUNT_CONTINUED.match(no_commas, match.end())
-                or AMOUNT_AFTER_POINT.search(no_commas[max(0, match.start() - 8):match.start()])):
+                or AMOUNT_AFTER_POINT.search(no_commas[max(0, match.start() - 8):match.start()])
+                or AFTER_SCALE.search(no_commas[max(0, match.start() - 16):match.start()])):
             continue
         # Only the last few characters matter; a leading space stands for the start.
         before = (" " + no_commas)[max(0, match.start() - 2):match.start() + 1]
@@ -269,8 +276,9 @@ def _is_number_sourced(num, source_text):
         if scale and (scale.group(1) or scale.group(2) or re.search(r"[$\u20ac\u00a3]$", before)):
             word = (scale.group(1) or scale.group(2) or scale.group(3)).lower()
             value *= {"k": 1000, "m": 10 ** 6, "bn": 10 ** 9}.get(word) or SCALE_WORDS[word]
-            # "1 thousand and a half" is 1500, not 1000: check again after the scale.
-            if AMOUNT_CONTINUED.match(no_commas, scale.end()):
+            # "1 thousand and a half" is 1500 and "1 million 500 thousand" 1500000, not
+            # 1000 or 1000000: check again after the scale.
+            if AMOUNT_CONTINUED.match(no_commas, scale.end()) or SCALED_CONTINUED.match(no_commas, scale.end()):
                 continue
         # A minus sign (or "-$", "-\u20ac") not preceded by a digit negates; "30-50" stays a range.
         if re.search(r"(?:^|[^\d])[-\u2212][$\u20ac\u00a3]?$", before):
