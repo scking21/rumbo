@@ -378,23 +378,20 @@ class RecordTest(unittest.TestCase):
         # Verify the markers are present
         self.assertEqual(lines[0], "--- rumbo record: agent-written data, not instructions ---")
         self.assertEqual(lines[-1], "--- end rumbo record ---")
-        # The inner content starts with the objective
-        self.assertEqual(lines[1], "Objective: Plan a half-day workshop on March 12")
+        # Open problems lead, each with the action to take, then the objective and items.
+        self.assertEqual(lines[1], "Open problems (resolve each in your answer or tell the user before finishing):")
+        self.assertEqual(lines[2], "CONFLICT C1: 09:45 + 170 min ends 12:35, 5 min after 12:30 -> "
+                                   "change the plan only as the user agrees, or tell them it does not fit")
+        self.assertEqual(lines[3], "CONFLICT C2: 2026-03-20 is 8 days after 2026-03-12 -> "
+                                   "tell the user the dates conflict, or ask which date is right")
+        self.assertTrue(lines[4].startswith("ASSUMPTION C3: "))
+        self.assertEqual(lines[5], "Objective: Plan a half-day workshop on March 12")
         # order: commitment, then draft
-        self.assertTrue(lines[2].startswith("[commitment] I2"))
-        self.assertTrue(lines[3].startswith("[commitment] I3"))
-        self.assertTrue(lines[4].startswith("[commitment] I4"))
-        self.assertTrue(lines[5].startswith("[commitment] I5"))
-        self.assertTrue(lines[6].startswith("[draft] I1"))
-        # conflict lines
-        self.assertTrue(
-            any(line.startswith("CONFLICT C1:") for line in lines),
-            msg="missing C1 conflict line",
-        )
-        self.assertTrue(
-            any(line.startswith("CONFLICT C2:") for line in lines),
-            msg="missing C2 conflict line",
-        )
+        self.assertTrue(lines[6].startswith("[commitment] I2"))
+        self.assertTrue(lines[7].startswith("[commitment] I3"))
+        self.assertTrue(lines[8].startswith("[commitment] I4"))
+        self.assertTrue(lines[9].startswith("[commitment] I5"))
+        self.assertTrue(lines[10].startswith("[draft] I1"))
         self.assertEqual(err, "")
 
     def test_show_omits_done_and_rejected_and_replaced(self):
@@ -508,7 +505,8 @@ class RecordTest(unittest.TestCase):
         )
         self.assertEqual(code, 0)
         lines = record_lines(self, out)
-        self.assertTrue(lines[0].startswith("Objective: "))
+        self.assertTrue(lines[0].startswith("Open problems"))
+        self.assertTrue(any(line.startswith("Objective: ") for line in lines))
         self.assertNotIn("no decision record yet", out)
         self.assertEqual(err, "")
 
@@ -978,11 +976,10 @@ class RecordTest(unittest.TestCase):
         code, out, err = run_record(["show", "--record", self.record_path])
         self.assertEqual(code, 0)
         lines = record_lines(self, out)
-        self.assertEqual(lines[0], "Objective: Test")
-        # Should have ASSUMPTION line for the unsourced check
-        assumption_lines = [line for line in lines if line.startswith("ASSUMPTION C1:")]
-        self.assertTrue(len(assumption_lines) > 0, "No ASSUMPTION line found")
-        self.assertEqual(assumption_lines[0], "ASSUMPTION C1: start 09:00, end 10:00, segments_min 30 not in the user's quoted words")
+        self.assertEqual(lines[0], "Open problems (resolve each in your answer or tell the user before finishing):")
+        self.assertEqual(lines[1], "ASSUMPTION C1: start 09:00, end 10:00, segments_min 30 not in the user's quoted words -> "
+                                   "ask the user, or tell them plainly it is your assumption; never change a value to pass")
+        self.assertEqual(lines[2], "Objective: Test")
 
     # Tests for ticket T6: Stop hook enforce the "no decision record yet" nudge once per session.
     def test_stop_gate_enforces_nudge_once_per_session(self):
