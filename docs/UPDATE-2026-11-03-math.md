@@ -23,14 +23,15 @@ Recorded use of the adapter showed two kinds of wrong answer. Agents made a fail
 
 ## Hardened during review
 
-Codex review found 18 ways the wider reading could be wrong, and each is fixed with a regression test. Most let a value the agent chose pass as the user's. A few blocked an honest record. Every fix errs on the strict side: a phrase the reader cannot read whole sources nothing. The rules that came out of it:
+Codex review found 20 ways the wider reading could be wrong, and each is fixed with a regression test. Most let a value the agent chose pass as the user's. A few blocked an honest record. Every fix errs on the strict side: a phrase the reader cannot read whole sources nothing. The rules that came out of it:
 
 - Only the longest duration phrase counts, never a fragment of it. "two-and-a-half-hour" is 150, never 30, and "one hundred and one hours" is never 60.
 - Whole hours continued by a fraction or a bare number ("an hour and a third", "1 hour and 20") source nothing alone. A fraction with its own "hour" ("1 hour, and a half-hour break") is a separate duration.
 - A rate or frequency states no duration: "$150 an hour", "fifty dollars an hour", "per half hour", "every 2 hours", "twice an hour". A number counts as a price only with a currency sign, a currency word or "a"/"an", so "two half-hour sessions" is two durations.
 - "three-quarter hour" and "three quarters of an hour" are 45. "three quarter-hour breaks" is three of 15. "three quarter hour", with no hyphen, sources nothing.
 - A fraction followed by another unit ("two hours and a half day") sources nothing. A period after "hour" ends the sentence, so "1 hour. 15 minutes" is two durations.
-- For amounts, "fifteen hundred" is 1500. A number that cannot be read whole, continued by a fraction ("one and a half thousand"), after a spelled decimal point ("five million" in "one point five million") or before a plural fraction ("three quarters"), sources nothing.
+- For amounts, "fifteen hundred" is 1500. A number that cannot be read whole, continued by a fraction ("one and a half thousand", "1 thousand and a half", checked after any scale word too), after a spelled decimal point ("five million" in "one point five million") or before a plural fraction ("three quarters"), sources nothing.
+- A date-range end takes the shared month only when the other end names none of its own: "June 30–2 July" is June 30 and July 2, never June 2 or July 30.
 - `end_next_day` is valid only when the end clock time is before the start.
 
 ## Drift hooks from recent research
