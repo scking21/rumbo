@@ -56,3 +56,12 @@ python3 -m unittest tests.test_release_identity
 ```
 
 `rumbo/tests/test_math_phrasings.py` holds the new cases. Each honest phrasing passes and each invented value stays `UNSOURCED` or fails. The eval messages for the agenda overrun and the deadline after the event are unchanged. No eval rerun or installed-host verification is claimed. To roll back, return to `2398b05`. There is no data migration.
+
+## November 4 Codex follow-up
+
+The November 3 component versions above describe that update's original scope.
+The subsequent OpenAI/Codex adapter candidate is **0.3.7**. It adds an explicit
+commitments wrapper and skill using the canonical record checker, with matching
+packaged source and regression checks. This does not install Claude hooks in
+Codex or establish installed-host verification. The Python engine remains 0.3.5;
+the Claude adapter remains 0.3.9.

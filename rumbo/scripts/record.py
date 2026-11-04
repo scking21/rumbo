@@ -447,6 +447,14 @@ def _stated_minutes(source_text):
         return re.search(r"(?:[A-Za-z]-|(?:\d|\b(?:%s|hundred|thousand))[\s-]+and[\s-]+(?:an?[\s-]+)?)$"
                          % NUMBER_WORD, text[max(0, start - 40):start], flags) is not None
 
+    def is_signed_fraction(start):
+        # Standalone fractions must obey the same minus-sign rule as numeric
+        # hours. Inspect only adjacent whitespace, not the entire quote prefix.
+        pos = start - 1
+        while pos >= 0 and text[pos].isspace():
+            pos -= 1
+        return pos >= 0 and text[pos] in "-−"
+
     # Hours, optionally followed by minutes: "2 hours", "an hour 15 minutes", "2h30".
     for m in re.finditer(lead + num + r"[\s-]*" + HOUR_UNIT
                          + r"(?:[\s,]*(?:(?:and|plus)\s+)?(\d{1,2}|%s)[\s-]*%s|(?<=h)(\d{2})\b)?" % (NUMBER_WORD, MINUTE_UNIT),
@@ -486,7 +494,7 @@ def _stated_minutes(source_text):
               and not is_rate(m.start(), m.group(1).lower() in ("a", "an")))
         found.append((m.start(), m.end(), hours * 60 + fraction if ok else None))
     for m in re.finditer(r"\b(?:(?:a|one)\s+)?half(?:\s+an?|-)?\s*hour\b", text, flags):
-        ok = not is_rate(m.start(), True) and not continues(m.start())
+        ok = not is_signed_fraction(m.start()) and not is_rate(m.start(), True) and not continues(m.start())
         found.append((m.start(), m.end(), decimal.Decimal(30) if ok else None))
     # "a quarter-hour" and "a quarter of an hour" are 15; "three-quarter hour" and "three
     # quarters of an hour" are 45; "three quarter-hour breaks" are three of 15 (the count
@@ -503,20 +511,31 @@ def _stated_minutes(source_text):
                 minutes = None
         else:
             minutes = None if plural else 15
-        ok = minutes is not None and not is_rate(m.start(), True) and not continues(m.start())
+        ok = (minutes is not None and not is_signed_fraction(m.start())
+              and not is_rate(m.start(), True) and not continues(m.start()))
         found.append((m.start(), m.end(), decimal.Decimal(minutes) if ok else None))
 
     # Sweep in start order (longest first at a tie): a span is inside a longer one when
     # an earlier span reaches past its end, or reaches its end from an earlier start.
     # A phrase followed by minutes it did not read ("one and a half hours and fifteen
     # minutes") is not the user's whole duration, whatever its form: it states nothing.
-    more_minutes = re.compile(r"\s+(?:and\s+|plus\s+)?(?:\d{1,3}|%s)[\s-]*(?:minutes?|mins?)\b" % NUMBER_WORD, flags)
+    more_minutes_prefix = re.compile(r"\s+(?:(?:and|plus)\s+)?", flags)
+
+    def has_more_minutes(end):
+        continuation = more_minutes_prefix.match(text, end)
+        if continuation is None:
+            return False
+        start = continuation.end()
+        count = count_pattern.match(text, start)
+        count_end = count.end() if count else number_ends.get(start)
+        return count_end is not None and adjacent_minutes_pattern.match(text, count_end) is not None
+
     best_end, best_start = -1, -1
     for start, end, value in sorted(found, key=lambda span: (span[0], -span[1])):
         inside = best_end > end or (best_end == end and best_start < start)
         if end > best_end:
             best_end, best_start = end, start
-        if not inside and value is not None and not more_minutes.match(text, end):
+        if not inside and value is not None and not has_more_minutes(end):
             yield value
 
 

@@ -125,6 +125,36 @@ class ReviewSourcingBoundaryTests(unittest.TestCase):
                         dict(kind='within_budget', amounts=[amount], total_cap=10000000))
                     self.assertIn(expected, result.stdout)
 
+    def test_compound_fraction_large_following_minutes_are_unsourced(self):
+        for count in ('one hundred', '1000', 'one thousand', '100.5'):
+            with self.subTest(count=count):
+                result = self.check_output('Start 9:00; one and a half hours and %s minutes of rehearsal; finish 10:30.' % count,
+                    dict(kind='fits_window', start='09:00', end='10:30', segments_min=[90]))
+                self.assertIn('UNSOURCED', result.stdout)
+
+    def test_negative_standalone_fractions_do_not_source_positive_duration(self):
+        for phrase in ('-half an hour', '−half an hour', '- half an hour',
+                       '-a half-hour', '-one half hour', '-quarter of an hour',
+                       '− three quarters of an hour'):
+            with self.subTest(phrase=phrase):
+                minutes = 45 if 'three' in phrase else 15 if 'quarter' in phrase else 30
+                result = self.check_output('Start 9:00; %s; finish 10:30.' % phrase,
+                    dict(kind='fits_window', start='09:00', end='10:30', segments_min=[minutes]))
+                self.assertIn('UNSOURCED', result.stdout)
+
+    def test_compound_fraction_non_duration_continuation_stays_sourced(self):
+        result = self.check_output('Start 9:00; one and a half hours and one hundred guests; finish 10:30.',
+            dict(kind='fits_window', start='09:00', end='10:30', segments_min=[90]))
+        self.assertIn('PASS', result.stdout)
+
+    def test_standalone_fraction_large_following_minutes_are_unsourced(self):
+        for phrase, minutes in (('half an hour', 30), ('quarter of an hour', 15)):
+            for count in ('one hundred', '1000'):
+                with self.subTest(phrase=phrase, count=count):
+                    result = self.check_output('Start 9:00; %s plus %s minutes; finish 10:30.' % (phrase, count),
+                        dict(kind='fits_window', start='09:00', end='10:30', segments_min=[minutes]))
+                    self.assertIn('UNSOURCED', result.stdout)
+
     def test_non_duration_continuation_preserves_hours(self):
         result = self.check_output('Start 9:00; an hour and four breaks; finish 10:00.',
             dict(kind='fits_window', start='09:00', end='10:00', segments_min=[60]))
