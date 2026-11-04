@@ -182,7 +182,10 @@ def _word_numbers(text):
     i = 0
     while i < len(tokens):
         word, start, end = tokens[i]
-        article = word in ("a", "an") and i + 1 < len(tokens) and tokens[i + 1][0] in ("hundred", *SCALE_WORDS)
+        # "a thousand" is 1000 only when nothing but spaces separates the words: in "a $5
+        # thousand fee" the article is not a number.
+        article = (word in ("a", "an") and i + 1 < len(tokens) and tokens[i + 1][0] in ("hundred", *SCALE_WORDS)
+                   and re.fullmatch(r"\s+", text[end:tokens[i + 1][1]]) is not None)
         if word not in UNIT_WORDS and word not in TENS_WORDS and not article:
             i += 1
             continue
