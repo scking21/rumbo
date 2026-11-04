@@ -174,8 +174,9 @@ def _word_numbers(text):
     """Yield (start, end, Decimal) for each spelled cardinal number in text.
 
     "twenty-five", "four hundred fifty", "one hundred and twenty", "a thousand",
-    "five thousand". Two units or two tens in a row end a number ("five six" is
-    5 and 6), and "and" joins only after hundred or a scale word.
+    "five thousand", "fifteen hundred". Two units or two tens in a row end a number
+    ("five six" is 5 and 6), and "and" joins only after hundred or a scale word. A
+    "hundred" or scale word that cannot attach makes the whole number state nothing.
     """
     tokens = [(m.group(0).lower(), m.start(), m.end()) for m in re.finditer(r"[A-Za-z]+", text)]
     i = 0
@@ -185,7 +186,7 @@ def _word_numbers(text):
         if word not in UNIT_WORDS and word not in TENS_WORDS and not article:
             i += 1
             continue
-        total, current, last, j, stop = 0, 0, None, i, end
+        total, current, last, j, stop, stuck = 0, 0, None, i, end, False
         if article:
             current, last, j = 1, "unit", i + 1
         while j < len(tokens):
@@ -205,12 +206,16 @@ def _word_numbers(text):
                 current += TENS_WORDS[word]
                 last = "tens"
             elif word == "hundred":
-                if last not in ("unit",) or not 1 <= current <= 9:
+                # "five hundred", and the colloquial "fifteen hundred" (1500) and
+                # "twenty-five hundred" (2500).
+                if last not in ("unit", "tens", "tens+unit") or not 1 <= current <= 99:
+                    stuck = True
                     break
                 current *= 100
                 last = "hundred"
             elif word in SCALE_WORDS:
                 if last is None or last == "scale" or current == 0:
+                    stuck = True
                     break
                 total += current * SCALE_WORDS[word]
                 current, last = 0, "scale"
@@ -221,9 +226,11 @@ def _word_numbers(text):
                 break
             stop = w_end
             j += 1
-        if last is not None:
+        # A number the parser cannot finish ("twelve hundred thousand thousand") states
+        # nothing: never source its prefix.
+        if last is not None and not stuck:
             yield start, stop, decimal.Decimal(total + current)
-        i = max(j, i + 1)
+        i = max(j + (1 if stuck else 0), i + 1)
 
 
 def _is_number_sourced(num, source_text):

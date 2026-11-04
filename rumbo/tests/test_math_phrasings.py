@@ -171,6 +171,10 @@ class AmountPhrasingTests(unittest.TestCase):
             ('Budget is $800; the photographer charges four hundred fifty dollars.', [450], 800),
             ('Budget $500, plus one hundred and twenty for flowers.', [120], 500),
             ('A thousand dollars in all, twenty-five for stamps.', [25], 1000),
+            ('Catering costs fifteen hundred dollars of a $2,000 budget.', [1500], 2000),
+            ('Venue is twenty-five hundred dollars, budget $3,000.', [2500], 3000),
+            ('Founded nineteen hundred and fifty; budget $2,000.', [1950], 2000),
+            ('Tables are twelve hundred, budget $2,000.', [1200], 2000),
         )
         for words, amounts, cap in cases:
             with self.subTest(words=words):
@@ -183,7 +187,9 @@ class AmountPhrasingTests(unittest.TestCase):
             ('five six, budget $1000000000', 56),
             ('construction is $1.8 million, budget $1000000000', 1.8),
             ('a 5m banner, budget $1000000000', 5000000),
-            ('twelve hundred, budget $1000000000', 1200),
+            ('Catering costs fifteen hundred dollars; budget $1000000000', 15),
+            ('twenty-five hundred dollars, budget $1000000000', 25),
+            ('a thousand thousand, budget $1000000000', 1000),
             ('a refund of -twenty, budget $1000000000', 20),
             ('a refund of -€50, budget $1000000000', 50),
         )
