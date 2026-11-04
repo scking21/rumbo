@@ -269,6 +269,9 @@ def _is_number_sourced(num, source_text):
         if scale and (scale.group(1) or scale.group(2) or re.search(r"[$\u20ac\u00a3]$", before)):
             word = (scale.group(1) or scale.group(2) or scale.group(3)).lower()
             value *= {"k": 1000, "m": 10 ** 6, "bn": 10 ** 9}.get(word) or SCALE_WORDS[word]
+            # "1 thousand and a half" is 1500, not 1000: check again after the scale.
+            if AMOUNT_CONTINUED.match(no_commas, scale.end()):
+                continue
         # A minus sign (or "-$", "-\u20ac") not preceded by a digit negates; "30-50" stays a range.
         if re.search(r"(?:^|[^\d])[-\u2212][$\u20ac\u00a3]?$", before):
             value = -value
