@@ -296,6 +296,23 @@ class ReviewSourcingBoundaryTests(unittest.TestCase):
         result=self.check_output('Fee $0.5k; cap1000.',dict(kind='within_budget',amounts=[500],total_cap=1000))
         self.assertIn('PASS',result.stdout)
 
+    def test_fraction_prefix_does_not_source_interior_scaled_amount(self):
+        for phrase in ('half a million','50 percent of one million','50% of one million','1/2 of a million','½ a million','1 / 2 of a million','a quarter of a million','half of 1 million','one half of one million','three quarters of 1 million','half of $1M','a twelfth of a million','half a $1M'):
+            with self.subTest(phrase=phrase):
+                result=self.check_output('Cost $750k; budget '+phrase+' dollars.',dict(kind='within_budget',amounts=[750000],total_cap=1000000))
+                self.assertIn('UNSOURCED',result.stdout)
+
+    def test_fraction_prefix_preserves_independent_scaled_amount(self):
+        for phrase in ('a million','one million','$1M','growth of a million','half the work; budget a million'):
+            result=self.check_output('Cost $750k; budget '+phrase+' dollars.',dict(kind='within_budget',amounts=[750000],total_cap=1000000))
+            self.assertIn('PASS',result.stdout)
+
+    def test_fraction_prefix_shared_minute_path(self):
+        for phrase,want in (('half of thirty minutes','UNSOURCED'),('half of30minutes','UNSOURCED'),('half of thirty minutes; independent duration 30 minutes','PASS')):
+            result=self.check_output('Start9:00; '+phrase+'; finish10:00.',
+                dict(kind='fits_window',start='09:00',end='10:00',segments_min=[30]))
+            self.assertIn(want,result.stdout)
+
 
 if __name__ == '__main__':
     unittest.main()

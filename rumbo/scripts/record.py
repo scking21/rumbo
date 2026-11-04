@@ -268,6 +268,56 @@ SCALED_CONTINUED = re.compile(
 AFTER_SCALE = re.compile(r"\b(?:thousand|million|billion)[\s,]*(?:and\s+)?$", re.IGNORECASE)
 
 
+def _after_fraction_prefix(text, start):
+    """Reject an interior amount of a fractional phrase, without evaluating it."""
+    pos = start
+    while pos > 0 and (text[pos - 1].isspace() or text[pos - 1] in "$€£"):
+        pos -= 1
+
+    def previous_word(end):
+        while end > 0 and (text[end - 1].isspace() or text[end - 1] == "-"):
+            end -= 1
+        begin = end
+        while begin > 0 and text[begin - 1].isalpha():
+            begin -= 1
+        return text[begin:end].lower(), begin
+
+    word, pos = previous_word(pos)
+    # At most the adjacent article and 'of' connect a fraction to its amount.
+    for _ in range(3):
+        if word not in ("a", "an", "the", "of"):
+            break
+        word, pos = previous_word(pos)
+    if not word:
+        end = pos
+        while end > 0 and text[end - 1].isspace():
+            end -= 1
+        if end > 0 and text[end - 1] in "%¼½¾⅐⅑⅒⅓⅔⅕⅖⅗⅘⅙⅚⅛⅜⅝⅞":
+            return True
+        denominator_end = end
+        while end > 0 and text[end - 1].isdecimal():
+            end -= 1
+        if end < denominator_end:
+            while end > 0 and text[end - 1].isspace():
+                end -= 1
+            if end > 0 and text[end - 1] in "/⁄":
+                end -= 1
+                while end > 0 and text[end - 1].isspace():
+                    end -= 1
+                if end > 0 and text[end - 1].isdecimal():
+                    return True
+    if word in ("half", "halves", "quarter", "quarters", "third", "thirds", "percent", "percentage"):
+        return True
+    if word.endswith(("th", "ths")):
+        count, _ = previous_word(pos)
+        digit_end = pos
+        while digit_end > 0 and text[digit_end - 1].isspace():
+            digit_end -= 1
+        return (count in ("a", "an") or count in UNIT_WORDS or count in TENS_WORDS
+                or (digit_end > 0 and text[digit_end - 1].isdecimal()))
+    return False
+
+
 def _is_number_sourced(num, source_text, excluded_unit=None):
     """Return True if num is sourced in source_text per spec.
     The amount 0 is always sourced.
@@ -284,7 +334,8 @@ def _is_number_sourced(num, source_text, excluded_unit=None):
         if excluded_unit is not None and excluded_unit.match(no_commas, match.end()):
             continue
         value = decimal.Decimal(match.group(1))
-        if (AMOUNT_CONTINUED.match(no_commas, match.end())
+        if (_after_fraction_prefix(no_commas, match.start())
+                or AMOUNT_CONTINUED.match(no_commas, match.end())
                 or _after_decimal_word(no_commas, match.start())
                 or AFTER_SCALE.search(no_commas[max(0, match.start() - 16):match.start()])):
             continue
@@ -324,7 +375,8 @@ def _is_number_sourced(num, source_text, excluded_unit=None):
         if excluded_unit is not None and excluded_unit.match(source_text, end):
             continue
         ends_scaled = re.search(r"(?:thousand|million|billion)$", source_text[start:end], re.IGNORECASE)
-        if (AMOUNT_CONTINUED.match(source_text, end)
+        if (_after_fraction_prefix(source_text, start)
+                or AMOUNT_CONTINUED.match(source_text, end)
                 or _after_decimal_word(source_text, start)
                 or AFTER_SCALE.search(source_text[max(0, start - 16):start])
                 or (ends_scaled and SCALED_CONTINUED.match(source_text, end))):
