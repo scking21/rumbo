@@ -274,20 +274,29 @@ def _is_number_sourced(num, source_text):
                 or AMOUNT_AFTER_POINT.search(no_commas[max(0, match.start() - 8):match.start()])
                 or AFTER_SCALE.search(no_commas[max(0, match.start() - 16):match.start()])):
             continue
-        # Only the last few characters matter; a leading space stands for the start.
-        before = (" " + no_commas)[max(0, match.start() - 2):match.start() + 1]
+        # Scan only adjacent whitespace/currency, preserving signs and currency
+        # scales without copying or rescanning the entire preceding quote.
+        pos = match.start() - 1
+        while pos >= 0 and no_commas[pos].isspace():
+            pos -= 1
+        currency = pos >= 0 and no_commas[pos] in "$€£"
+        if currency:
+            pos -= 1
+            while pos >= 0 and no_commas[pos].isspace():
+                pos -= 1
         # "$1.5k" is 1500 and "1.8 million" is 1800000, never 1.5 or 1.8. A bare "M"
         # scales only after a currency sign: "$2.5M" is money, "5m" is a length.
         scale = SCALE_SUFFIX.match(no_commas, match.end())
-        if scale and (scale.group(1) or scale.group(2) or re.search(r"[$\u20ac\u00a3]$", before)):
+        if scale and (scale.group(1) or scale.group(2) or currency):
             word = (scale.group(1) or scale.group(2) or scale.group(3)).lower()
             value *= {"k": 1000, "m": 10 ** 6, "bn": 10 ** 9}.get(word) or SCALE_WORDS[word]
             # "1 thousand and a half" is 1500 and "1 million 500 thousand" 1500000, not
             # 1000 or 1000000: check again after the scale.
             if AMOUNT_CONTINUED.match(no_commas, scale.end()) or SCALED_CONTINUED.match(no_commas, scale.end()):
                 continue
-        # A minus sign (or "-$", "-\u20ac") not preceded by a digit negates; "30-50" stays a range.
-        if re.search(r"(?:^|[^\d])[-\u2212][$\u20ac\u00a3]?$", before):
+        # A minus not preceded by a digit negates; "30-50" stays a range.
+        if (pos >= 0 and no_commas[pos] in "-−"
+                and (pos == 0 or not no_commas[pos - 1].isdecimal())):
             value = -value
         if value == target:
             return True
@@ -299,8 +308,20 @@ def _is_number_sourced(num, source_text):
                 or AFTER_SCALE.search(source_text[max(0, start - 16):start])
                 or (ends_scaled and SCALED_CONTINUED.match(source_text, end))):
             continue
-        before = source_text[max(0, start - 8):start]
-        if re.search(r"[-\u2212]\s*$", before) and not re.search(r"[A-Za-z]-\s*$", before):
+        # Walk only the adjacent sign/currency prefix, not the complete quote:
+        # rescanning the full prefix for every word makes long quotes quadratic.
+        pos = start - 1
+        while pos >= 0 and source_text[pos].isspace():
+            pos -= 1
+        currency = pos >= 0 and source_text[pos] in "$€£"
+        if currency:
+            pos -= 1
+            while pos >= 0 and source_text[pos].isspace():
+                pos -= 1
+        negative = pos >= 0 and source_text[pos] in "-−"
+        hyphenated_word = (not currency and pos > 0 and source_text[pos] == "-"
+                           and source_text[pos - 1].isascii() and source_text[pos - 1].isalpha())
+        if negative and not hyphenated_word:
             value = -value
         if value == target:
             return True
@@ -369,22 +390,48 @@ def _stated_minutes(source_text):
     # A spelled count must be the user's whole number: "one hours" inside "one hundred
     # and one hours" is not 1. Digits and "a"/"an" stand alone.
     whole_numbers = {(start, end) for start, end, _ in _word_numbers(text)}
+    number_ends = dict(whole_numbers)
 
     def is_whole(m, group):
         word = m.group(group)
         return (word is None or word.lower() in ("a", "an") or re.fullmatch(r"[\d.]+", word) is not None
                 or (m.start(group), m.end(group)) in whole_numbers)
 
+    continuation_pattern = re.compile(r"\s*(?:,\s*)?(?:(and|plus)[\s-]+)?", flags)
+    count_pattern = re.compile(r"(?:an?\b|\d+(?:\.\d+)?)", flags)
+    fraction_pattern = re.compile(r"(?:half|halves|quarters?|thirds?)\b", flags)
+    duration_end_pattern = re.compile(
+        r"[\s-]*(?:half\b|halves\b|quarters?\b|thirds?\b|minutes?\b|mins?\b|[,.;)]|$)", flags)
+
+    adjacent_minutes_pattern = re.compile(r"[\s-]*" + MINUTE_UNIT, flags)
+
+    fraction_unit_pattern = re.compile(r"[\s-]+(?:of[\s-]+an?[\s-]+)?hour\b", flags)
+
     def has_fraction(m):
-        # Whole hours that the user continued ("an hour and three quarters", "1 hour and
-        # 20", "2 hours plus a third") never state the whole hours alone; the full phrase
-        # is read below when it can be, and otherwise states nothing.
-        # A fraction with its own singular "hour" ("1 hour, and a half-hour break") is a
-        # separate duration, not a continuation.
-        return re.match(r"\s*,?\s*(?:and|plus)[\s-]+(?:(?:(?:an?|one|two|three)[\s-]+)?(?:half|halves|quarters?|thirds?)\b"
-                        r"(?![\s-]+(?:of[\s-]+an?[\s-]+)?hour\b)"
-                        r"|(?:\d+|%s)\s*(?:[,.;)]|$|minutes?\b|mins?\b))" % NUMBER_WORD,
-                        text[m.end():m.end() + 40], flags) is not None
+        # Do not source a whole-hour prefix when an unparsed continued duration
+        # follows. Reuse global number spans; do not rescan or copy the quote tail.
+        continuation = continuation_pattern.match(text, m.end())
+        if continuation is None:
+            return False
+        start = continuation.end()
+        count = count_pattern.match(text, start)
+        end = count.end() if count else number_ends.get(start)
+        fraction_start = start if end is None else end
+        while fraction_start < len(text) and (text[fraction_start].isspace() or text[fraction_start] == "-"):
+            fraction_start += 1
+        fraction = fraction_pattern.match(text, fraction_start)
+        if fraction is not None and fraction_unit_pattern.match(text, fraction.end()):
+            # Preserve the author's separate singular-hour phrase: an hour and
+            # a half-hour break states two durations, not one continued duration.
+            return False
+        if end is None:
+            return continuation.group(1) is not None and fraction is not None
+        if continuation.group(1) is None:
+            # Large adjacent minute counts may exceed the supported compact
+            # grammar. They must not silently leave only the whole-hour prefix.
+            return adjacent_minutes_pattern.match(text, end) is not None
+        return duration_end_pattern.match(text, end) is not None
+
 
     # Every duration phrase is a candidate span with its minutes, or None when it is a
     # rate or otherwise states nothing. Only the longest phrases count: a span inside a
@@ -438,7 +485,7 @@ def _stated_minutes(source_text):
         ok = ("hour" in tail and hours is not None and is_whole(m, 1)
               and not is_rate(m.start(), m.group(1).lower() in ("a", "an")))
         found.append((m.start(), m.end(), hours * 60 + fraction if ok else None))
-    for m in re.finditer(r"\b(?:(?:a|one)\s+)?half(?:\s+an?|-|\s+)?\s*hour\b", text, flags):
+    for m in re.finditer(r"\b(?:(?:a|one)\s+)?half(?:\s+an?|-)?\s*hour\b", text, flags):
         ok = not is_rate(m.start(), True) and not continues(m.start())
         found.append((m.start(), m.end(), decimal.Decimal(30) if ok else None))
     # "a quarter-hour" and "a quarter of an hour" are 15; "three-quarter hour" and "three
