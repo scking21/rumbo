@@ -234,10 +234,14 @@ def _word_numbers(text):
 
 
 # A number the user continued with a fraction ("one and a half thousand", "1 point 5
-# million") was not stated as that number: it sources nothing as an amount.
+# million", "three quarters") was not stated as that number: it sources nothing as an
+# amount.
 AMOUNT_CONTINUED = re.compile(
-    r"[\s-]+(?:and[\s-]+(?:an?|one|two|three)[\s-]+(?:half|halves|quarters?|thirds?)\b|(?:point|dot)\b)",
+    r"[\s-]+(?:and[\s-]+(?:an?|one|two|three)[\s-]+(?:half|halves|quarters?|thirds?)\b|(?:point|dot)\b"
+    r"|(?:halves|quarters|thirds|fifths|eighths)\b)",
     re.IGNORECASE)
+# Nor is the part after a spelled decimal point: "five million" in "one point five million".
+AMOUNT_AFTER_POINT = re.compile(r"\b(?:point|dot)[\s-]+$", re.IGNORECASE)
 
 
 def _is_number_sourced(num, source_text):
@@ -254,7 +258,8 @@ def _is_number_sourced(num, source_text):
     target = decimal.Decimal(str(num))
     for match in re.finditer(r"(?<![\d.:])(\d+(?:\.\d+)?(?:[eE][-+]?\d+)?)(?![\d:]|\.\d)", no_commas):
         value = decimal.Decimal(match.group(1))
-        if AMOUNT_CONTINUED.match(no_commas, match.end()):
+        if (AMOUNT_CONTINUED.match(no_commas, match.end())
+                or AMOUNT_AFTER_POINT.search(no_commas[max(0, match.start() - 8):match.start()])):
             continue
         # Only the last few characters matter; a leading space stands for the start.
         before = (" " + no_commas)[max(0, match.start() - 2):match.start() + 1]
@@ -271,7 +276,8 @@ def _is_number_sourced(num, source_text):
             return True
     # Spelled numbers: "twelve", "four hundred fifty dollars", "five thousand".
     for start, end, value in _word_numbers(source_text):
-        if AMOUNT_CONTINUED.match(source_text, end):
+        if (AMOUNT_CONTINUED.match(source_text, end)
+                or AMOUNT_AFTER_POINT.search(source_text[max(0, start - 8):start])):
             continue
         before = source_text[max(0, start - 8):start]
         if re.search(r"[-\u2212]\s*$", before) and not re.search(r"[A-Za-z]-\s*$", before):
