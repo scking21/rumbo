@@ -245,6 +245,18 @@ AMOUNT_CONTINUED = re.compile(
     re.IGNORECASE)
 # Nor is the part after a spelled decimal point: "five million" in "one point five million".
 AMOUNT_AFTER_POINT = re.compile(r"\b(?:point|dot)[\s-]+$", re.IGNORECASE)
+
+
+def _after_decimal_word(text, start):
+    # Scan only adjacent separators, then a bounded marker. A character window
+    # alone loses point/dot when the user adds whitespace.
+    pos = start
+    while pos > 0 and (text[pos - 1].isspace() or text[pos - 1] == "-"):
+        pos -= 1
+    if pos == start:
+        return False
+    return re.search(r"\b(?:point|dot)$", text[max(0, pos - 6):pos], re.IGNORECASE) is not None
+
 # A scaled amount that runs into another number is one amount, "1 million 500 thousand"
 # (1500000), "1 million five hundred thousand" or "2 thousand 500 dollars" (2500): no
 # group is the user's amount alone, in digits or words.
@@ -271,7 +283,7 @@ def _is_number_sourced(num, source_text):
     for match in re.finditer(r"(?<![\d.:])(\d+(?:\.\d+)?(?:[eE][-+]?\d+)?)(?![\d:]|\.\d)", no_commas):
         value = decimal.Decimal(match.group(1))
         if (AMOUNT_CONTINUED.match(no_commas, match.end())
-                or AMOUNT_AFTER_POINT.search(no_commas[max(0, match.start() - 8):match.start()])
+                or _after_decimal_word(no_commas, match.start())
                 or AFTER_SCALE.search(no_commas[max(0, match.start() - 16):match.start()])):
             continue
         # Scan only adjacent whitespace/currency, preserving signs and currency
@@ -307,7 +319,7 @@ def _is_number_sourced(num, source_text):
     for start, end, value in _word_numbers(source_text):
         ends_scaled = re.search(r"(?:thousand|million|billion)$", source_text[start:end], re.IGNORECASE)
         if (AMOUNT_CONTINUED.match(source_text, end)
-                or AMOUNT_AFTER_POINT.search(source_text[max(0, start - 8):start])
+                or _after_decimal_word(source_text, start)
                 or AFTER_SCALE.search(source_text[max(0, start - 16):start])
                 or (ends_scaled and SCALED_CONTINUED.match(source_text, end))):
             continue
@@ -397,6 +409,8 @@ def _stated_minutes(source_text):
 
     def is_whole(m, group):
         word = m.group(group)
+        if word is not None and _after_decimal_word(text, m.start(group)):
+            return False
         return (word is None or word.lower() in ("a", "an") or re.fullmatch(r"[\d.]+", word) is not None
                 or (m.start(group), m.end(group)) in whole_numbers)
 
@@ -522,7 +536,7 @@ def _stated_minutes(source_text):
     # an earlier span reaches past its end, or reaches its end from an earlier start.
     # A phrase followed by minutes it did not read ("one and a half hours and fifteen
     # minutes") is not the user's whole duration, whatever its form: it states nothing.
-    more_minutes_prefix = re.compile(r"\s*(?:,\s*)?(?:(?:and|plus)\s+)?", flags)
+    more_minutes_prefix = re.compile(r"\s*(?:,\s*)?(?:(and|plus)\s+)?", flags)
 
     def has_more_minutes(end):
         continuation = more_minutes_prefix.match(text, end)
@@ -531,7 +545,16 @@ def _stated_minutes(source_text):
         start = continuation.end()
         count = count_pattern.match(text, start)
         count_end = count.end() if count else number_ends.get(start)
-        return count_end is not None and adjacent_minutes_pattern.match(text, count_end) is not None
+        if count_end is not None and adjacent_minutes_pattern.match(text, count_end) is not None:
+            return True
+        # A further fraction without its own hour unit cannot certify this
+        # shorter duration. Do not guess the omitted unit or its arithmetic.
+        fraction_start = start if count_end is None else count_end
+        while fraction_start < len(text) and (text[fraction_start].isspace() or text[fraction_start] == "-"):
+            fraction_start += 1
+        fraction = fraction_pattern.match(text, fraction_start)
+        return (continuation.group(1) is not None and fraction is not None
+                and fraction_unit_pattern.match(text, fraction.end()) is None)
 
     best_end, best_start = -1, -1
     for start, end, value in sorted(found, key=lambda span: (span[0], -span[1])):

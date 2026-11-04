@@ -184,5 +184,33 @@ class ReviewSourcingBoundaryTests(unittest.TestCase):
         self.assertIn('PASS', result.stdout)
 
 
+    def test_decimal_word_duration_never_sources_suffix(self):
+        for phrase in ('two point one hours', 'two point    one hours', 'two dot      one hours', 'two dot one hours', 'two-point-one hours', 'two point 1 hours', 'two point one and a half hours'):
+            for minutes in (60, 90):
+                with self.subTest(phrase=phrase, minutes=minutes):
+                    result = self.check_output('Start 9:00; ' + phrase + ' of rehearsal; finish 10:30.',
+                        dict(kind='fits_window', start='09:00', end='10:30', segments_min=[minutes]))
+                    self.assertIn('UNSOURCED', result.stdout)
+
+    def test_fraction_duration_tail_never_sources_prefix(self):
+        for phrase in ('one and a half hours plus a quarter', 'one and a half hours, and three quarters', 'half an hour plus a half', 'a quarter of an hour and one third'):
+            minutes = 90 if phrase.startswith('one') else (30 if phrase.startswith('half') else 15)
+            with self.subTest(phrase=phrase):
+                result = self.check_output('Start 9:00; ' + phrase + ' of rehearsal; finish 10:30.',
+                    dict(kind='fits_window', start='09:00', end='10:30', segments_min=[minutes]))
+                self.assertIn('UNSOURCED', result.stdout)
+
+    def test_fraction_tail_with_explicit_own_hour_stays_separate(self):
+        result = self.check_output('Start 9:00; one and a half hours plus a quarter-hour break; finish 10:45.',
+            dict(kind='fits_window', start='09:00', end='10:45', segments_min=[90,15]))
+        self.assertIn('PASS', result.stdout)
+
+    def test_decimal_word_amount_whitespace_does_not_source_suffix(self):
+        for phrase in ('two point    one million', 'two dot      one million'):
+            result = self.check_output('Fee ' + phrase + '; cap 2000000.',
+                dict(kind='within_budget', amounts=[1000000], total_cap=2000000))
+            self.assertIn('UNSOURCED', result.stdout)
+
+
 if __name__ == '__main__':
     unittest.main()
