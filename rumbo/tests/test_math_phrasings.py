@@ -180,6 +180,7 @@ class AmountPhrasingTests(unittest.TestCase):
             ('Venue is twenty-five hundred dollars, budget $3,000.', [2500], 3000),
             ('Founded nineteen hundred and fifty; budget $2,000.', [1950], 2000),
             ('Tables are twelve hundred, budget $2,000.', [1200], 2000),
+            ('Two speakers at $500 and one and a half days of prep, budget $2,000.', [500, 500], 2000),
         )
         for words, amounts, cap in cases:
             with self.subTest(words=words):
@@ -195,6 +196,11 @@ class AmountPhrasingTests(unittest.TestCase):
             ('Catering costs fifteen hundred dollars; budget $1000000000', 15),
             ('twenty-five hundred dollars, budget $1000000000', 25),
             ('a thousand thousand, budget $1000000000', 1000),
+            ('Catering costs one and a half thousand dollars; budget $1000000000', 1),
+            ('one point five million, budget $1000000000', 1),
+            ('2 and a half thousand, budget $1000000000', 2),
+            ('a million and a half, budget $1000000000', 1000000),
+            ('two-and-a-half grand, budget $1000000000', 2),
             ('a refund of -twenty, budget $1000000000', 20),
             ('a refund of -€50, budget $1000000000', 50),
         )

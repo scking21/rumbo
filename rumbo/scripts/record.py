@@ -233,6 +233,13 @@ def _word_numbers(text):
         i = max(j + (1 if stuck else 0), i + 1)
 
 
+# A number the user continued with a fraction ("one and a half thousand", "1 point 5
+# million") was not stated as that number: it sources nothing as an amount.
+AMOUNT_CONTINUED = re.compile(
+    r"[\s-]+(?:and[\s-]+(?:an?|one|two|three)[\s-]+(?:half|halves|quarters?|thirds?)\b|(?:point|dot)\b)",
+    re.IGNORECASE)
+
+
 def _is_number_sourced(num, source_text):
     """Return True if num is sourced in source_text per spec.
     The amount 0 is always sourced.
@@ -247,6 +254,8 @@ def _is_number_sourced(num, source_text):
     target = decimal.Decimal(str(num))
     for match in re.finditer(r"(?<![\d.:])(\d+(?:\.\d+)?(?:[eE][-+]?\d+)?)(?![\d:]|\.\d)", no_commas):
         value = decimal.Decimal(match.group(1))
+        if AMOUNT_CONTINUED.match(no_commas, match.end()):
+            continue
         # Only the last few characters matter; a leading space stands for the start.
         before = (" " + no_commas)[max(0, match.start() - 2):match.start() + 1]
         # "$1.5k" is 1500 and "1.8 million" is 1800000, never 1.5 or 1.8. A bare "M"
@@ -262,6 +271,8 @@ def _is_number_sourced(num, source_text):
             return True
     # Spelled numbers: "twelve", "four hundred fifty dollars", "five thousand".
     for start, end, value in _word_numbers(source_text):
+        if AMOUNT_CONTINUED.match(source_text, end):
+            continue
         before = source_text[max(0, start - 8):start]
         if re.search(r"[-\u2212]\s*$", before) and not re.search(r"[A-Za-z]-\s*$", before):
             value = -value
