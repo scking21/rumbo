@@ -342,7 +342,10 @@ def _stated_minutes(source_text):
         # Whole hours that the user continued ("an hour and three quarters", "1 hour and
         # 20", "2 hours plus a third") never state the whole hours alone; the full phrase
         # is read below when it can be, and otherwise states nothing.
+        # A fraction with its own singular "hour" ("1 hour, and a half-hour break") is a
+        # separate duration, not a continuation.
         return re.match(r"\s*,?\s*(?:and|plus)[\s-]+(?:(?:(?:an?|one|two|three)[\s-]+)?(?:half|halves|quarters?|thirds?)\b"
+                        r"(?![\s-]+(?:of[\s-]+an?[\s-]+)?hour\b)"
                         r"|(?:\d+|%s)\s*(?:[,.;)]|$|minutes?\b|mins?\b))" % NUMBER_WORD,
                         text[m.end():m.end() + 40], flags) is not None
 
@@ -354,9 +357,10 @@ def _stated_minutes(source_text):
 
     def continues(start):
         # A fraction after "word-" ("two-and-a-half-hour"), or after "and" that follows a
-        # number or an hour word ("one hundred and a half hours"), belongs to a longer
-        # phrase. After any other "and" it is a duration of its own ("a talk and a half-hour break").
-        return re.search(r"(?:[A-Za-z]-|(?:\d|\b(?:%s|hundred|thousand|hours?|hrs?))[\s-]+and[\s-]+(?:an?[\s-]+)?)$"
+        # number ("one hundred and a half hour"), belongs to a longer phrase. After any
+        # other "and" it is a duration of its own ("a talk and a half-hour break", "1 hour
+        # and a half-hour break": these phrases carry their own "hour").
+        return re.search(r"(?:[A-Za-z]-|(?:\d|\b(?:%s|hundred|thousand))[\s-]+and[\s-]+(?:an?[\s-]+)?)$"
                          % NUMBER_WORD, text[max(0, start - 40):start], flags) is not None
 
     # Hours, optionally followed by minutes: "2 hours", "an hour 15 minutes", "2h30".
@@ -375,20 +379,23 @@ def _stated_minutes(source_text):
     # "an hour and a half", "2 and a half hours", "two-and-a-half-hour",
     # "an hour and a quarter", "an hour and three quarters".
     fractions = {"half": 30, "quarter": 15, "quarters": 45}
-    for m in re.finditer(lead + num + r"[\s-]+(?:hours?[\s-]+)?and[\s-]+(?:an?|three)[\s-]+(half|quarters?)\b"
-                         r"(?:[\s-]+(?:of[\s-]+an?[\s-]+)?hours?\b)?", text, flags):
+    for m in re.finditer(lead + num + r"[\s-]+(hours?[\s-]+)?and[\s-]+(?:an?|three)[\s-]+(half|quarters?)\b"
+                         r"([\s-]+(?:of[\s-]+an?[\s-]+)?hours?\b)?", text, flags):
+        if m.group(2) and m.group(4) and not m.group(4).lower().endswith("hours"):
+            # "1 hour and a half-hour break" names two durations, each with its own unit.
+            continue
         tail = m.group(0).lower()
         hours = _amount(m.group(1))
         three = re.search(r"\bthree[\s-]+quarters\b", tail) is not None
         other_unit = re.match(r"[\s-]+(?:days?|weeks?|months?|years?|nights?|minutes?|mins?|seconds?|secs?)\b",
                               text[m.end():m.end() + 20], flags) is not None
-        if m.group(2).lower() == "quarters" and not three or three and m.group(2).lower() != "quarters" or other_unit:
+        if m.group(3).lower() == "quarters" and not three or three and m.group(3).lower() != "quarters" or other_unit:
             # "two hours and a half day" is not 150 minutes; it states nothing.
             found.append((m.start(), m.end(), None))
             continue
         ok = ("hour" in tail and hours is not None and is_whole(m, 1)
               and not is_rate(m.start(), m.group(1).lower() in ("a", "an")))
-        found.append((m.start(), m.end(), hours * 60 + fractions[m.group(2).lower()] if ok else None))
+        found.append((m.start(), m.end(), hours * 60 + fractions[m.group(3).lower()] if ok else None))
     for m in re.finditer(r"\b(?:(?:a|one)\s+)?half(?:\s+an?|-|\s+)?\s*hour\b", text, flags):
         ok = not is_rate(m.start(), True) and not continues(m.start())
         found.append((m.start(), m.end(), decimal.Decimal(30) if ok else None))
