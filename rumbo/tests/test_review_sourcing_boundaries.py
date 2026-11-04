@@ -211,6 +211,20 @@ class ReviewSourcingBoundaryTests(unittest.TestCase):
                 dict(kind='within_budget', amounts=[1000000], total_cap=2000000))
             self.assertIn('UNSOURCED', result.stdout)
 
+    def test_unsupported_fraction_does_not_source_inner_hour(self):
+        for phrase in ('four thirds of an hour', 'two fifths of an hour', 'four-thirds of an hour', 'seven eighths of an hour', 'one third of an hour', 'two halves of an hour', 'a twelfth of an hour', 'an eleventh of an hour', 'eleven twelfths of an hour', 'five sixteenths of an hour', 'four hundredths of an hour', '11 twelfths of an hour', '4 thirds of a hour', 'one third of one hour', 'four-thirds-of-an-hour', 'two sixths of an hour', '3 sevenths of an hour', 'two ninths of an hour', 'three tenths of an hour', 'four thirds of' + ' ' * 100000 + 'an hour'):
+            with self.subTest(phrase=phrase):
+                result = self.check_output('Start 9:00; ' + phrase + '; finish 10:00.',
+                    dict(kind='fits_window', start='09:00', end='10:00', segments_min=[60]))
+                self.assertIn('UNSOURCED', result.stdout)
+
+    def test_fraction_context_keeps_supported_and_independent_hours(self):
+        for phrase, minutes in (('half an hour',30),('three quarters of an hour',45),('a quarter of an hour',15),('growth of an hour',60),('discussion of thirds; an hour',60),('four thirds were discussed, then an hour',60)):
+            with self.subTest(phrase=phrase):
+                result = self.check_output('Start 9:00; '+phrase+'; finish 10:00.',
+                    dict(kind='fits_window',start='09:00',end='10:00',segments_min=[minutes]))
+                self.assertIn('PASS',result.stdout)
+
 
 if __name__ == '__main__':
     unittest.main()

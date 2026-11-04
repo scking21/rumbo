@@ -400,12 +400,38 @@ def _stated_minutes(source_text):
 
     def is_part(m):
         # The "an hour" inside "half an hour" or "a quarter of an hour" is not 60.
-        return re.search(r"(?:half|quarters?(?:\s+of)?)\s*$", text[max(0, m.start() - 24):m.start()], flags) is not None
+        # Reject the inner hour of unsupported fractions as well as supported
+        # half/quarter phrases. Scan adjacent words only, preserving punctuation
+        # boundaries and independent durations instead of guessing arithmetic.
+        pos = m.start()
+        def previous_word(end):
+            while end > 0 and (text[end - 1].isspace() or text[end - 1] == "-"):
+                end -= 1
+            start = end
+            while start > 0 and text[start - 1].isalpha():
+                start -= 1
+            return text[start:end].lower(), start
+        word, pos = previous_word(pos)
+        if word == "of":
+            word, pos = previous_word(pos)
+        count_end = pos
+        while count_end > 0 and (text[count_end - 1].isspace() or text[count_end - 1] == "-"):
+            count_end -= 1
+        numeric_end = count_end > 0 and text[count_end - 1].isdecimal()
+        count_word, _ = previous_word(count_end)
+        ordinal_fraction = (word.endswith(("th", "ths"))
+                            and (numeric_end or count_end in whole_number_ends
+                                 or count_word in ("a", "an")))
+        return ordinal_fraction or word in ("half", "halves", "quarter", "quarters", "third", "thirds",
+                        "fourth", "fourths", "fifth", "fifths", "sixth", "sixths",
+                        "seventh", "sevenths", "eighth", "eighths", "ninth", "ninths",
+                        "tenth", "tenths")
 
     # A spelled count must be the user's whole number: "one hours" inside "one hundred
     # and one hours" is not 1. Digits and "a"/"an" stand alone.
     whole_numbers = {(start, end) for start, end, _ in _word_numbers(text)}
     number_ends = dict(whole_numbers)
+    whole_number_ends = {end for _, end in whole_numbers}
 
     def is_whole(m, group):
         word = m.group(group)
@@ -481,7 +507,7 @@ def _stated_minutes(source_text):
         extra = m.group(2) or m.group(3)
         value = None
         if not (hours is None or not is_whole(m, 1) or not is_whole(m, 2) or has_fraction(m)
-                or is_rate(m.start(), article) or (article and is_part(m))):
+                or is_rate(m.start(), article) or is_part(m)):
             # "1 hour 15 minutes" states 75, never the whole hours alone.
             value = hours * 60 if extra is None else (None if _amount(extra) is None else hours * 60 + _amount(extra))
         found.append((m.start(), m.end(), value))
