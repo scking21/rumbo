@@ -110,6 +110,14 @@ When an item becomes a commitment or is replaced, say it in one line:
 "Treating as decided: ...". If the user corrects an item, fix the record
 immediately; the user's correction always wins over the record.
 
+## Before writing
+
+Before you write or edit a file, a hook may add the record's open problems
+(`CONFLICT` and `ASSUMPTION` lines, each with the action to take) to your
+context. Deal with them before the deliverable, not after: fix the plan only as
+the user agrees, or say the problem plainly in what you write. After a context
+compaction the record is shown again; trust it over the compacted summary.
+
 ## Stopping
 
 The Stop hook blocks, up to three times per session, while a check fails, a value

@@ -21,6 +21,14 @@ Recorded use of the adapter showed two kinds of wrong answer. Agents made a fail
 - **Agenda colons.** "9:00: welcome" sources 09:00. Only a colon followed by a digit starts seconds.
 - **Cost.** The source check took time quadratic in the length of the quoted text. On 0.3.8, 80 KB of quoted numbers took about 47 s, past the hooks' 10 s timeout, and a hook that times out does not block. It is now linear (under a second for 250 KB).
 
+## Drift hooks from recent research
+
+Three changes follow 2026 studies of agent drift. Each is backed by a single preprint, and none has been tried in an installed Claude Code session yet.
+
+- **Re-show after compaction.** A `SessionStart` hook with matcher `compact` prints the record again right after Claude's context is compacted. In "Governance Decay" (arXiv:2606.22528), rules a compaction summary dropped were violated about 30% of the time, and re-injecting them after each compaction brought violations back to 0%. Before, Rumbo's record returned only with the next user prompt, so a compaction in the middle of a long autonomous turn left the agent without it until Stop.
+- **Check before writing.** A `PreToolUse` hook on `Write`, `Edit`, `MultiEdit` and `NotebookEdit` adds the record's open problems to Claude's context before a file is written. It never blocks, skips writes to `.rumbo/`, and shows a given set of problems once per session. In "Intent Drift at SME Scale" (arXiv:2609.05975), a check against the stated purpose before each action took action drift from 13 of 15 runs to 0 of 15. Before, Rumbo checked only at Stop, after a plan file was already written.
+- **Lead with specific corrections.** `show` now puts open problems first, each with the action to take, before the objective and items. In "Prompting Against Persona Drift" (arXiv:2609.24532), a correction naming the specific problem cut drift by 87%, against 38% for re-showing everything. Open problems now also survive `--max-chars` truncation, which used to cut them off the end.
+
 ## The one record that changes meaning
 
 A `fits_window` check whose `end` is earlier than its `start` used to FAIL with a meaningless message ("ends 24:00, 1380 min after 01:00"). It is now `CHECK_BAD_VALUE` with the fix to apply: set `end_next_day: true` if the window really runs past midnight, otherwise correct the times. The Stop gate blocks on an invalid record as it did on the failing check.

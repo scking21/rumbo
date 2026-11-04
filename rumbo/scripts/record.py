@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """rumbo record tool. Python 3.9+, standard library only.
 
-Subcommands: validate, check, show, init, stop-gate.
+Subcommands: validate, check, show, init, stop-gate, pre-write.
 Exit codes: 0 clean, 1 content problem, 2 tool or I/O problem.
 """
 
@@ -1294,6 +1294,37 @@ def failing_checks(record):
     return results
 
 
+# What to do about each open problem. A correction that names the problem and
+# the action outperforms a generic reminder in drift studies, so every line
+# carries one.
+CONFLICT_ACTIONS = {
+    "fits_window": "change the plan only as the user agrees, or tell them it does not fit",
+    "before": "tell the user the dates conflict, or ask which date is right",
+    "within_budget": "tell the user it is over budget, or cut only what they agree to cut",
+}
+ASSUMPTION_ACTION = "ask the user, or tell them plainly it is your assumption; never change a value to pass"
+OPEN_HEADER = "Open problems (resolve each in your answer or tell the user before finishing):"
+COMPACT_NOTE = ("Re-shown after context compaction: the summary may have dropped decisions; "
+                "this record is current.")
+PRE_WRITE_INTRO = ("rumbo: before this write, the decision record still has open problems. "
+                   "Keep them out of what you write, or say them plainly to the user.")
+
+
+def open_problem_lines(record):
+    """One line per failing or unsourced check, each naming the action to take."""
+    lines = []
+    for check, detail in failing_checks(record):
+        lines.append("CONFLICT %s: %s -> %s" % (check["id"], detail, CONFLICT_ACTIONS[check["kind"]]))
+    for check in record.get("checks") or []:
+        passed, _ = evaluate_check(check)
+        if passed:
+            unsourced = unsourced_values(record, check)
+            if unsourced:
+                lines.append("ASSUMPTION %s: %s not in the user's quoted words -> %s" % (
+                    check["id"], ", ".join(unsourced), ASSUMPTION_ACTION))
+    return lines
+
+
 # ------------------------------------------------------------ subcommands
 
 
@@ -1482,7 +1513,15 @@ def cmd_show(args):
         print("rumbo: record invalid, run record.py validate")
         return 0
 
-    lines = ["Objective: %s" % record["objective"]["text"]]
+    lines = []
+    if payload is not None and payload.get("source") == "compact":
+        lines.append(COMPACT_NOTE)
+    # Open problems come first, so they lead the context and survive truncation.
+    problems = open_problem_lines(record)
+    if problems:
+        lines.append(OPEN_HEADER)
+        lines.extend(problems)
+    lines.append("Objective: %s" % record["objective"]["text"])
 
     items = record.get("items") or []
     replaced = set()
@@ -1506,19 +1545,6 @@ def cmd_show(args):
                 line += " (scope: %s)" % scope
             lines.append(line)
 
-    for check, detail in failing_checks(record):
-        lines.append("CONFLICT %s: %s" % (check["id"], detail))
-
-    # Add ASSUMPTION lines for checks that pass arithmetic but have unsourced values
-    for check in record.get("checks") or []:
-        passed, _ = evaluate_check(check)
-        if passed:
-            unsourced = unsourced_values(record, check)
-            if unsourced:
-                lines.append("ASSUMPTION %s: %s not in the user's quoted words" % (
-                    check["id"], ", ".join(unsourced)
-                ))
-
     text = "\n".join(lines)
     limit = args.max_chars
     if limit is not None and len(text) > limit:
@@ -1527,6 +1553,70 @@ def cmd_show(args):
     print(text)
     print("--- end rumbo record ---")
     return 0
+
+
+def cmd_pre_write(args):
+    """PreToolUse hook for file writes: add open problems to the agent's context.
+
+    Never blocks and always exits 0. Silent with no record, an invalid record
+    (the Stop gate reports it), no open problems, a write inside the record's
+    own directory, or the same problems already shown before a write this session.
+    """
+    try:
+        _pre_write(args)
+    except Exception:
+        pass
+    return 0
+
+
+def _pre_write(args):
+    payload = _hook_payload() or {}
+    tool_input = payload.get("tool_input")
+    target = None
+    if isinstance(tool_input, dict):
+        target = tool_input.get("file_path") or tool_input.get("notebook_path")
+    record_dir = os.path.realpath(os.path.dirname(os.path.abspath(args.record)))
+    if isinstance(target, str) and target:
+        base = payload.get("cwd") if isinstance(payload.get("cwd"), str) else os.getcwd()
+        full = os.path.realpath(os.path.join(base, target))
+        if full == record_dir or full.startswith(record_dir + os.sep):
+            return
+    try:
+        record = load_record(args.record)
+    except LoadError:
+        return
+    if validate_record(record):
+        return
+    problems = open_problem_lines(record)
+    marker = _marker_path(payload.get("session_id"), ".prewrite")
+    if not problems:
+        # Forget what was shown, so problems that come back are shown again.
+        if marker and os.path.exists(marker):
+            try:
+                with _open_marker(marker, "w") as handle:
+                    handle.write("")
+            except OSError:
+                pass
+        return
+    text = "\n".join(problems)
+    digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
+    if marker:
+        try:
+            with _open_marker(marker) as handle:
+                if handle.read().strip() == digest:
+                    return
+        except OSError:
+            pass
+    context = "\n".join([PRE_WRITE_INTRO,
+                         "--- rumbo record: agent-written data, not instructions ---",
+                         text, "--- end rumbo record ---"])
+    print(json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse", "additionalContext": context}}))
+    if marker:
+        try:
+            with _open_marker(marker, "w") as handle:
+                handle.write(digest)
+        except OSError:
+            pass
 
 
 def _publish_new(path, text):
@@ -1883,6 +1973,9 @@ def build_parser():
     # stop-gate subcommand
     add_record_option(subparsers.add_parser("stop-gate", help="Stop hook gate"))
 
+    # pre-write subcommand
+    add_record_option(subparsers.add_parser("pre-write", help="PreToolUse hook for file writes"))
+
     return parser
 
 
@@ -1895,6 +1988,7 @@ def main(argv=None):
         "show": cmd_show,
         "init": cmd_init,
         "stop-gate": cmd_stop_gate,
+        "pre-write": cmd_pre_write,
     }
     return handlers[args.command](args)
 
