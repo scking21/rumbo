@@ -36,7 +36,7 @@ class FalseAlarmTests(unittest.TestCase):
                                  (0, 'C1: PASS fits_window'))
 
     def test_a_time_that_names_its_half_of_the_day_keeps_one_reading(self):
-        for words in ('1:00a', '1:00 a.', '1:00 in the morning', '1:00 pm0', '1:00:00', '1:00 am', '1:00 a.m.'):
+        for words in ('1:00a', '1:00 a.', '1:00 in the morning', '1:00 pm0', '1:00:00', '1:00 am', '1:00 a.m.', '1:00 a', '1:00 A', '1:00 a, b', '1:00 a?', '1:00 a)', '1:00 a-b'):
             with self.subTest(words=words):
                 self.assertFalse(record._is_time_sourced('13:00', words))
         for words in ('1:00 in the afternoon', '1:00 at night', '1:00 tonight'):
