@@ -22,10 +22,10 @@ class ReleaseIdentityTests(unittest.TestCase):
         portable = json.loads((ROOT/'openai-plugin/rumbo/plugin.json').read_text())
         codex = json.loads((ROOT/'openai-plugin/rumbo/.codex-plugin/plugin.json').read_text())
         claude = json.loads((ROOT/'rumbo/.claude-plugin/plugin.json').read_text())
-        self.assertEqual(portable['version'], '0.3.6')
+        self.assertEqual(portable['version'], '0.3.7')
         self.assertEqual(codex['version'], portable['version'])
-        self.assertEqual(claude['version'], '0.3.8')
-        self.assertTrue(portable['extensions']['com.openai']['publication']['release_notes'].startswith('0.3.6 '))
+        self.assertEqual(claude['version'], '0.3.9')
+        self.assertTrue(portable['extensions']['com.openai']['publication']['release_notes'].startswith('0.3.7 '))
 
     def test_release_notes_disclose_optional_receipts_and_catalog_change(self):
         portable = json.loads((ROOT/'openai-plugin/rumbo/plugin.json').read_text())
