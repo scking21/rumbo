@@ -84,7 +84,8 @@ class FalseAlarmTests(unittest.TestCase):
         self.assertFalse(record._is_number_sourced(50, 'twenty and thirty dollars'))
         self.assertEqual(list(record._word_numbers('one thousand and two thousand dollars')), [1000, 2000])
         self.assertEqual(list(record._word_numbers('a five-to-ten dollar budget')), [5, 10])
-        self.assertEqual(list(record._word_numbers('the low was -five, then (- twelve)')), [-5, -12])
+        self.assertEqual(list(record._word_numbers('the low was -five, then (- twelve)')), [-5, 12])
+        self.assertTrue(record._is_number_sourced(10, 'Step 1 - ten people'))
         self.assertEqual(list(record._word_numbers('negative     five hundred')), [-500])
         self.assertEqual(list(record._word_numbers('nonnegative    five hundred')), [500])
 
@@ -92,7 +93,8 @@ class FalseAlarmTests(unittest.TestCase):
         for words, minutes in (('one-two hours', 180), ('one-two hours', 60), ('one-two hours', 120),
                                ('half-an-hour', 60), ('half an hour', 60), ('half a dozen hours', 60),
                                ('half  an hour', 60), ('half-an hour', 60), ('quarter of an hour', 60),
-                               ('three-quarters of an hour', 60), ('an hours', 60)):
+                               ('three-quarters of an hour', 60), ('an hours', 60),
+                               ('minus two hours', 120), ('3-two hours', 120), ('minus an hour', 60)):
             with self.subTest(words=words, minutes=minutes):
                 self.assertFalse(record._is_minutes_sourced(minutes, words))
         self.assertTrue(record._is_minutes_sourced(30, 'half-an-hour'))

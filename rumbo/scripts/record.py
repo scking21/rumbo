@@ -205,7 +205,7 @@ def _run_values(run):
 
 def _word_numbers(text):
     """Yield each number spelled in English words, negative after "minus" or a minus sign."""
-    for run in re.finditer(rf"(\b(?:minus|negative)\s+|(?<!\w)[-\u2212]\s*)?({NUMBER_RUN})", text, re.IGNORECASE):
+    for run in re.finditer(rf"(\b(?:minus|negative)\s+|(?<!\w)[-\u2212])?({NUMBER_RUN})", text, re.IGNORECASE):
         values = _run_values(run.group(2))
         if values and run.group(1):
             values[0] = -values[0]
@@ -251,7 +251,8 @@ def _is_minutes_sourced(minutes, source_text):
         lead = re.search(rf"({NUMBER_RUN}|\ban)[\s-]+$", window, re.IGNORECASE)
         if not lead or lead.start() == 0 and hour.start() > 80:
             continue
-        if re.search(r"\b(?:half|quarters?)[\s-]+(?:of[\s-]+)?$", window[:lead.start()], re.IGNORECASE):
+        if re.search(r"(?:\b(?:half|quarters?)[\s-]+(?:of[\s-]+)?|\b(?:minus|negative)\s+|[-−])$",
+                     window[:lead.start()], re.IGNORECASE):
             continue
         an = lead.group(1).lower() == "an"
         if an and hour.group(0).lower() != "hour":
