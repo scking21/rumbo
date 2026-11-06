@@ -54,7 +54,7 @@ NUDGE_TEMPLATE = (
 )
 
 PLANNING_PATTERN = re.compile(
-    r"\b\d{1,2}:\d{2}\b"
+    r"(?<!\S:)(?<!\bline )(?<![\w\]]\[)\b\d{1,2}:\d{2}\b(?!:\d)"
     r"|\$\s?\d"
     r"|\b\d{4}-\d{2}-\d{2}\b"
     r"|\b(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\.?\s+\d{1,2}\b"
@@ -176,7 +176,8 @@ def _word_numbers(text):
     "twenty-five", "four hundred fifty", "one hundred and twenty", "a thousand",
     "five thousand", "fifteen hundred". Two units or two tens in a row end a number
     ("five six" is 5 and 6), and "and" joins only after hundred or a scale word. A
-    "hundred" or scale word that cannot attach makes the whole number state nothing.
+    "hundred" or scale word that cannot attach makes the whole number state nothing: it
+    is yielded with the value None, so no word inside it reads as a number of its own.
     """
     tokens = [(m.group(0).lower(), m.start(), m.end()) for m in re.finditer(r"[A-Za-z]+", text)]
     i = 0
@@ -189,7 +190,7 @@ def _word_numbers(text):
         if word not in UNIT_WORDS and word not in TENS_WORDS and not article:
             i += 1
             continue
-        total, current, last, j, stop, stuck = 0, 0, None, i, end, False
+        total, current, last, j, stop, stuck, smallest_scale = 0, 0, None, i, end, False, None
         if article:
             current, last, j = 1, "unit", i + 1
         while j < len(tokens):
@@ -217,11 +218,13 @@ def _word_numbers(text):
                 current *= 100
                 last = "hundred"
             elif word in SCALE_WORDS:
-                if last is None or last == "scale" or current == 0:
+                # "one thousand and two thousand" is two numbers, never 3000.
+                if (last is None or last == "scale" or current == 0
+                        or smallest_scale is not None and SCALE_WORDS[word] >= smallest_scale):
                     stuck = True
                     break
                 total += current * SCALE_WORDS[word]
-                current, last = 0, "scale"
+                current, last, smallest_scale = 0, "scale", SCALE_WORDS[word]
             elif word == "and" and last in ("hundred", "scale") and j + 1 < len(tokens) \
                     and (tokens[j + 1][0] in UNIT_WORDS or tokens[j + 1][0] in TENS_WORDS):
                 pass
@@ -230,10 +233,17 @@ def _word_numbers(text):
             stop = w_end
             j += 1
         # A number the parser cannot finish ("twelve hundred thousand thousand") states
-        # nothing: never source its prefix.
+        # nothing: never source its prefix, nor the words after where it stuck.
         if last is not None and not stuck:
             yield start, stop, decimal.Decimal(total + current)
-        i = max(j + (1 if stuck else 0), i + 1)
+        if stuck:
+            while (j < len(tokens) and re.fullmatch(r"\s+|\s*-\s*", text[stop:tokens[j][1]])
+                   and (tokens[j][0] in UNIT_WORDS or tokens[j][0] in TENS_WORDS
+                        or tokens[j][0] in ("hundred", "and", *SCALE_WORDS))):
+                stop = tokens[j][2]
+                j += 1
+            yield start, stop, None
+        i = max(j, i + 1)
 
 
 # A number the user continued with a fraction ("one and a half thousand", "1 point 5
@@ -372,7 +382,7 @@ def _is_number_sourced(num, source_text, excluded_unit=None):
             return True
     # Spelled numbers: "twelve", "four hundred fifty dollars", "five thousand".
     for start, end, value in _word_numbers(source_text):
-        if excluded_unit is not None and excluded_unit.match(source_text, end):
+        if value is None or excluded_unit is not None and excluded_unit.match(source_text, end):
             continue
         ends_scaled = re.search(r"(?:thousand|million|billion)$", source_text[start:end], re.IGNORECASE)
         if (_after_fraction_prefix(source_text, start)
@@ -391,7 +401,11 @@ def _is_number_sourced(num, source_text, excluded_unit=None):
             pos -= 1
             while pos >= 0 and source_text[pos].isspace():
                 pos -= 1
-        negative = pos >= 0 and source_text[pos] in "-−"
+        before_sign = pos - 1
+        while before_sign >= 0 and source_text[before_sign].isspace():
+            before_sign -= 1
+        negative = (pos >= 0 and source_text[pos] in "-−"
+                    and (before_sign < 0 or not source_text[before_sign].isdecimal()))
         hyphenated_word = (not currency and pos > 0 and source_text[pos] == "-"
                            and source_text[pos - 1].isascii() and source_text[pos - 1].isalpha())
         if negative and not hyphenated_word:
@@ -603,7 +617,7 @@ def _stated_minutes(source_text):
         ok = (not is_signed_duration(m.start()) and "hour" in tail and hours is not None and is_whole(m, 1)
               and not is_rate(m.start(), m.group(1).lower() in ("a", "an")))
         found.append((m.start(), m.end(), hours * 60 + fraction if ok else None))
-    for m in re.finditer(r"\b(?:(?:a|one)\s+)?half(?:\s+an?|-)?\s*hour\b", text, flags):
+    for m in re.finditer(r"\b(?:(?:a|one)\s+)?half(?:[\s-]+an?)?[\s-]*hour\b", text, flags):
         ok = not is_signed_duration(m.start()) and not is_rate(m.start(), True) and not continues(m.start())
         found.append((m.start(), m.end(), decimal.Decimal(30) if ok else None))
     # "a quarter-hour" and "a quarter of an hour" are 15; "three-quarter hour" and "three
@@ -673,12 +687,19 @@ def _is_minutes_sourced(minutes, source_text):
     return any(value == minutes for value in _stated_minutes(source_text))
 
 
+# Words after a clock time that keep it in the morning or name its half already.
+HALF_OF_DAY = re.compile(r"[AaPp](?![A-Za-z])|\s+[AaPp](?=\s*(?:[^\w\s$€£]|$))|\s*(?:[AaPp]\.|[AaPp]\.?\s*[Mm](?![A-Za-z])|in\s+the\s+morning)",
+                         re.IGNORECASE)
+
+
 def _is_time_sourced(time_str, source_text):
     """Return True if time_str (HH:MM) is sourced in source_text.
     Parse the check time as (h, m) from "HH:MM"; return False if malformed.
     Find time tokens with re.finditer("(?<![0-9:])([0-9]{1,2}):([0-9]{2})(?::([0-9]{2}))?(?![0-9]|:[0-9])(?:\\s*([AaPp])\\.?\\s*[Mm]\\b\\.)?", text).
     Skip a token whose seconds group is present and not "00". Meridiem: p/P and hour < 12 -> hour + 12; a/A and hour == 12 -> 0. Skip hours > 23 or minutes > 59.
-    Sourced if any token's (hour, minute) == (h, m).
+    A token with no meridiem and an hour 1-12 written without a leading zero also reads in the
+    other half of the day (hour + 12, or 0 for 12): the values are the user's, the half is the agent's reading.
+    Sourced if any token's (hour, minute) or other-half reading == (h, m).
     """
     if not isinstance(time_str, str):
         return False
@@ -719,8 +740,9 @@ def _is_time_sourced(time_str, source_text):
         if hour > 23 or minute > 59:
             continue
 
-        # Check if this token matches the target time
-        if hour == h and minute == m:
+        if minute == m and (hour == h or h == (hour + 12) % 24 and 1 <= hour <= 12 and hour_group[0] != "0"
+                            and not meridiem_group and seconds_group is None
+                            and not HALF_OF_DAY.match(source_text, match.end())):
             return True
 
     if m == 0:
@@ -1098,7 +1120,7 @@ RETRACTION = re.compile(
     re.IGNORECASE)
 # Words that point back at an earlier decision rather than at the current task.
 EARLIER_DECISION = re.compile(
-    r"\b(?:previous(?:ly)?|earlier|before|approv\w*|decision|decided|agreed|choice|chose|"
+    r"\b(?:previous(?:ly)?|earlier|approv\w*|decision|decided|agreed|choice|chose|"
     r"picked|what i said|last time)\b", re.IGNORECASE)
 STOPWORDS = {"that", "this", "with", "from", "have", "will", "would", "should", "could", "there",
              "their", "about", "into", "then", "than", "them", "they", "your", "what", "when",
