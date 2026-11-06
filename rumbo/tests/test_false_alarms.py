@@ -44,7 +44,9 @@ class FalseAlarmTests(unittest.TestCase):
                 self.assertTrue(record._is_time_sourced('13:00', words))
         self.assertTrue(record._is_time_sourced('13:00', 'out by 1:00, then dinner'))
         self.assertTrue(record._is_time_sourced('13:00', 'Meet at 1:00 America/Chicago time'))
-        self.assertTrue(record._is_time_sourced('13:00', '1:00 a quick lunch'))
+        for words in ('1:00 a quick lunch', '1:00 a 30-minute talk', '1:00 a $20 lunch', '1:00 a €20 lunch'):
+            with self.subTest(words=words):
+                self.assertTrue(record._is_time_sourced('13:00', words))
 
     def test_twenty_four_hour_and_meridiem_times_keep_their_one_reading(self):
         for quote, start in (('From 09:30 for 45 minutes until 23:00', '21:30'),

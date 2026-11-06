@@ -688,7 +688,7 @@ def _is_minutes_sourced(minutes, source_text):
 
 
 # Words after a clock time that keep it in the morning or name its half already.
-HALF_OF_DAY = re.compile(r"[AaPp](?![A-Za-z])|\s+[AaPp](?=\s*(?:[^A-Za-z\s]|$))|\s*(?:[AaPp]\.|[AaPp]\.?\s*[Mm](?![A-Za-z])|in\s+the\s+morning)",
+HALF_OF_DAY = re.compile(r"[AaPp](?![A-Za-z])|\s+[AaPp](?=\s*(?:[^\w\s$€£]|$))|\s*(?:[AaPp]\.|[AaPp]\.?\s*[Mm](?![A-Za-z])|in\s+the\s+morning)",
                          re.IGNORECASE)
 
 
