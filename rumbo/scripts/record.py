@@ -168,21 +168,45 @@ NUMBER_WORD = r"(?:%s|hundred|thousand)\b" % "|".join(UNIT_WORDS + TENS_WORDS)
 NUMBER_RUN = rf"\b(?:a[\s-]+(?=(?:hundred|thousand)\b))?{NUMBER_WORD}(?:(?:\s+and\s+|[\s-]+){NUMBER_WORD})*"
 
 
+# Which word kinds may follow which inside one number: "forty-five", "a hundred and twenty".
+FOLLOWS = {"unit": {None, "tens", "hundred", "thousand", "and"}, "tens": {None, "hundred", "thousand", "and"},
+           "hundred": {None, "unit", "tens"}, "thousand": {None, "unit", "tens", "hundred"}, "and": {"hundred", "thousand"}}
+
+
+def _run_values(run):
+    """The numbers in one run of number words; a join no number allows starts a new one ("one-two" is 1 and 2)."""
+    values, total, current, last = [], 0, 0, None
+    for word in re.findall(r"[a-z]+", run.lower()):
+        if word == "a":
+            continue
+        kind = "unit" if word in UNIT_WORDS else "tens" if word in TENS_WORDS else word
+        if last is not None and (last not in FOLLOWS[kind] or kind == "thousand" and total):
+            if last != "and":
+                values.append(total + current)
+            total, current, last = 0, 0, None
+            if kind == "and":
+                continue
+        if kind == "unit":
+            current += UNIT_WORDS.index(word)
+        elif kind == "tens":
+            current += 20 + 10 * TENS_WORDS.index(word)
+        elif kind == "hundred":
+            current = (current or 1) * 100
+        elif kind == "thousand":
+            total, current = (current or 1) * 1000, 0
+        last = kind
+    if last is not None and last != "and":
+        values.append(total + current)
+    return values
+
+
 def _word_numbers(text):
-    """Yield the value of each English cardinal run ("a hundred and twenty" is 120)."""
+    """Yield each number spelled in English words, negative after "minus" or a minus sign."""
     for run in re.finditer(NUMBER_RUN, text, re.IGNORECASE):
-        total = current = 0
-        for word in re.findall(r"[a-z]+", run.group(0).lower()):
-            if word in UNIT_WORDS:
-                current += UNIT_WORDS.index(word)
-            elif word in TENS_WORDS:
-                current += 20 + 10 * TENS_WORDS.index(word)
-            elif word == "hundred":
-                current = (current or 1) * 100
-            elif word == "thousand":
-                total += (current or 1) * 1000
-                current = 0
-        yield total + current
+        values = _run_values(run.group(0))
+        if values and re.search(r"(?:\bminus\s+|\bnegative\s+|[-\u2212]\s*)$", text[:run.start()], re.IGNORECASE):
+            values[0] = -values[0]
+        yield from values
 
 
 def _is_number_sourced(num, source_text):
@@ -217,12 +241,12 @@ def _is_minutes_sourced(minutes, source_text):
     for match in re.finditer(r"(?<![\w.:,\u2212-])(\d+(?:\.\d+)?)[\s-]*(?:hours?|hrs?)\b", source_text, re.IGNORECASE):
         if decimal.Decimal(match.group(1)) * 60 == minutes:
             return True
-    if minutes == 30 and re.search(r"\bhalf[\s-]+(?:an\s+)?hour\b", source_text, re.IGNORECASE):
+    if minutes == 30 and re.search(r"\bhalf[\s-]+(?:an[\s-]+)?hour\b", source_text, re.IGNORECASE):
         return True
-    for match in re.finditer(rf"((?<!half ){NUMBER_RUN}|(?<!half )\ban)[\s-]+hours?\b(\s+and\s+a\s+half)?",
+    for match in re.finditer(rf"(?<!half[\s-])({NUMBER_RUN}|\ban)[\s-]+hours?\b(\s+and\s+a\s+half)?",
                              source_text, re.IGNORECASE):
-        hours = next(_word_numbers(match.group(1)), 1) + (0.5 if match.group(2) else 0)
-        if hours * 60 == minutes:
+        values = _run_values(match.group(1)) if match.group(1).lower() != "an" else [1]
+        if len(values) == 1 and (values[0] + (0.5 if match.group(2) else 0)) * 60 == minutes:
             return True
     return False
 

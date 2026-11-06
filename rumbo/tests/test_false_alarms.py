@@ -75,6 +75,21 @@ class FalseAlarmTests(unittest.TestCase):
                 code, out = check(quote, kind='within_budget', amounts=[450], total_cap=cap)
                 self.assertIn('total_cap %d' % cap, out)
 
+    def test_number_words_keep_separate_numbers_and_signs(self):
+        self.assertEqual(list(record._word_numbers('twenty and thirty dollars')), [20, 30])
+        self.assertEqual(list(record._word_numbers('one-two hours')), [1, 2])
+        self.assertEqual(list(record._word_numbers('two thousand five hundred and six')), [2506])
+        self.assertFalse(record._is_number_sourced(500, 'minus five hundred dollars'))
+        self.assertTrue(record._is_number_sourced(-500, 'minus five hundred dollars'))
+        self.assertFalse(record._is_number_sourced(50, 'twenty and thirty dollars'))
+
+    def test_word_ranges_and_halves_source_no_other_duration(self):
+        for words, minutes in (('one-two hours', 180), ('one-two hours', 60), ('one-two hours', 120),
+                               ('half-an-hour', 60), ('half an hour', 60), ('half a dozen hours', 60)):
+            with self.subTest(words=words, minutes=minutes):
+                self.assertFalse(record._is_minutes_sourced(minutes, words))
+        self.assertTrue(record._is_minutes_sourced(30, 'half-an-hour'))
+
     def test_hours_in_words_never_source_money(self):
         code, out = check('Two hours of setup; catering quoted $450.', kind='within_budget', amounts=[450], total_cap=120)
         self.assertIn('total_cap 120', out)
