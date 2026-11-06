@@ -96,7 +96,13 @@ class FalseAlarmTests(unittest.TestCase):
                          (1, 'C1: FAIL before: 03-20 is 8 days after 03-12'))
         self.assertEqual(check('Edits are due January 5 for the December 20 show.',
                                kind='before', first='01-05', second='12-20'),
-                         (1, 'C1: FAIL before: 01-05 is 16 days after 12-20'))
+                         (0, 'C1: PASS before'))
+        self.assertEqual(check('Venue deposit by March 1 for the October 15 gala.',
+                               kind='before', first='03-01', second='10-15'),
+                         (0, 'C1: PASS before'))
+        self.assertEqual(check('Edits are due September 1 for the March 12 show.',
+                               kind='before', first='09-01', second='03-12'),
+                         (1, 'C1: FAIL before: 09-01 is 173 days after 03-12'))
 
     def test_dates_with_years_compare_as_written(self):
         self.assertEqual(check('RSVPs are due December 20, 2026 for the January 5, 2026 retreat.',

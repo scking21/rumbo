@@ -54,7 +54,7 @@ NUDGE_TEMPLATE = (
 )
 
 PLANNING_PATTERN = re.compile(
-    r"\b\d{1,2}:\d{2}\b"
+    r"(?<![\[:])(?<!line )\b\d{1,2}:\d{2}\b(?!:\d|\])"
     r"|\$\s?\d"
     r"|\b\d{4}-\d{2}-\d{2}\b"
     r"|\b(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\.?\s+\d{1,2}\b"
@@ -160,6 +160,31 @@ def _source_text(record, check):
     return "\n".join(quotes)
 
 
+UNIT_WORDS = ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten",
+              "eleven", "twelve", "thirteen", "fourteen", "fifteen", "sixteen", "seventeen",
+              "eighteen", "nineteen"]
+TENS_WORDS = ["twenty", "thirty", "forty", "fifty", "sixty", "seventy", "eighty", "ninety"]
+NUMBER_WORD = r"(?:%s|hundred|thousand)\b" % "|".join(UNIT_WORDS + TENS_WORDS)
+NUMBER_RUN = rf"\b(?:a[\s-]+(?=(?:hundred|thousand)\b))?{NUMBER_WORD}(?:(?:\s+and\s+|[\s-]+){NUMBER_WORD})*"
+
+
+def _word_numbers(text):
+    """Yield the value of each English cardinal run ("a hundred and twenty" is 120)."""
+    for run in re.finditer(NUMBER_RUN, text, re.IGNORECASE):
+        total = current = 0
+        for word in re.findall(r"[a-z]+", run.group(0).lower()):
+            if word in UNIT_WORDS:
+                current += UNIT_WORDS.index(word)
+            elif word in TENS_WORDS:
+                current += 20 + 10 * TENS_WORDS.index(word)
+            elif word == "hundred":
+                current = (current or 1) * 100
+            elif word == "thousand":
+                total += (current or 1) * 1000
+                current = 0
+        yield total + current
+
+
 def _is_number_sourced(num, source_text):
     """Return True if num is sourced in source_text per spec.
     The amount 0 is always sourced.
@@ -182,7 +207,7 @@ def _is_number_sourced(num, source_text):
             value = -value
         if value == target:
             return True
-    return False
+    return target in _word_numbers(source_text)
 
 
 def _is_minutes_sourced(minutes, source_text):
@@ -192,6 +217,13 @@ def _is_minutes_sourced(minutes, source_text):
     for match in re.finditer(r"(?<![\w.:,\u2212-])(\d+(?:\.\d+)?)[\s-]*(?:hours?|hrs?)\b", source_text, re.IGNORECASE):
         if decimal.Decimal(match.group(1)) * 60 == minutes:
             return True
+    if minutes == 30 and re.search(r"\bhalf[\s-]+(?:an\s+)?hour\b", source_text, re.IGNORECASE):
+        return True
+    for match in re.finditer(rf"((?<!half ){NUMBER_RUN}|(?<!half )\ban)[\s-]+hours?\b(\s+and\s+a\s+half)?",
+                             source_text, re.IGNORECASE):
+        hours = next(_word_numbers(match.group(1)), 1) + (0.5 if match.group(2) else 0)
+        if hours * 60 == minutes:
+            return True
     return False
 
 
@@ -200,7 +232,9 @@ def _is_time_sourced(time_str, source_text):
     Parse the check time as (h, m) from "HH:MM"; return False if malformed.
     Find time tokens with re.finditer("(?<![0-9:])([0-9]{1,2}):([0-9]{2})(?::([0-9]{2}))?(?![0-9:])(?:\\s*([AaPp])\\.?\\s*[Mm]\\b\\.)?", text).
     Skip a token whose seconds group is present and not "00". Meridiem: p/P and hour < 12 -> hour + 12; a/A and hour == 12 -> 0. Skip hours > 23 or minutes > 59.
-    Sourced if any token's (hour, minute) == (h, m).
+    A token with no meridiem and an hour 1-12 written without a leading zero also reads in the
+    other half of the day (hour + 12, or 0 for 12): the values are the user's, the half is the agent's reading.
+    Sourced if any token's (hour, minute) or other-half reading == (h, m).
     """
     if not isinstance(time_str, str):
         return False
@@ -241,8 +275,8 @@ def _is_time_sourced(time_str, source_text):
         if hour > 23 or minute > 59:
             continue
 
-        # Check if this token matches the target time
-        if hour == h and minute == m:
+        if minute == m and (hour == h or not meridiem_group and hour_group[0] != "0"
+                            and 1 <= hour <= 12 and h == (hour + 12) % 24):
             return True
 
     if m == 0:
@@ -582,7 +616,7 @@ RETRACTION = re.compile(
     re.IGNORECASE)
 # Words that point back at an earlier decision rather than at the current task.
 EARLIER_DECISION = re.compile(
-    r"\b(?:previous(?:ly)?|earlier|before|approv\w*|decision|decided|agreed|choice|chose|"
+    r"\b(?:previous(?:ly)?|earlier|approv\w*|decision|decided|agreed|choice|chose|"
     r"picked|what i said|last time)\b", re.IGNORECASE)
 STOPWORDS = {"that", "this", "with", "from", "have", "will", "would", "should", "could", "there",
              "their", "about", "into", "then", "than", "them", "they", "your", "what", "when",
@@ -949,6 +983,8 @@ def evaluate_check(check):
     if kind == "fits_window":
         start = parse_time(check["start"])
         end = parse_time(check["end"])
+        if end < start:
+            end += 1440
         total = sum(check["segments_min"])
         computed = start + total
         if computed <= end:
@@ -956,7 +992,7 @@ def evaluate_check(check):
         detail = "%s + %d min ends %s, %d min after %s" % (
             check["start"],
             total,
-            fmt_minutes(computed),
+            fmt_minutes(computed % 1440),
             computed - end,
             check["end"],
         )
@@ -965,10 +1001,11 @@ def evaluate_check(check):
     if kind == "before":
         first = parse_date(check["first"])
         second = parse_date(check["second"])
-        if first <= second:
-            return True, None
-        # Calculate day difference
         days = (first - second).days
+        if days > 0 and not _has_year(check["first"]) and not _has_year(check["second"]):
+            days = min(days, days - 365, key=abs)
+        if days <= 0:
+            return True, None
         unit = "day" if days == 1 else "days"
         detail = "%s is %d %s after %s" % (check["first"], days, unit, check["second"])
         return False, detail
