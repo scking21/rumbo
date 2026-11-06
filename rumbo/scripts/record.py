@@ -54,7 +54,7 @@ NUDGE_TEMPLATE = (
 )
 
 PLANNING_PATTERN = re.compile(
-    r"(?<!\d:)(?<!\.\w:)(?<!\.\w\w:)(?<!\.\w\w\w:)(?<!\bline )\b\d{1,2}:\d{2}\b(?!:\d|\])"
+    r"(?<!\S:)(?<!\bline )\b\d{1,2}:\d{2}\b(?!:\d|\])"
     r"|\$\s?\d"
     r"|\b\d{4}-\d{2}-\d{2}\b"
     r"|\b(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\.?\s+\d{1,2}\b"
@@ -205,10 +205,9 @@ def _run_values(run):
 
 def _word_numbers(text):
     """Yield each number spelled in English words, negative after "minus" or a minus sign."""
-    for run in re.finditer(NUMBER_RUN, text, re.IGNORECASE):
-        values = _run_values(run.group(0))
-        before = text[max(0, run.start() - 12):run.start()]
-        if values and re.search(r"(?:\bminus\s+|\bnegative\s+|(?:^|[^\w])[-\u2212]\s*)$", before, re.IGNORECASE):
+    for run in re.finditer(rf"(\b(?:minus|negative)\s+|(?<!\w)[-\u2212]\s*)?({NUMBER_RUN})", text, re.IGNORECASE):
+        values = _run_values(run.group(2))
+        if values and run.group(1):
             values[0] = -values[0]
         yield from values
 

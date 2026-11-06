@@ -85,6 +85,8 @@ class FalseAlarmTests(unittest.TestCase):
         self.assertEqual(list(record._word_numbers('one thousand and two thousand dollars')), [1000, 2000])
         self.assertEqual(list(record._word_numbers('a five-to-ten dollar budget')), [5, 10])
         self.assertEqual(list(record._word_numbers('the low was -five, then (- twelve)')), [-5, -12])
+        self.assertEqual(list(record._word_numbers('negative     five hundred')), [-500])
+        self.assertEqual(list(record._word_numbers('nonnegative    five hundred')), [500])
 
     def test_word_ranges_and_halves_source_no_other_duration(self):
         for words, minutes in (('one-two hours', 180), ('one-two hours', 60), ('one-two hours', 120),
@@ -137,11 +139,12 @@ class FalseAlarmTests(unittest.TestCase):
 
     def test_coding_positions_are_not_planning(self):
         for prompt in ('why does a[1:20] drop the last row', 'error at record.py:12:30',
-                       'the log line 10:42:13 shows the retry', 'see line 12:30 of the diff'):
+                       'the log line 10:42:13 shows the retry', 'see line 12:30 of the diff',
+                       'see settings.json:12:30', 'view.swift:12:30 crashes'):
             with self.subTest(prompt=prompt):
                 self.assertIsNone(record.PLANNING_PATTERN.search(prompt))
         for prompt in ('meet at 10:30 tomorrow', 'doors (9:45) then talks', 'the 12:30 close', '[9:30 am] standup',
-                       'time:10:30', 'Dinner:7:30', 'pipeline 8:15 run', 'headline 10:30'):
+                       'Dinner: 7:30', 'pipeline 8:15 run', 'headline 10:30'):
             with self.subTest(prompt=prompt):
                 self.assertIsNotNone(record.PLANNING_PATTERN.search(prompt))
 
