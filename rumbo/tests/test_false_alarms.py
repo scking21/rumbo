@@ -36,13 +36,15 @@ class FalseAlarmTests(unittest.TestCase):
                                  (0, 'C1: PASS fits_window'))
 
     def test_a_time_that_names_its_half_of_the_day_keeps_one_reading(self):
-        for words in ('1:00a', '1:00 a.', '1:00 in the morning', '1:00 pm0', '1:00 p', '1:00:00', '1:00 am'):
+        for words in ('1:00a', '1:00 a.', '1:00 in the morning', '1:00 pm0', '1:00:00', '1:00 am', '1:00 a.m.'):
             with self.subTest(words=words):
                 self.assertFalse(record._is_time_sourced('13:00', words))
         for words in ('1:00 in the afternoon', '1:00 at night', '1:00 tonight'):
             with self.subTest(words=words):
                 self.assertTrue(record._is_time_sourced('13:00', words))
         self.assertTrue(record._is_time_sourced('13:00', 'out by 1:00, then dinner'))
+        self.assertTrue(record._is_time_sourced('13:00', 'Meet at 1:00 America/Chicago time'))
+        self.assertTrue(record._is_time_sourced('13:00', '1:00 a quick lunch'))
 
     def test_twenty_four_hour_and_meridiem_times_keep_their_one_reading(self):
         for quote, start in (('From 09:30 for 45 minutes until 23:00', '21:30'),
@@ -85,7 +87,7 @@ class FalseAlarmTests(unittest.TestCase):
         self.assertIsNotNone(record._retraction_for(item, ['Undo the approval from last time.']))
 
     def test_coding_positions_are_not_planning(self):
-        for prompt in ('why does a[1:20] drop the last row', 'error at record.py:12:30',
+        for prompt in ('why does a[1:20] drop the last row', 'error at record.py:12:30', 'inspect rows[0][1:20]',
                        'the log line 10:42:13 shows the retry', 'see line 12:30 of the diff',
                        'see settings.json:12:30', 'view.swift:12:30 crashes'):
             with self.subTest(prompt=prompt):

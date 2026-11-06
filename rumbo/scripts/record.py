@@ -54,7 +54,7 @@ NUDGE_TEMPLATE = (
 )
 
 PLANNING_PATTERN = re.compile(
-    r"(?<!\S:)(?<!\bline )(?<!\w\[)\b\d{1,2}:\d{2}\b(?!:\d)"
+    r"(?<!\S:)(?<!\bline )(?<![\w\]]\[)\b\d{1,2}:\d{2}\b(?!:\d)"
     r"|\$\s?\d"
     r"|\b\d{4}-\d{2}-\d{2}\b"
     r"|\b(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\.?\s+\d{1,2}\b"
@@ -688,7 +688,7 @@ def _is_minutes_sourced(minutes, source_text):
 
 
 # Words after a clock time that keep it in the morning or name its half already.
-HALF_OF_DAY = re.compile(r"\s*(?:[AaPp](?![A-Za-z])|[AaPp]\.|[AaPp][Mm]|in\s+the\s+morning)",
+HALF_OF_DAY = re.compile(r"[AaPp](?![A-Za-z])|\s*(?:[AaPp]\.|[AaPp]\.?\s*[Mm](?![A-Za-z])|in\s+the\s+morning)",
                          re.IGNORECASE)
 
 
