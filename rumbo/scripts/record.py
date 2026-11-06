@@ -54,7 +54,7 @@ NUDGE_TEMPLATE = (
 )
 
 PLANNING_PATTERN = re.compile(
-    r"(?<![\[:])(?<!line )\b\d{1,2}:\d{2}\b(?!:\d|\])"
+    r"(?<!\d:)(?<!\.\w:)(?<!\.\w\w:)(?<!\.\w\w\w:)(?<!\bline )\b\d{1,2}:\d{2}\b(?!:\d|\])"
     r"|\$\s?\d"
     r"|\b\d{4}-\d{2}-\d{2}\b"
     r"|\b(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\.?\s+\d{1,2}\b"
@@ -180,7 +180,10 @@ def _run_values(run):
         if word == "a":
             continue
         kind = "unit" if word in UNIT_WORDS else "tens" if word in TENS_WORDS else word
-        if last is not None and (last not in FOLLOWS[kind] or kind == "thousand" and total):
+        if kind == "thousand" and total:
+            values.append(total)
+            total = 0
+        elif last is not None and last not in FOLLOWS[kind]:
             if last != "and":
                 values.append(total + current)
             total, current, last = 0, 0, None
@@ -204,7 +207,8 @@ def _word_numbers(text):
     """Yield each number spelled in English words, negative after "minus" or a minus sign."""
     for run in re.finditer(NUMBER_RUN, text, re.IGNORECASE):
         values = _run_values(run.group(0))
-        if values and re.search(r"(?:\bminus\s+|\bnegative\s+|[-\u2212]\s*)$", text[:run.start()], re.IGNORECASE):
+        before = text[max(0, run.start() - 12):run.start()]
+        if values and re.search(r"(?:\bminus\s+|\bnegative\s+|(?:^|[^\w])[-\u2212]\s*)$", before, re.IGNORECASE):
             values[0] = -values[0]
         yield from values
 
@@ -243,10 +247,19 @@ def _is_minutes_sourced(minutes, source_text):
             return True
     if minutes == 30 and re.search(r"\bhalf[\s-]+(?:an[\s-]+)?hour\b", source_text, re.IGNORECASE):
         return True
-    for match in re.finditer(rf"(?<!half[\s-])({NUMBER_RUN}|\ban)[\s-]+hours?\b(\s+and\s+a\s+half)?",
-                             source_text, re.IGNORECASE):
-        values = _run_values(match.group(1)) if match.group(1).lower() != "an" else [1]
-        if len(values) == 1 and (values[0] + (0.5 if match.group(2) else 0)) * 60 == minutes:
+    for hour in re.finditer(r"\bhours?\b", source_text, re.IGNORECASE):
+        window = source_text[max(0, hour.start() - 80):hour.start()]
+        lead = re.search(rf"({NUMBER_RUN}|\ban)[\s-]+$", window, re.IGNORECASE)
+        if not lead or lead.start() == 0 and hour.start() > 80:
+            continue
+        if re.search(r"\b(?:half|quarters?)[\s-]+(?:of[\s-]+)?$", window[:lead.start()], re.IGNORECASE):
+            continue
+        an = lead.group(1).lower() == "an"
+        if an and hour.group(0).lower() != "hour":
+            continue
+        values = [1] if an else _run_values(lead.group(1))
+        half = re.match(r"\s+and\s+a\s+half\b", source_text[hour.end():], re.IGNORECASE)
+        if len(values) == 1 and (values[0] + (0.5 if half else 0)) * 60 == minutes:
             return True
     return False
 

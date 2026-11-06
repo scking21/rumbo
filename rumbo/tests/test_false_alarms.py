@@ -82,10 +82,15 @@ class FalseAlarmTests(unittest.TestCase):
         self.assertFalse(record._is_number_sourced(500, 'minus five hundred dollars'))
         self.assertTrue(record._is_number_sourced(-500, 'minus five hundred dollars'))
         self.assertFalse(record._is_number_sourced(50, 'twenty and thirty dollars'))
+        self.assertEqual(list(record._word_numbers('one thousand and two thousand dollars')), [1000, 2000])
+        self.assertEqual(list(record._word_numbers('a five-to-ten dollar budget')), [5, 10])
+        self.assertEqual(list(record._word_numbers('the low was -five, then (- twelve)')), [-5, -12])
 
     def test_word_ranges_and_halves_source_no_other_duration(self):
         for words, minutes in (('one-two hours', 180), ('one-two hours', 60), ('one-two hours', 120),
-                               ('half-an-hour', 60), ('half an hour', 60), ('half a dozen hours', 60)):
+                               ('half-an-hour', 60), ('half an hour', 60), ('half a dozen hours', 60),
+                               ('half  an hour', 60), ('half-an hour', 60), ('quarter of an hour', 60),
+                               ('three-quarters of an hour', 60), ('an hours', 60)):
             with self.subTest(words=words, minutes=minutes):
                 self.assertFalse(record._is_minutes_sourced(minutes, words))
         self.assertTrue(record._is_minutes_sourced(30, 'half-an-hour'))
@@ -135,9 +140,20 @@ class FalseAlarmTests(unittest.TestCase):
                        'the log line 10:42:13 shows the retry', 'see line 12:30 of the diff'):
             with self.subTest(prompt=prompt):
                 self.assertIsNone(record.PLANNING_PATTERN.search(prompt))
-        for prompt in ('meet at 10:30 tomorrow', 'doors (9:45) then talks', 'the 12:30 close'):
+        for prompt in ('meet at 10:30 tomorrow', 'doors (9:45) then talks', 'the 12:30 close', '[9:30 am] standup',
+                       'time:10:30', 'Dinner:7:30', 'pipeline 8:15 run', 'headline 10:30'):
             with self.subTest(prompt=prompt):
                 self.assertIsNotNone(record.PLANNING_PATTERN.search(prompt))
+
+
+    def test_long_messages_stay_fast(self):
+        import time
+        for text in ('one ' * 12500, 'five and ' * 6000, 'five hundred and ' * 3000, 'two hours ' * 5000):
+            with self.subTest(text=text[:20]):
+                began = time.monotonic()
+                record._is_minutes_sourced(7, text)
+                record._is_number_sourced(7, text)
+                self.assertLess(time.monotonic() - began, 2)
 
 
 if __name__ == '__main__':
