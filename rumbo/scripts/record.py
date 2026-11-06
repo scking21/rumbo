@@ -232,10 +232,16 @@ def _word_numbers(text):
             stop = w_end
             j += 1
         # A number the parser cannot finish ("twelve hundred thousand thousand") states
-        # nothing: never source its prefix.
+        # nothing: never source its prefix, nor the words after where it stuck.
         if last is not None and not stuck:
             yield start, stop, decimal.Decimal(total + current)
-        i = max(j + (1 if stuck else 0), i + 1)
+        if stuck:
+            while (j < len(tokens) and re.fullmatch(r"\s+|\s*-\s*", text[stop:tokens[j][1]])
+                   and (tokens[j][0] in UNIT_WORDS or tokens[j][0] in TENS_WORDS
+                        or tokens[j][0] in ("hundred", "and", *SCALE_WORDS))):
+                stop = tokens[j][2]
+                j += 1
+        i = max(j, i + 1)
 
 
 # A number the user continued with a fraction ("one and a half thousand", "1 point 5

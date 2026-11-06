@@ -56,6 +56,11 @@ class FalseAlarmTests(unittest.TestCase):
             with self.subTest(value=value):
                 self.assertFalse(record._is_number_sourced(value, 'one thousand and two thousand dollars'))
         self.assertTrue(record._is_number_sourced(2500000, 'two million five hundred thousand dollars'))
+        for minutes in (300, 120, 60):
+            with self.subTest(minutes=minutes):
+                self.assertFalse(record._is_minutes_sourced(minutes, 'one thousand and two thousand five hours'))
+        self.assertFalse(record._is_number_sourced(5, 'twelve hundred thousand thousand five dollars'))
+        self.assertTrue(record._is_number_sourced(7, 'one thousand and two thousand, then seven guests'))
 
     def test_a_hyphenated_half_an_hour_is_thirty_minutes(self):
         for words in ('half-an-hour', 'a half-an-hour break'):
