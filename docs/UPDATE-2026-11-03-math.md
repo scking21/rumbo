@@ -50,12 +50,12 @@ A `fits_window` check whose `end` is earlier than its `start` used to FAIL with 
 
 These close false alarms and invented values that a November 6 audit of `record.py` found still present on this branch.
 
-- **Afternoon times without am/pm.** A clock time with no am/pm, an hour from 1 to 12 and no leading zero, sources both halves of the day, so "out by 1:00" sources 13:00. Before, a correct afternoon schedule was `UNSOURCED` at 13:00 and FAILed at 01:00. "09:30", "13:30" and "9:30am" keep one reading.
-- **Two scale words.** "one thousand and two thousand dollars" no longer sources 3000. A scale word no smaller than one already used ends the number, and the phrase sources nothing.
+- **Afternoon times without am/pm.** A clock time with no am/pm, an hour from 1 to 12 and no leading zero, sources both halves of the day, so "out by 1:00" sources 13:00. Before, a correct afternoon schedule was `UNSOURCED` at 13:00 and FAILed at 01:00. "09:30", "13:30", "9:30am", "1:00a", "1:00:00" and "1:00 in the morning" keep one reading.
+- **Two scale words.** "one thousand and two thousand dollars" no longer sources 3000. A scale word no smaller than one already used makes the number unreadable, and no word in it sources anything, including a duration ("…two thousand five hours").
 - **A spaced minus after a number.** "Step 1 - ten people" sources 10, not -10, as "Step 1 - 10 people" already did.
 - **"half-an-hour"** sources 30.
 - **Retractions.** "before" no longer counts as a pointer to an earlier decision, so "undo the last change before you send it" does not report `EARLIER_APPROVAL`.
-- **Planning nudge.** A time joined by a colon to the word before it (`settings.json:12:30`), a slice (`a[1:20]`), an `HH:MM:SS` stamp and `line N:NN` no longer count as planning. "Dinner: 7:30" with a space still does, and "time:10:30" with none no longer does.
+- **Planning nudge.** A time joined by a colon to the word before it (`settings.json:12:30`), a slice (`a[1:20]`), an `HH:MM:SS` stamp and `line N:NN` no longer count as planning. "Dinner: 7:30" with a space and "[Standup 9:30]" still do, and "time:10:30" with none no longer does.
 
 Still word matching: "minus 500" and "minus five hundred" source 500, and a new value with no retraction word ("let's go with $800 total") does not reopen an earlier approval.
 

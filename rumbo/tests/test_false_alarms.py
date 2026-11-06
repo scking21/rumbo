@@ -35,6 +35,15 @@ class FalseAlarmTests(unittest.TestCase):
                                        segments_min=[45] if '45' in quote else [90]),
                                  (0, 'C1: PASS fits_window'))
 
+    def test_a_time_that_names_its_half_of_the_day_keeps_one_reading(self):
+        for words in ('1:00a', '1:00 a.', '1:00 in the morning', '1:00 pm0', '1:00 p', '1:00:00', '1:00 am'):
+            with self.subTest(words=words):
+                self.assertFalse(record._is_time_sourced('13:00', words))
+        for words in ('1:00 in the afternoon', '1:00 at night', '1:00 tonight'):
+            with self.subTest(words=words):
+                self.assertTrue(record._is_time_sourced('13:00', words))
+        self.assertTrue(record._is_time_sourced('13:00', 'out by 1:00, then dinner'))
+
     def test_twenty_four_hour_and_meridiem_times_keep_their_one_reading(self):
         for quote, start in (('From 09:30 for 45 minutes until 23:00', '21:30'),
                              ('From 9:30am for 45 minutes until 23:00', '21:30'),
@@ -56,9 +65,10 @@ class FalseAlarmTests(unittest.TestCase):
             with self.subTest(value=value):
                 self.assertFalse(record._is_number_sourced(value, 'one thousand and two thousand dollars'))
         self.assertTrue(record._is_number_sourced(2500000, 'two million five hundred thousand dollars'))
-        for minutes in (300, 120, 60):
-            with self.subTest(minutes=minutes):
-                self.assertFalse(record._is_minutes_sourced(minutes, 'one thousand and two thousand five hours'))
+        for words in ('one thousand and two thousand five hours', 'one thousand and two thousand five elevenths of an hour'):
+            for minutes in (300, 120, 60):
+                with self.subTest(words=words, minutes=minutes):
+                    self.assertFalse(record._is_minutes_sourced(minutes, words))
         self.assertFalse(record._is_number_sourced(5, 'twelve hundred thousand thousand five dollars'))
         self.assertTrue(record._is_number_sourced(7, 'one thousand and two thousand, then seven guests'))
 
@@ -81,7 +91,8 @@ class FalseAlarmTests(unittest.TestCase):
             with self.subTest(prompt=prompt):
                 self.assertIsNone(record.PLANNING_PATTERN.search(prompt))
         for prompt in ('meet at 10:30 tomorrow', 'doors (9:45) then talks', 'the 12:30 close', '[9:30 am] standup',
-                       'Dinner: 7:30', 'pipeline 8:15 run', 'headline 10:30'):
+                       'Dinner: 7:30', 'pipeline 8:15 run', 'headline 10:30',
+                       '[Standup 9:30]', '[9:30] standup'):
             with self.subTest(prompt=prompt):
                 self.assertIsNotNone(record.PLANNING_PATTERN.search(prompt))
 

@@ -54,7 +54,7 @@ NUDGE_TEMPLATE = (
 )
 
 PLANNING_PATTERN = re.compile(
-    r"(?<!\S:)(?<!\bline )\b\d{1,2}:\d{2}\b(?!:\d|\])"
+    r"(?<!\S:)(?<!\bline )(?<!\w\[)\b\d{1,2}:\d{2}\b(?!:\d)"
     r"|\$\s?\d"
     r"|\b\d{4}-\d{2}-\d{2}\b"
     r"|\b(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\.?\s+\d{1,2}\b"
@@ -176,7 +176,8 @@ def _word_numbers(text):
     "twenty-five", "four hundred fifty", "one hundred and twenty", "a thousand",
     "five thousand", "fifteen hundred". Two units or two tens in a row end a number
     ("five six" is 5 and 6), and "and" joins only after hundred or a scale word. A
-    "hundred" or scale word that cannot attach makes the whole number state nothing.
+    "hundred" or scale word that cannot attach makes the whole number state nothing: it
+    is yielded with the value None, so no word inside it reads as a number of its own.
     """
     tokens = [(m.group(0).lower(), m.start(), m.end()) for m in re.finditer(r"[A-Za-z]+", text)]
     i = 0
@@ -241,6 +242,7 @@ def _word_numbers(text):
                         or tokens[j][0] in ("hundred", "and", *SCALE_WORDS))):
                 stop = tokens[j][2]
                 j += 1
+            yield start, stop, None
         i = max(j, i + 1)
 
 
@@ -380,7 +382,7 @@ def _is_number_sourced(num, source_text, excluded_unit=None):
             return True
     # Spelled numbers: "twelve", "four hundred fifty dollars", "five thousand".
     for start, end, value in _word_numbers(source_text):
-        if excluded_unit is not None and excluded_unit.match(source_text, end):
+        if value is None or excluded_unit is not None and excluded_unit.match(source_text, end):
             continue
         ends_scaled = re.search(r"(?:thousand|million|billion)$", source_text[start:end], re.IGNORECASE)
         if (_after_fraction_prefix(source_text, start)
@@ -685,6 +687,11 @@ def _is_minutes_sourced(minutes, source_text):
     return any(value == minutes for value in _stated_minutes(source_text))
 
 
+# Words after a clock time that keep it in the morning or name its half already.
+HALF_OF_DAY = re.compile(r"\s*(?:[AaPp](?![A-Za-z])|[AaPp]\.|[AaPp][Mm]|in\s+the\s+morning)",
+                         re.IGNORECASE)
+
+
 def _is_time_sourced(time_str, source_text):
     """Return True if time_str (HH:MM) is sourced in source_text.
     Parse the check time as (h, m) from "HH:MM"; return False if malformed.
@@ -733,8 +740,9 @@ def _is_time_sourced(time_str, source_text):
         if hour > 23 or minute > 59:
             continue
 
-        if minute == m and (hour == h or not meridiem_group and hour_group[0] != "0"
-                            and 1 <= hour <= 12 and h == (hour + 12) % 24):
+        if minute == m and (hour == h or h == (hour + 12) % 24 and 1 <= hour <= 12 and hour_group[0] != "0"
+                            and not meridiem_group and seconds_group is None
+                            and not HALF_OF_DAY.match(source_text, match.end())):
             return True
 
     if m == 0:
