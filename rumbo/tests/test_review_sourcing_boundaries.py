@@ -313,6 +313,27 @@ class ReviewSourcingBoundaryTests(unittest.TestCase):
                 dict(kind='fits_window',start='09:00',end='10:00',segments_min=[30]))
             self.assertIn(want,result.stdout)
 
+    def test_digit_ordinal_fraction_sources_nothing(self):
+        for phrase in ('a 5th of $1000','1/5th of $1000','3 8ths of $1000','a 12th of $1000','a billionth of $1000','a trillionth of $1000'):
+            with self.subTest(phrase=phrase):
+                result=self.check_output('Fee is '+phrase+'; cap $2000.',dict(kind='within_budget',amounts=[1000],total_cap=2000))
+                self.assertIn('UNSOURCED',result.stdout)
+        for phrase,n in (('a 12th of 2 hours',120),('a 5th of an hour',60),('a 12th of 120 minutes',120)):
+            with self.subTest(phrase=phrase):
+                result=self.check_output('Start 9:00; '+phrase+'; finish 12:00.',dict(kind='fits_window',start='09:00',end='12:00',segments_min=[n]))
+                self.assertIn('UNSOURCED',result.stdout)
+
+    def test_fraction_prefix_shared_hour_path(self):
+        for phrase,want in (('150 percent of two hours','UNSOURCED'),('150% of 2 hours','UNSOURCED'),
+                            ('half of two hours','UNSOURCED'),('a third of 2 hours','UNSOURCED'),
+                            ('200 percent of two and a half hours','UNSOURCED'),('9:00 with a 2-hour rehearsal','PASS'),
+                            ('two hours','PASS'),('a 2-hour rehearsal','PASS'),
+                            ('150 percent of two hours; independent duration two hours','PASS')):
+            with self.subTest(phrase=phrase):
+                result=self.check_output('Start 9:00; rehearsal takes '+phrase+'; finish 12:00.',
+                    dict(kind='fits_window',start='09:00',end='12:00',segments_min=[150 if 'half hours' in phrase else 120]))
+                self.assertIn(want,result.stdout)
+
 
 if __name__ == '__main__':
     unittest.main()
