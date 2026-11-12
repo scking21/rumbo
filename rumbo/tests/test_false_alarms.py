@@ -25,6 +25,14 @@ def check(quote, **fields):
 
 
 class FalseAlarmTests(unittest.TestCase):
+    def test_a_word_ending_in_th_is_not_an_ordinal_fraction(self):
+        for quote, amount in (('Dinner 17:00 with 50 guests at $20 each, cap $1000', 50),
+                              ('Room for 2 with 4 chairs, cap $1000', 4)):
+            with self.subTest(quote=quote):
+                self.assertEqual(check(quote, kind='within_budget', amounts=[amount], total_cap=1000), (0, 'C1: PASS within_budget'))
+        self.assertEqual(check('Start 9:00 with a 2-hour rehearsal, finish 12:00', kind='fits_window', start='09:00',
+                               end='12:00', segments_min=[120]), (0, 'C1: PASS fits_window'))
+
     def test_a_clock_time_without_am_or_pm_sources_either_half_of_the_day(self):
         for quote, start, end in (('The talk starts at 11:30, runs 45 minutes, out by 1:00.', '11:30', '13:00'),
                                   ('Doors 6:30, a 90 minute show, done by 8:00', '18:30', '20:00'),
