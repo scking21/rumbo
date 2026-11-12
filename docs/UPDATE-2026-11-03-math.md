@@ -84,6 +84,6 @@ the Claude adapter remains 0.3.9.
 Two `record.py` fixes before PR 20 lands, both in the Claude adapter's checker and copied into the Codex package:
 
 - A duration in hours inside a percentage or fraction is no longer sourced whole. `150 percent of two hours`, `150% of 2 hours` and `half of two hours` no longer source 120. Minutes already worked this way.
-- A word ending in `th` counts as an ordinal fraction only when it is one (`fifth`, `twelfths`, `sixteenths`). Before, `with` matched, so `Dinner 17:00 with 50 guests` left 50 `UNSOURCED`. That was a false alarm on a correct record.
+- A word ending in `th` counts as an ordinal fraction only when it is a number ordinal, spelled (`fifth`, `twelfths`, `sixteenths`, `billionth`) or after digits (`5th`, `8ths`). Before, `with` matched, so `Dinner 17:00 with 50 guests` left 50 `UNSOURCED`. That was a false alarm on a correct record.
 
 Tests: `test_fraction_prefix_shared_hour_path` and `test_a_word_ending_in_th_is_not_an_ordinal_fraction`, both committed failing before the fix.

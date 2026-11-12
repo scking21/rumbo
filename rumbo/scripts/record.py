@@ -279,7 +279,7 @@ AFTER_SCALE = re.compile(r"\b(?:thousand|million|billion)[\s,]*(?:and\s+)?$", re
 
 
 ORDINAL_WORD = re.compile(r"[a-z]*(?:fourth|fifth|sixth|seventh|eighth|ninth|tenth|eleventh|twelfth|teenth|tieth"
-                          r"|hundredth|thousandth|millionth)s?", re.IGNORECASE)
+                          r"|hundredth|thousandth|millionth|billionth|trillionth)s?", re.IGNORECASE)
 
 
 def _after_fraction_prefix(text, start):
@@ -322,7 +322,7 @@ def _after_fraction_prefix(text, start):
                     return True
     if word in ("half", "halves", "quarter", "quarters", "third", "thirds", "percent", "percentage"):
         return True
-    if ORDINAL_WORD.fullmatch(word):
+    if ORDINAL_WORD.fullmatch(word) or word in ("th", "ths"):
         count, _ = previous_word(pos)
         digit_end = pos
         while digit_end > 0 and text[digit_end - 1].isspace():
@@ -495,7 +495,7 @@ def _stated_minutes(source_text):
             count_end -= 1
         numeric_end = count_end > 0 and text[count_end - 1].isdecimal()
         count_word, _ = previous_word(count_end)
-        ordinal_fraction = (ORDINAL_WORD.fullmatch(word) is not None
+        ordinal_fraction = ((ORDINAL_WORD.fullmatch(word) is not None or word in ("th", "ths"))
                             and (numeric_end or count_end in whole_number_ends
                                  or count_word in ("a", "an")))
         return ordinal_fraction or word in ("half", "halves", "quarter", "quarters", "third", "thirds",
