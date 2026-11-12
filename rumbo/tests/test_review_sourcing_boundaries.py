@@ -313,6 +313,17 @@ class ReviewSourcingBoundaryTests(unittest.TestCase):
                 dict(kind='fits_window',start='09:00',end='10:00',segments_min=[30]))
             self.assertIn(want,result.stdout)
 
+    def test_fraction_prefix_shared_hour_path(self):
+        for phrase,want in (('150 percent of two hours','UNSOURCED'),('150% of 2 hours','UNSOURCED'),
+                            ('half of two hours','UNSOURCED'),('a third of 2 hours','UNSOURCED'),
+                            ('150 percent of two and a half hours','UNSOURCED'),
+                            ('two hours','PASS'),('a 2-hour rehearsal','PASS'),
+                            ('150 percent of two hours; independent duration two hours','PASS')):
+            with self.subTest(phrase=phrase):
+                result=self.check_output('Start 9:00; rehearsal takes '+phrase+'; finish 11:00.',
+                    dict(kind='fits_window',start='09:00',end='11:00',segments_min=[150 if 'half hours' in phrase else 120]))
+                self.assertIn(want,result.stdout)
+
 
 if __name__ == '__main__':
     unittest.main()
