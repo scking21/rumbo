@@ -278,6 +278,10 @@ SCALED_CONTINUED = re.compile(
 AFTER_SCALE = re.compile(r"\b(?:thousand|million|billion)[\s,]*(?:and\s+)?$", re.IGNORECASE)
 
 
+ORDINAL_WORD = re.compile(r"[a-z]*(?:fourth|fifth|sixth|seventh|eighth|ninth|tenth|eleventh|twelfth|teenth|tieth"
+                          r"|hundredth|thousandth|millionth)s?", re.IGNORECASE)
+
+
 def _after_fraction_prefix(text, start):
     """Reject an interior amount of a fractional phrase, without evaluating it."""
     pos = start
@@ -318,7 +322,7 @@ def _after_fraction_prefix(text, start):
                     return True
     if word in ("half", "halves", "quarter", "quarters", "third", "thirds", "percent", "percentage"):
         return True
-    if word.endswith(("th", "ths")):
+    if ORDINAL_WORD.fullmatch(word):
         count, _ = previous_word(pos)
         digit_end = pos
         while digit_end > 0 and text[digit_end - 1].isspace():
@@ -491,7 +495,7 @@ def _stated_minutes(source_text):
             count_end -= 1
         numeric_end = count_end > 0 and text[count_end - 1].isdecimal()
         count_word, _ = previous_word(count_end)
-        ordinal_fraction = (word.endswith(("th", "ths"))
+        ordinal_fraction = (ORDINAL_WORD.fullmatch(word) is not None
                             and (numeric_end or count_end in whole_number_ends
                                  or count_word in ("a", "an")))
         return ordinal_fraction or word in ("half", "halves", "quarter", "quarters", "third", "thirds",
@@ -586,8 +590,8 @@ def _stated_minutes(source_text):
         article = m.group(1).lower() in ("a", "an")
         extra = m.group(2) or m.group(3)
         value = None
-        if not (is_signed_duration(m.start()) or hours is None or not is_whole(m, 1) or not is_whole(m, 2) or has_fraction(m)
-                or is_rate(m.start(), article) or is_part(m)):
+        if not (is_signed_duration(m.start()) or _after_fraction_prefix(text, m.start()) or hours is None
+                or not is_whole(m, 1) or not is_whole(m, 2) or has_fraction(m) or is_rate(m.start(), article) or is_part(m)):
             # "1 hour 15 minutes" states 75, never the whole hours alone.
             value = hours * 60 if extra is None else (None if _amount(extra) is None else hours * 60 + _amount(extra))
         found.append((m.start(), m.end(), value))
@@ -614,7 +618,8 @@ def _stated_minutes(source_text):
             # "two hours and a half day", "an hour and three halves": state nothing.
             found.append((m.start(), m.end(), None))
             continue
-        ok = (not is_signed_duration(m.start()) and "hour" in tail and hours is not None and is_whole(m, 1)
+        ok = (not is_signed_duration(m.start()) and not _after_fraction_prefix(text, m.start())
+              and "hour" in tail and hours is not None and is_whole(m, 1)
               and not is_rate(m.start(), m.group(1).lower() in ("a", "an")))
         found.append((m.start(), m.end(), hours * 60 + fraction if ok else None))
     for m in re.finditer(r"\b(?:(?:a|one)\s+)?half(?:[\s-]+an?)?[\s-]*hour\b", text, flags):
