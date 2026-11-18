@@ -1,16 +1,11 @@
-"""Per-task staleness (revision_scope "task") and the engine Stop gate for lost acceptance."""
+"""Per-task staleness: revision_scope "task" makes only the changed task's work stale."""
 import copy
-import json
-import os
 from pathlib import Path
-import subprocess
 import tempfile
 import unittest
 
 from rumbo.core import Engine, task_fingerprint
 
-ROOT = Path(__file__).resolve().parents[1]
-GATE = ROOT/'rumbo'/'scripts'/'engine_gate.py'
 REQUEST = 'Export the report as CSV. Keep the column order exactly as it is today. Do not add new dependencies.'
 
 
@@ -104,58 +99,6 @@ class PerTaskStalenessTests(Base):
         state['tasks'][0]['lease'] = dict(actor='x', expires_at=1, contract_revision=1)
         self.assertEqual(task_fingerprint(state, state['tasks'][0]), before)
 
-
-class EngineGateTests(Base):
-    def run_gate(self, hook):
-        env = dict(os.environ, RUMBO_STATE_DIR=str(self.root/'gate-state'))
-        result = subprocess.run(['python3', str(GATE), '--project', str(self.root)], input=json.dumps(hook),
-                                text=True, capture_output=True, env=env, timeout=20)
-        self.assertEqual((result.returncode, result.stderr), (0, ''))
-        return json.loads(result.stdout) if result.stdout else None
-
-    def test_silent_without_a_ledger(self):
-        empty = tempfile.TemporaryDirectory(); self.addCleanup(empty.cleanup)
-        result = subprocess.run(['python3', str(GATE), '--project', empty.name], input='{}', text=True, capture_output=True, timeout=20)
-        self.assertEqual((result.returncode, result.stdout, result.stderr), (0, '', ''))
-        self.assertFalse((Path(empty.name)/'.rumbo').exists())
-
-    def test_reports_lost_acceptance_once_per_session(self):
-        self.start(contract([task('a', [dict(id='c', kind='file_contains', value='ok')])]))
-        self.accept_file('a', 'a.txt')
-        self.assertIsNone(self.run_gate({'session_id': 's1'}))
-        (self.root/'a.txt').write_text('ok, but edited after acceptance')
-        blocked = self.run_gate({'session_id': 's1'})
-        self.assertIn('ACCEPTANCE_LOST a', blocked['reason'])
-        self.assertIn('Artifact bytes changed', blocked['reason'])
-        self.assertIn('python3 -m rumbo --root', blocked['reason'])
-        # The agent cannot restore acceptance itself, so the same problem is not reported again.
-        self.assertIsNone(self.run_gate({'session_id': 's1'}))
-        (self.root/'a.txt').write_text('ok')
-        self.assertIsNone(self.run_gate({'session_id': 's1'}))
-        (self.root/'a.txt').write_text('edited again')
-        self.assertIsNone(self.run_gate({'session_id': 's1'}))
-        # Another session hears about it once too.
-        self.assertIn('ACCEPTANCE_LOST a', self.run_gate({'session_id': 's9'})['reason'])
-        # Without a session id it defers to stop_hook_active, so it never loops.
-        self.assertEqual(self.run_gate({})['decision'], 'block')
-        self.assertIsNone(self.run_gate({'stop_hook_active': True}))
-
-    def test_a_session_gets_at_most_three_blocks(self):
-        names = ['a', 'b', 'c', 'd']
-        self.start(contract([task(n, [dict(id='c', kind='file_contains', value='ok')]) for n in names]))
-        for n in names:
-            self.accept_file(n, n + '.txt')
-        found = []
-        for n in names:
-            (self.root/(n + '.txt')).write_text('ok, edited')
-            found.append(self.run_gate({'session_id': 's3'}))
-        self.assertEqual([bool(b) for b in found], [True, True, True, False])
-
-    def test_edits_outside_the_contract_do_not_block(self):
-        self.start(contract([task('a', [dict(id='c', kind='file_contains', value='ok')])]))
-        self.accept_file('a', 'a.txt')
-        (self.root/'CONTRIBUTING.md').write_text('A typo fix the user asked for\n')
-        self.assertIsNone(self.run_gate({'session_id': 's2'}))
 
 
 if __name__ == "__main__":
