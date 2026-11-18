@@ -137,15 +137,6 @@ def integer(value, name, minimum=1, maximum=1000000000):
     return value
 
 
-def collapse(text):
-    return ' '.join(text.split())
-
-
-def constraint_text(value):
-    """Constraint display text: a legacy string, or the text of a quoted constraint."""
-    return value['text'] if isinstance(value, dict) else value
-
-
 def relative_path(relative, name='path'):
     """Validate a project- or commit-relative path; refuse traversal and private locations."""
     if not isinstance(relative, str) or not relative or len(relative) > 512 or '\\' in relative or '\x00' in relative:
@@ -188,17 +179,9 @@ def validate_contract(data, actor):
     if 'revision_scope' in data and data['revision_scope'] not in REVISION_SCOPES:
         fail('BAD_INPUT', 'revision_scope must be contract or task')
     if not isinstance(data['constraints'], list) or len(data['constraints']) > 50:
-        fail('BAD_INPUT', 'constraints must be an array of at most 50 entries')
-    request = collapse(data['original_request'])
+        fail('BAD_INPUT', 'constraints must be an array of at most 50 strings')
     for value in data['constraints']:
-        if isinstance(value, dict):
-            # A quoted constraint keeps the owner's own words beside its paraphrase.
-            fields(value, {'text', 'quote'})
-            string(value['text'], 'constraint text'); string(value['quote'], 'constraint quote')
-            if collapse(value['quote']) not in request:
-                fail('QUOTE_NOT_IN_REQUEST', 'Constraint quote must appear word for word in original_request: ' + value['quote'][:120])
-        else:
-            string(value, 'constraint')
+        string(value, 'constraint')
     tasks = data['tasks']
     if not isinstance(tasks, list) or not 1 <= len(tasks) <= 100:
         fail('BAD_INPUT', 'Include 1 to 100 bounded tasks')
@@ -520,6 +503,16 @@ class Engine:
         self._object_size(commit + ':' + relative)
         return self._git('cat-file', 'blob', commit + ':' + relative)
 
+    def _commit_contains(self, artifact, value):
+        """file_contains with no file: pass when any file the commit changed contains the value."""
+        for name in artifact.get('files', []):
+            try:
+                if value in self._commit_file(artifact['commit'], name).decode('utf-8'):
+                    return True, 'file_contains found in ' + name + ' at the recorded commit'
+            except (RumboError, UnicodeError):
+                continue  # deleted, private, oversized or binary files cannot match
+        return False, 'file_contains matched none of the files this commit changed'
+
     def _digest_artifact(self,artifact):
         if artifact.get('source')=='git_commit':
             raw = self._commit_object(artifact['commit'])
@@ -806,12 +799,23 @@ class Engine:
                 if kind in ('manual_review', 'ci_status'):
                     continue
                 passed = False
+                detail = kind+' evaluated against the recorded artifact bytes'
+                target = check.get('file')
+                if is_commit and target is None:
+                    # A commit object holds no file content, so an unnamed check looks at the changed files.
+                    if kind == 'file_contains':
+                        passed, detail = self._commit_contains(artifact, check['value'])
+                    else:
+                        detail = kind+' on a commit artifact needs a file; none was named, so it cannot pass'
+                    evidence.append(dict(common, id=eventid+'-'+check['id'], kind='deterministic', check_id=check['id'], outcome='pass' if passed else 'fail', detail=detail))
+                    continue
                 try:
                     # A file check reads that path in the commit; without one, the artifact's own bytes.
-                    target = check.get('file')
                     if target is not None and not is_commit:
                         raise ValueError('file applies only to commit artifacts')
                     data = self._commit_file(artifact['commit'], target) if target is not None else raw
+                    if target is not None:
+                        detail = kind+' evaluated against '+target+' at the recorded commit'
                     if kind == 'sha256':
                         passed = hashlib.sha256(data).hexdigest() == check['value']
                     elif kind == 'file_contains':
@@ -825,7 +829,7 @@ class Engine:
                         passed = isinstance(value, dict) and check['key'] in value and canonical(value[check['key']]) == canonical(check['value'])
                 except (ValueError, UnicodeError, RumboError, RecursionError):
                     passed = False
-                evidence.append(dict(common, id=eventid+'-'+check['id'], kind='deterministic', check_id=check['id'], outcome='pass' if passed else 'fail', detail=kind+' evaluated against the recorded artifact bytes'))
+                evidence.append(dict(common, id=eventid+'-'+check['id'], kind='deterministic', check_id=check['id'], outcome='pass' if passed else 'fail', detail=detail))
             return dict(task_id=task['id'], evidence=evidence)
         if action == 'submit_review':
             if self.actor == artifact['maker']:

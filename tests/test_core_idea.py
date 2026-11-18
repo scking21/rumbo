@@ -1,4 +1,4 @@
-"""Prototype: quoted constraints, per-task staleness, commit artifacts, CI attestations, engine Stop gate."""
+"""Prototype: per-task staleness, commit artifacts, CI attestations, engine Stop gate."""
 import copy
 import json
 import os
@@ -23,7 +23,7 @@ def task(task_id, acceptance, dependencies=()):
 
 def contract(tasks, **extra):
     return dict(project_id='sample', goal='CSV export', original_request=REQUEST, decision_owner='owner',
-                constraints=[dict(text='Column order unchanged', quote='Keep the column order exactly as it is today.')],
+                constraints=['Column order unchanged'],
                 tasks=tasks, **extra)
 
 
@@ -57,21 +57,6 @@ class Base(unittest.TestCase):
 
 def status(state):
     return {t['id']: t['status'] for t in state['tasks']}
-
-
-class QuotedConstraintTests(Base):
-    def test_quote_must_appear_in_the_original_request(self):
-        data = contract([task('a', [dict(id='c', kind='file_contains', value='ok')])])
-        data['constraints'].append(dict(text='Any library is fine', quote='Feel free to add any library.'))
-        with self.assertRaises(RumboError) as caught:
-            self.owner.execute('create_contract', data)
-        self.assertEqual(caught.exception.code, 'QUOTE_NOT_IN_REQUEST')
-
-    def test_quote_matches_across_whitespace_and_legacy_strings_still_work(self):
-        data = contract([task('a', [dict(id='c', kind='file_contains', value='ok')])])
-        data['constraints'] = ['Plain legacy constraint', dict(text='No new deps', quote='Do not add\n  new dependencies.')]
-        state = self.owner.execute('create_contract', data)
-        self.assertEqual(state['constraints'][1]['quote'], 'Do not add\n  new dependencies.')
 
 
 class PerTaskStalenessTests(Base):
@@ -225,6 +210,20 @@ class CommitArtifactTests(Base):
         self.assertEqual({e['check_id']: e['outcome'] for e in state['tasks'][0]['evidence']}['code'], 'fail')
         self.assertFalse([args for args in calls if args[:2] == ('cat-file', 'blob') and args[2].endswith(':export.py')])
 
+    def test_unnamed_checks_on_a_commit_look_at_its_changed_files(self):
+        # Found in live agent runs: an ordinary contract check must still work for a commit.
+        self.owner.execute('revise_contract', dict(expected_revision=1, reason='plain checks', contract=contract([task('export', [
+            dict(id='code', kind='file_contains', value='COLUMNS'),
+            dict(id='missing', kind='file_contains', value='not anywhere'),
+            dict(id='digest', kind='sha256', value='0' * 64)])])))
+        self.worker.execute('claim_task', dict(task_id='export', contract_revision=2, lease_seconds=300))
+        self.worker.execute('submit_commit', dict(task_id='export', contract_revision=2, commit=self.commit))
+        state = self.worker.execute('run_checks', dict(task_id='export', contract_revision=2, artifact_revision=1))
+        evidence = {e['check_id']: e for e in state['tasks'][0]['evidence']}
+        self.assertEqual({k: e['outcome'] for k, e in evidence.items()}, {'code': 'pass', 'missing': 'fail', 'digest': 'fail'})
+        self.assertIn('export.py', evidence['code']['detail'])
+        self.assertIn('needs a file', evidence['digest']['detail'])
+
     def test_file_checks_on_a_single_file_artifact_fail_instead_of_reading_elsewhere(self):
         self.owner.execute('revise_contract', dict(expected_revision=1, reason='file artifact', contract=contract([task('export', [
             dict(id='code', kind='file_contains', file='export.py', value='COLUMNS')])])))
@@ -248,25 +247,37 @@ class EngineGateTests(Base):
         self.assertEqual((result.returncode, result.stdout, result.stderr), (0, '', ''))
         self.assertFalse((Path(empty.name)/'.rumbo').exists())
 
-    def test_blocks_when_accepted_work_goes_stale_then_stops_after_three(self):
+    def test_reports_lost_acceptance_once_per_session(self):
         self.start(contract([task('a', [dict(id='c', kind='file_contains', value='ok')])]))
         self.accept_file('a', 'a.txt')
         self.assertIsNone(self.run_gate({'session_id': 's1'}))
         (self.root/'a.txt').write_text('ok, but edited after acceptance')
-        for _ in range(3):
-            blocked = self.run_gate({'session_id': 's1'})
-            self.assertEqual(blocked['decision'], 'block')
-            self.assertIn('ACCEPTANCE_LOST a', blocked['reason'])
-            self.assertIn('Artifact bytes changed', blocked['reason'])
+        blocked = self.run_gate({'session_id': 's1'})
+        self.assertIn('ACCEPTANCE_LOST a', blocked['reason'])
+        self.assertIn('Artifact bytes changed', blocked['reason'])
+        self.assertIn('python3 -m rumbo --root', blocked['reason'])
+        # The agent cannot restore acceptance itself, so the same problem is not reported again.
         self.assertIsNone(self.run_gate({'session_id': 's1'}))
-        # A healthy stop in between does not hand the session three more blocks.
         (self.root/'a.txt').write_text('ok')
         self.assertIsNone(self.run_gate({'session_id': 's1'}))
         (self.root/'a.txt').write_text('edited again')
         self.assertIsNone(self.run_gate({'session_id': 's1'}))
+        # Another session hears about it once too.
+        self.assertIn('ACCEPTANCE_LOST a', self.run_gate({'session_id': 's9'})['reason'])
         # Without a session id it defers to stop_hook_active, so it never loops.
         self.assertEqual(self.run_gate({})['decision'], 'block')
         self.assertIsNone(self.run_gate({'stop_hook_active': True}))
+
+    def test_a_session_gets_at_most_three_blocks(self):
+        names = ['a', 'b', 'c', 'd']
+        self.start(contract([task(n, [dict(id='c', kind='file_contains', value='ok')]) for n in names]))
+        for n in names:
+            self.accept_file(n, n + '.txt')
+        found = []
+        for n in names:
+            (self.root/(n + '.txt')).write_text('ok, edited')
+            found.append(self.run_gate({'session_id': 's3'}))
+        self.assertEqual([bool(b) for b in found], [True, True, True, False])
 
     @unittest.skipUnless(HAS_GIT, 'git is required for working-tree changes')
     def test_blocks_on_changes_while_no_task_is_claimed(self):
