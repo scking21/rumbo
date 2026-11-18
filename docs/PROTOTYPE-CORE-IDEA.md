@@ -19,14 +19,14 @@ Real headless Claude Code sessions ran against synthetic projects, with the plug
 
 | | main | branch |
 |---|---|---|
-| Tasks stale right after the docs-only revision | 3 of 3, in 3 of 3 runs | 1 of 3 (docs), in 3 of 3 runs |
+| Tasks stale right after the docs-only revision | 3 of 3, in 9 of 9 runs | 1 of 3 (docs), in 11 of 11 runs |
 | Tasks the owner had to accept again | 3 per run | 1 per run |
 
 ## What was tested and dropped
 
-Round 2 used 30 sessions (sonnet, plus haiku for the CI scenario).
+Three rounds used 67 sessions (sonnet, plus haiku for the CI scenario).
 
-- **Engine Stop gate (`ACCEPTANCE_LOST`, `UNCLAIMED_CHANGES`).** It surfaced nothing that `main` missed: the agent told the user that accepted work was affected in 3 of 3 runs on both arms (scenario A) and flagged the constraint conflict in 3 of 3 runs on both arms (scenario E, six turns). It blocked every small edit outside the contract (6 of 6 edit turns in scenario B, 0 on `main`), and raised session cost by about 10% in A and 28% in E.
+- **Engine Stop gate.** In scenario A the user's follow-up un-accepts finished work. The agent told the user so in 8 of 9 sessions with a gate and 8 of 11 without one, a gap within run-to-run noise. In the six-turn scenario E both arms flagged the constraint conflict and the needed re-acceptance in every graded run. The first version also blocked on `UNCLAIMED_CHANGES`, which blocked every small requested edit outside the contract (6 of 6 edit turns in scenario B, 0 on `main`). A narrower version that only reported lost acceptance stopped those false blocks (0 of 4), but still made sessions about 15% more expensive in E.
 - **Commit artifacts and CI attestations.** In 12 sessions (6 sonnet, 6 haiku) the code passed its tests on the first try on both arms, so CI never had anything to catch. In 1 of 6 branch sessions the task stayed at `produced`, because the agent didn't run the file check after registering the commit.
 - **Constraints tied to quoted words.** Dropped after round 1: no session on either arm broke the dependency constraint it was meant to protect.
 
