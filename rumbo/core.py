@@ -495,17 +495,29 @@ class Engine:
         if Path(top).resolve() != self.root:
             fail('PATH_INVALID', 'Commit artifacts need the project root to be the repository top level')
 
+    def _object_size(self, spec):
+        # Ask for the size first, so an oversized object is refused before any of it is buffered.
+        try:
+            size = int(self._git('cat-file', '-s', spec))
+        except ValueError:
+            fail('GIT_OBJECT_MISSING', 'git reported an unreadable object size')
+        if size > MAX_ARTIFACT:
+            fail('PATH_TOO_LARGE', 'Git objects read as evidence are limited to 5 MiB')
+        return size
+
     def _commit_object(self, commit):
         if not isinstance(commit, str) or not GIT_OBJECT.fullmatch(commit):
             fail('BAD_INPUT', 'commit must be a full lowercase hexadecimal commit id')
         if self._git('cat-file', '-t', commit) != b'commit\n':
             fail('GIT_OBJECT_MISSING', 'Not a commit in the project repository')
+        self._object_size(commit)
         return self._git('cat-file', 'commit', commit)
 
     def _commit_file(self, commit, relative):
         relative_path(relative, 'check file')
         if self._git('cat-file', '-t', commit + ':' + relative) != b'blob\n':
             fail('GIT_OBJECT_MISSING', 'No file ' + relative + ' in commit ' + commit[:12])
+        self._object_size(commit + ':' + relative)
         return self._git('cat-file', 'blob', commit + ':' + relative)
 
     def _digest_artifact(self,artifact):

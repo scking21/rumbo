@@ -7,6 +7,7 @@ import shutil
 import subprocess
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from rumbo.core import Engine, RumboError, task_fingerprint
 
@@ -209,6 +210,20 @@ class CommitArtifactTests(Base):
         git(self.root, 'replace', git(self.root, 'rev-parse', self.commit + ':export.py'), fake)
         state = self.worker.execute('run_checks', dict(task_id='export', contract_revision=1, artifact_revision=1))
         self.assertEqual({e['check_id']: e['outcome'] for e in state['tasks'][0]['evidence']}['code'], 'pass')
+
+    def test_oversized_files_in_a_commit_fail_without_being_read(self):
+        (self.root/'export.py').write_text('COLUMNS = []\n' + 'x' * (6 * 1024 * 1024))
+        git(self.root, 'commit', '-qam', 'huge')
+        self.submit(git(self.root, 'rev-parse', 'HEAD'))
+        calls = []
+        original = Engine._git
+        def spy(engine, *args):
+            calls.append(args)
+            return original(engine, *args)
+        with patch.object(Engine, '_git', spy):
+            state = self.worker.execute('run_checks', dict(task_id='export', contract_revision=1, artifact_revision=1))
+        self.assertEqual({e['check_id']: e['outcome'] for e in state['tasks'][0]['evidence']}['code'], 'fail')
+        self.assertFalse([args for args in calls if args[:2] == ('cat-file', 'blob') and args[2].endswith(':export.py')])
 
     def test_file_checks_on_a_single_file_artifact_fail_instead_of_reading_elsewhere(self):
         self.owner.execute('revise_contract', dict(expected_revision=1, reason='file artifact', contract=contract([task('export', [
