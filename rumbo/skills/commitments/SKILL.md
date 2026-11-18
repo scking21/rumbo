@@ -16,7 +16,7 @@ miss a scheduling conflict. The record is a memory aid, nothing more.
 - `validate` — print `RECORD_OK`, or one fault line per problem.
 - `check` — validate, then print `PASS`/`FAIL` per check; exit 1 if any check fails.
 - `show [--max-chars N]` — compact summary; silent when no record exists.
-- `stop-gate` — read the Stop hook input on stdin; block up to three times per session while checks or provenance remain unresolved; an unchanged repeat asks only for a one-line status.
+- `stop-gate` — read the Stop hook input on stdin; block up to three times per session while checks or provenance remain unresolved. A problem you already answered in the same stop passes; in a later stop, an unchanged repeat asks only for a one-line status.
 - Exit codes: 0 clean, 1 content problem, 2 tool or I/O problem.
 
 ## When to start

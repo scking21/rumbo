@@ -1549,6 +1549,11 @@ def _block_bounded(session_id, parts, tail, problem_ids=None, chained=False, mar
                 repeat = handle.read() == reason
         except (OSError, ValueError):
             pass
+        if repeat and chained:
+            # The agent already replied to this exact block in this stop. Blocking
+            # again only makes it repeat itself, and it uses up the session's
+            # blocks before a later, different problem can be caught.
+            return 0
         try:
             with _open_marker(blocks_path) as handle:
                 count = int(handle.read().strip() or "0")
