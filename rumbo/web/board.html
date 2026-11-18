@@ -234,7 +234,7 @@ function section(title, kind) {
   return node;
 }
 function historical(record, task) {
-  const revision = state.revision_scope === 'task' ? record.task_fingerprint !== task.artifact?.task_fingerprint : record.contract_revision !== state.contract_revision;
+  const revision = state.revision_scope === 'task' ? record.task_fingerprint !== task.task_fingerprint : record.contract_revision !== state.contract_revision;
   return revision || record.artifact_revision !== task.artifact?.revision || (record.artifact_sha256 != null && record.artifact_sha256 !== task.artifact?.sha256);
 }
 function receipt(record, task, assertion) {

@@ -563,6 +563,9 @@ class Engine:
             for dep in task['dependencies']:
                 status(tasks[dep])
             task['stale_reason'] = ''
+            if state.get('revision_scope') == 'task':
+                # Exposed so readers can tell which records still apply to the task as now agreed.
+                task['task_fingerprint'] = task_fingerprint(state, task)
             artifact = task['artifact']
             if task['lease'] and task['lease']['expires_at'] <= now:
                 task['lease'] = None

@@ -303,6 +303,12 @@ class OwnerPortalTests(unittest.TestCase):
         self.assertIn('form-action \'self\'', self.header(page, 'Content-Security-Policy'))
         self.assertEqual(self.header(page, 'Cache-Control'), 'no-store')
 
+    def test_revision_form_keeps_task_revision_scope(self):
+        Engine(self.root, 'owner', 'human').execute('create_contract', dict(contract(), revision_scope='task'))
+        _, _, page = self.login()
+        form = page[2].split('name="action" value="revise_contract"', 1)[1]
+        self.assertIn('&quot;revision_scope&quot;: &quot;task&quot;', form)
+
     def test_malformed_large_forms_and_duplicate_cookies_are_rejected(self):
         cookie, csrf, _ = self.login()
         self.assertEqual(self.request('GET', '/owner', cookie=cookie + '; ' + cookie)[0], 400)

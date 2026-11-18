@@ -132,9 +132,7 @@ def main(argv=None):
     session_id = hook.get('session_id') if isinstance(hook.get('session_id'), str) else ''
     marker = _marker(session_id) if session_id else None
     if not found:
-        if marker:
-            _write_count(marker, 0)
-        return 0
+        return 0  # the count stays: a session gets at most MAX_BLOCKS blocks in total
     if marker:
         count = _read_count(marker)
         if count >= MAX_BLOCKS:

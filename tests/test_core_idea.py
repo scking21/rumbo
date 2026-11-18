@@ -95,7 +95,11 @@ class PerTaskStalenessTests(Base):
         self.accept_file('a', 'a.txt'); self.accept_file('b', 'b.txt')
         state = self.reword_b(data)
         self.assertEqual(status(state), {'a': 'accepted', 'b': 'stale'})
-        self.assertIn('agreed definition', next(t for t in state['tasks'] if t['id'] == 'b')['stale_reason'])
+        b = next(t for t in state['tasks'] if t['id'] == 'b')
+        self.assertIn('agreed definition', b['stale_reason'])
+        # The current fingerprint is exposed, so readers can mark b's old records as historical.
+        self.assertNotEqual(b['task_fingerprint'], b['artifact']['task_fingerprint'])
+        self.assertTrue(all(e['task_fingerprint'] != b['task_fingerprint'] for e in b['evidence'] + b['decisions']))
         # b is redone under the new revision and accepted again; a is untouched.
         self.assertEqual(status(self.accept_file('b', 'b.txt')), {'a': 'accepted', 'b': 'accepted'})
 
@@ -220,6 +224,11 @@ class EngineGateTests(Base):
             self.assertEqual(blocked['decision'], 'block')
             self.assertIn('ACCEPTANCE_LOST a', blocked['reason'])
             self.assertIn('Artifact bytes changed', blocked['reason'])
+        self.assertIsNone(self.run_gate({'session_id': 's1'}))
+        # A healthy stop in between does not hand the session three more blocks.
+        (self.root/'a.txt').write_text('ok')
+        self.assertIsNone(self.run_gate({'session_id': 's1'}))
+        (self.root/'a.txt').write_text('edited again')
         self.assertIsNone(self.run_gate({'session_id': 's1'}))
         # Without a session id it defers to stop_hook_active, so it never loops.
         self.assertEqual(self.run_gate({})['decision'], 'block')
