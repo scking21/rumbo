@@ -46,6 +46,10 @@ def assert_receipt(case, receipt, state, name, task_id, recovery_args=None):
     case.assertTrue({'tasks', 'goal', 'requests', 'evidence', 'decisions'}.isdisjoint(receipt))
 
 
+# The hosted Sites runtime has no project files, Git repository or CI principal.
+LOCAL_ONLY_TOOLS = {'rumbo_submit_artifact', 'rumbo_submit_commit', 'rumbo_attest_ci'}
+
+
 class MutationReceiptTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -79,7 +83,7 @@ class MutationReceiptTests(unittest.TestCase):
                 self.assertFalse(definition['annotations']['idempotentHint'])
                 self.assertEqual(definition['securitySchemes'][0]['scopes'], ['rumbo:read', 'rumbo:write'])
         catalog = (ROOT/'openai-sites/worker/base-tools.js').read_text().split('export const baseTools=', 1)[1].strip().removesuffix(';')
-        self.assertEqual(json.loads(catalog), [tool for tool in tool_definitions() if tool['name'] != 'rumbo_submit_artifact'])
+        self.assertEqual(json.loads(catalog), [tool for tool in tool_definitions() if tool['name'] not in LOCAL_ONLY_TOOLS])
         for tool in installed_tool_definitions():
             if tool['name'] in ('rumbo_list_projects', 'rumbo_connect_project'):
                 self.assertNotIn('response_mode', tool['inputSchema']['properties'])

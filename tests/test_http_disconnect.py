@@ -4,6 +4,7 @@ import hashlib
 import http.client
 import io
 import json
+import os
 from pathlib import Path
 import socket
 import struct
@@ -31,6 +32,7 @@ class HttpDisconnectTests(unittest.TestCase):
         ]))
         self.addCleanup(self.server.server_close)
 
+    @unittest.skipIf(hasattr(os, 'geteuid') and os.geteuid() == 0, 'root ignores the file modes this test uses to make storage unreadable')
     def test_storage_lost_after_startup_gets_a_response_instead_of_a_dropped_connection(self):
         import shutil
         body = json.dumps(dict(jsonrpc='2.0', id=1, method='tools/call', params=dict(name='rumbo_state', arguments={})))

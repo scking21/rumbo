@@ -45,6 +45,7 @@ summary{cursor:pointer;width:fit-content}
 details[open] summary{margin-bottom:8px}
 .context-body{border-left:2px solid var(--line);padding-left:12px;display:grid;gap:6px;max-width:68ch}
 .context-body ul{margin:0;padding-left:20px}
+.context-body li q{display:block;color:var(--sounding);font-style:italic}
 .workspace{display:grid;grid-template-columns:minmax(240px,30%) minmax(0,1fr);min-height:560px;border-top:1px solid var(--line)}
 .task-nav{border-right:1px solid var(--line)}
 .filter-wrap{padding:14px 16px}
@@ -233,7 +234,8 @@ function section(title, kind) {
   return node;
 }
 function historical(record, task) {
-  return record.contract_revision !== state.contract_revision || record.artifact_revision !== task.artifact?.revision || (record.artifact_sha256 != null && record.artifact_sha256 !== task.artifact?.sha256);
+  const revision = state.revision_scope === 'task' ? record.task_fingerprint !== task.artifact?.task_fingerprint : record.contract_revision !== state.contract_revision;
+  return revision || record.artifact_revision !== task.artifact?.revision || (record.artifact_sha256 != null && record.artifact_sha256 !== task.artifact?.sha256);
 }
 function receipt(record, task, assertion) {
   const old = historical(record, task);
@@ -317,20 +319,23 @@ function renderDetail() {
     box.append(element('p',task.artifact.path,'artifact-path'),
       element('p','Revision ' + text(task.artifact.revision) + ' · ' + text(task.artifact.size) + ' bytes · maker ' + text(task.artifact.maker),'metadata'),
       element('p','SHA256: ' + text(task.artifact.sha256),'metadata mono'));
-    box.append(element('p',task.artifact.source === 'uploaded_text' ? 'Uploaded text: received bytes only; no Git or repository authenticity implied.' : 'Registered project file: exact bytes from the configured root.','metadata'));
+    box.append(element('p',task.artifact.source === 'uploaded_text' ? 'Uploaded text: received bytes only; no Git or repository authenticity implied.' : task.artifact.source === 'git_commit' ? 'Git commit in the configured repository. Changed files: ' + array(task.artifact.files).join(', ') : 'Registered project file: exact bytes from the configured root.','metadata'));
     artifact.append(box);
   } else { artifact.dataset.empty = 'true'; artifact.append(element('p','No artifact submitted','quiet')); }
   frag.append(artifact);
   const groups = [ ['Deterministic receipts', e => e.kind === 'deterministic', false, 'No deterministic receipts recorded'],
-    ['Reviewer assertions', e => e.kind === 'reviewer_assertion', true, 'No reviewer assertions recorded'] ];
+    ['Reviewer assertions', e => e.kind === 'reviewer_assertion', true, 'No reviewer assertions recorded'],
+    ['CI attestations', e => e.kind === 'ci_attestation', true, 'No CI results attested'] ];
   for (const [name, include, assertion, empty] of groups) {
-    const group = section(name), records = array(task.evidence).filter(include);
-    if (assertion) group.append(element('p','Attributed reviewer statements; not deterministic proof.','explanation'));
+    const records = array(task.evidence).filter(include);
+    if (name === 'CI attestations' && !records.length && !array(task.acceptance).some(c => c.kind === 'ci_status')) continue;
+    const group = section(name);
+    if (assertion) group.append(element('p',name === 'CI attestations' ? 'Results reported by the configured CI principal for the exact commit; Rumbo did not run them.' : 'Attributed reviewer statements; not deterministic proof.','explanation'));
     for (const record of records) group.append(receipt(record,task,assertion));
     if (!records.length) { group.dataset.empty = 'true'; group.append(element('p',empty,'quiet')); }
     frag.append(group);
   }
-  const unknown = array(task.evidence).filter(e => !['deterministic','reviewer_assertion'].includes(e.kind));
+  const unknown = array(task.evidence).filter(e => !['deterministic','reviewer_assertion','ci_attestation'].includes(e.kind));
   if (unknown.length) {
     const group = section('Other recorded evidence');
     group.append(element('p','Unrecognized evidence kind; no proof classification is assumed.','quiet'));
@@ -384,7 +389,7 @@ function render(snapshot) {
   $('attention-count').textContent = String(state.tasks.filter(t => attention.has(t.status)).length);
   const context = $('context-body');context.replaceChildren();
   if (state.original_request) context.append(element('p',state.original_request));
-  if (array(state.constraints).length) {const list = element('ul');for(const constraint of state.constraints)list.append(element('li',constraint));context.append(list);}
+  if (array(state.constraints).length) {const list = element('ul');for(const constraint of state.constraints){if(constraint&&typeof constraint==='object'){const item=element('li',String(constraint.text));item.append(element('q',String(constraint.quote)));list.append(item);}else list.append(element('li',constraint));}context.append(list);}
   $('contract-context').hidden = !context.childNodes.length;
   const integrity = state.integrity?.valid === true;
   $('integrity').hidden = integrity;

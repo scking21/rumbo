@@ -12,6 +12,7 @@ import os
 from pathlib import Path
 import re
 import sqlite3
+import subprocess
 import time
 
 MAX_ARTIFACT = 5 * 1024 * 1024
@@ -21,16 +22,22 @@ MAX_EVENTS = 10000
 MAX_LEDGER_BYTES = 16 * 1024 * 1024
 MAX_ARTIFACT_JSON_DEPTH = 512
 MAX_ARTIFACT_JSON_INTEGER_DIGITS = 4300
-ROLES = {'human', 'worker', 'reviewer', 'viewer'}
+ROLES = {'human', 'worker', 'reviewer', 'viewer', 'ci'}
+REVISION_SCOPES = ('contract', 'task')
+GIT_OBJECT = re.compile(r'^[0-9a-f]{40}(?:[0-9a-f]{24})?$')
+MAX_COMMIT_FILES = 1000
+FORBIDDEN_PARTS = {'.git','.rumbo','.ssh','.aws','.codex','.agents','.docker','.kube','.config','.gcloud','.azure','.gnupg','.password-store','.npmrc','.pypirc','.netrc','.git-credentials','.gitconfig','.yarnrc','.yarnrc.yml','id_rsa','id_ed25519','node_modules','__pycache__'}
 IDENTIFIER = re.compile(r'^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$')
 ACTION_FIELDS = {
-    'create_contract': ({'project_id','goal','original_request','decision_owner','constraints','tasks'}, {'demo'}),
+    'create_contract': ({'project_id','goal','original_request','decision_owner','constraints','tasks'}, {'demo','revision_scope'}),
     'revise_contract': ({'contract','expected_revision','reason'}, set()),
     'claim_task': ({'task_id','contract_revision','lease_seconds'}, set()),
     'submit_artifact': ({'task_id','contract_revision','path'}, set()),
     'ingest_artifact': ({'task_id','contract_revision','filename','content'}, set()),
+    'submit_commit': ({'task_id','contract_revision','commit'}, set()),
     'run_checks': ({'task_id','contract_revision','artifact_revision'}, set()),
     'submit_review': ({'task_id','contract_revision','artifact_revision','check_id','outcome','detail'}, set()),
+    'attest_ci': ({'task_id','contract_revision','artifact_revision','check_id','commit','outcome','detail'}, set()),
     'request_decision': ({'task_id','question'}, set()),
     'decide': ({'task_id','contract_revision','artifact_revision','outcome','reason'}, set()),
 }
@@ -130,6 +137,45 @@ def integer(value, name, minimum=1, maximum=1000000000):
     return value
 
 
+def collapse(text):
+    return ' '.join(text.split())
+
+
+def constraint_text(value):
+    """Constraint display text: a legacy string, or the text of a quoted constraint."""
+    return value['text'] if isinstance(value, dict) else value
+
+
+def relative_path(relative, name='path'):
+    """Validate a project- or commit-relative path; refuse traversal and private locations."""
+    if not isinstance(relative, str) or not relative or len(relative) > 512 or '\\' in relative or '\x00' in relative:
+        fail('PATH_INVALID', 'Use a relative ' + name + ' of at most 512 characters with forward slashes')
+    parts = relative.split('/')
+    if relative.startswith('/') or any(p in ('', '.', '..') for p in parts):
+        fail('PATH_INVALID', 'Use a relative ' + name + ' without traversal')
+    for part in parts:
+        if part in FORBIDDEN_PARTS or part == '.env' or part.startswith('.env.') or part.lower().endswith(('.pem','.key','.p12','.pfx')):
+            fail('PATH_PRIVATE', 'Private/configuration paths cannot be artifacts')
+    return relative
+
+
+def task_fingerprint(state, task):
+    """Identity of what was agreed for one task: its definition plus the shared goal and constraints.
+
+    Under revision_scope "task", only a change to this fingerprint makes the task's work stale.
+    """
+    material = dict(goal=state['goal'], constraints=state['constraints'],
+                    task={key: task[key] for key in ('id', 'title', 'dependencies', 'acceptance')})
+    return hashlib.sha256(canonical(material).encode()).hexdigest()
+
+
+def bound(item, task, state):
+    """Whether an artifact, evidence item or decision still belongs to the task as now agreed."""
+    if state.get('revision_scope') == 'task':
+        return item.get('task_fingerprint') == task_fingerprint(state, task)
+    return item['contract_revision'] == state['contract_revision']
+
+
 def validate_contract(data, actor):
     fields(data, *ACTION_FIELDS['create_contract'])
     identifier(data['project_id'], 'project_id')
@@ -139,10 +185,20 @@ def validate_contract(data, actor):
         fail('FORBIDDEN', 'The authenticated decision owner must own the contract')
     if 'demo' in data and type(data['demo']) is not bool:
         fail('BAD_INPUT', 'demo must be boolean')
+    if 'revision_scope' in data and data['revision_scope'] not in REVISION_SCOPES:
+        fail('BAD_INPUT', 'revision_scope must be contract or task')
     if not isinstance(data['constraints'], list) or len(data['constraints']) > 50:
-        fail('BAD_INPUT', 'constraints must be an array of at most 50 strings')
+        fail('BAD_INPUT', 'constraints must be an array of at most 50 entries')
+    request = collapse(data['original_request'])
     for value in data['constraints']:
-        string(value, 'constraint')
+        if isinstance(value, dict):
+            # A quoted constraint keeps the owner's own words beside its paraphrase.
+            fields(value, {'text', 'quote'})
+            string(value['text'], 'constraint text'); string(value['quote'], 'constraint quote')
+            if collapse(value['quote']) not in request:
+                fail('QUOTE_NOT_IN_REQUEST', 'Constraint quote must appear word for word in original_request: ' + value['quote'][:120])
+        else:
+            string(value, 'constraint')
     tasks = data['tasks']
     if not isinstance(tasks, list) or not 1 <= len(tasks) <= 100:
         fail('BAD_INPUT', 'Include 1 to 100 bounded tasks')
@@ -168,10 +224,15 @@ def validate_contract(data, actor):
                 fail('BAD_INPUT', 'Acceptance must contain objects')
             kind = check.get('kind')
             required = {'id','kind'}
-            extras = {'file_contains': {'value'}, 'json_equals': {'key','value'}, 'sha256': {'value'}, 'manual_review': {'prompt'}}
+            extras = {'file_contains': {'value'}, 'json_equals': {'key','value'}, 'sha256': {'value'}, 'manual_review': {'prompt'}, 'ci_status': {'name'}}
             if not isinstance(kind, str) or kind not in extras:
                 fail('BAD_INPUT', 'Unsupported check kind')
-            fields(check, required | extras[kind])
+            # file names one path inside a commit artifact; it does not apply to single-file artifacts.
+            fields(check, required | extras[kind], {'file'} if kind in ('file_contains', 'json_equals', 'sha256') else ())
+            if 'file' in check:
+                relative_path(check['file'], 'check file')
+            if kind == 'ci_status':
+                string(check['name'], 'CI check name', 256)
             identifier(check['id'], 'check id')
             if check['id'] in seen:
                 fail('BAD_INPUT', 'Duplicate check id')
@@ -285,6 +346,8 @@ class Engine:
         if action in ('create_contract', 'revise_contract'):
             prior = {t['id']: t for t in state['tasks']}
             state.update(copy.deepcopy(data))
+            if 'revision_scope' not in data:
+                state.pop('revision_scope', None)
             tasks = []
             for item in data['tasks']:
                 task = copy.deepcopy(item)
@@ -298,9 +361,9 @@ class Engine:
             task = next(t for t in state['tasks'] if t['id'] == data['task_id'])
             if action == 'claim_task':
                 task['lease'] = data['lease']
-            elif action in ('submit_artifact','ingest_artifact'):
+            elif action in ('submit_artifact','ingest_artifact','submit_commit'):
                 task['artifact'] = data['artifact']
-            elif action in ('run_checks', 'submit_review'):
+            elif action in ('run_checks', 'submit_review', 'attest_ci'):
                 task['evidence'].extend(data['evidence'])
             elif action == 'decide':
                 task['decisions'].append(data['decision'])
@@ -308,15 +371,8 @@ class Engine:
                 raise ValueError('Unknown ledger action')
 
     def _artifact_bytes(self, relative):
-        if not isinstance(relative, str) or not relative or len(relative) > 512 or '\\' in relative or '\x00' in relative:
-            fail('PATH_INVALID', 'Use a project-relative file path of at most 512 characters with forward slashes')
+        relative_path(relative, 'project file path')
         path = Path(relative)
-        if path.is_absolute() or any(p in ('.','..') for p in relative.split('/')):
-            fail('PATH_INVALID', 'Use a project-relative file path without traversal')
-        forbidden = {'.git','.rumbo','.ssh','.aws','.codex','.agents','.docker','.kube','.config','.gcloud','.azure','.gnupg','.password-store','.npmrc','.pypirc','.netrc','.git-credentials','.gitconfig','.yarnrc','.yarnrc.yml','id_rsa','id_ed25519','node_modules','__pycache__'}
-        for part in path.parts:
-            if part in forbidden or part == '.env' or part.startswith('.env.') or part.lower().endswith(('.pem','.key','.p12','.pfx')):
-                fail('PATH_PRIVATE', 'Private/configuration paths cannot be artifacts')
         candidate = self.root / path
         current = self.root
         for part in path.parts:
@@ -418,7 +474,43 @@ class Engine:
             fail('PATH_UNSAFE','Could not safely store uploaded bytes')
         finally:os.close(fd)
 
+    def _git(self, *args):
+        """Run one fixed read-only git plumbing command in the project root; never a shell."""
+        env = {k: v for k, v in os.environ.items() if not k.startswith('GIT_')}
+        env.update(GIT_TERMINAL_PROMPT='0', GIT_OPTIONAL_LOCKS='0')
+        try:
+            result = subprocess.run(['git', '-C', str(self.root), '-c', 'core.fsmonitor=false', *args],
+                                    stdin=subprocess.DEVNULL, capture_output=True, env=env, timeout=15)
+        except (OSError, subprocess.SubprocessError):
+            fail('GIT_UNAVAILABLE', 'git is not available to read commit artifacts')
+        if result.returncode != 0:
+            fail('GIT_OBJECT_MISSING', 'git could not read the requested object in the project repository')
+        if len(result.stdout) > MAX_ARTIFACT:
+            fail('PATH_TOO_LARGE', 'Git objects read as evidence are limited to 5 MiB')
+        return result.stdout
+
+    def _git_top(self):
+        top = self._git('rev-parse', '--show-toplevel').decode('utf-8', 'surrogateescape').strip()
+        if Path(top).resolve() != self.root:
+            fail('PATH_INVALID', 'Commit artifacts need the project root to be the repository top level')
+
+    def _commit_object(self, commit):
+        if not isinstance(commit, str) or not GIT_OBJECT.fullmatch(commit):
+            fail('BAD_INPUT', 'commit must be a full lowercase hexadecimal commit id')
+        if self._git('cat-file', '-t', commit) != b'commit\n':
+            fail('GIT_OBJECT_MISSING', 'Not a commit in the project repository')
+        return self._git('cat-file', 'commit', commit)
+
+    def _commit_file(self, commit, relative):
+        relative_path(relative, 'check file')
+        if self._git('cat-file', '-t', commit + ':' + relative) != b'blob\n':
+            fail('GIT_OBJECT_MISSING', 'No file ' + relative + ' in commit ' + commit[:12])
+        return self._git('cat-file', 'blob', commit + ':' + relative)
+
     def _digest_artifact(self,artifact):
+        if artifact.get('source')=='git_commit':
+            raw = self._commit_object(artifact['commit'])
+            return hashlib.sha256(raw).hexdigest(), len(raw), raw
         if artifact.get('source')!='uploaded_text':
             return self._digest(artifact['path'])
         import stat
@@ -436,13 +528,13 @@ class Engine:
         return hashlib.sha256(data).hexdigest(),len(data),data
 
     @staticmethod
-    def _current_evidence(task, revision):
+    def _current_evidence(task, state):
         artifact = task.get('artifact')
         if not artifact:
             return {}
         latest = {}
         for item in task['evidence']:
-            if item['contract_revision'] == revision and item['artifact_revision'] == artifact['revision'] and item['artifact_sha256'] == artifact['sha256']:
+            if bound(item, task, state) and item['artifact_revision'] == artifact['revision'] and item['artifact_sha256'] == artifact['sha256']:
                 latest[item['check_id']] = item
         return latest
 
@@ -480,8 +572,8 @@ class Engine:
                 result = 'blocked'; task['stale_reason'] = 'Dependencies need acceptance: ' + ', '.join(blocked)
             elif artifact:
                 reason = ''
-                if artifact['contract_revision'] != state['contract_revision']:
-                    reason = 'Contract revision changed'
+                if not bound(artifact, task, state):
+                    reason = 'This task\'s agreed definition, goal or constraints changed' if state.get('revision_scope') == 'task' else 'Contract revision changed'
                 elif artifact.get('dependencies', {}) != self._dependency_stamp(task, tasks):
                     reason = 'Dependency acceptance changed'
                 else:
@@ -495,11 +587,11 @@ class Engine:
                     result = 'stale'; task['stale_reason'] = reason
                 else:
                     result = 'produced'
-                    ev = self._current_evidence(task, state['contract_revision'])
+                    ev = self._current_evidence(task, state)
                     complete = all(ev.get(c['id'], {}).get('outcome') == 'pass' for c in task['acceptance'])
                     if complete:
                         result = 'checks_passed'
-                    decisions = [d for d in task['decisions'] if d['contract_revision'] == state['contract_revision'] and d['artifact_revision'] == artifact['revision'] and d['artifact_sha256'] == artifact['sha256']]
+                    decisions = [d for d in task['decisions'] if bound(d, task, state) and d['artifact_revision'] == artifact['revision'] and d['artifact_sha256'] == artifact['sha256']]
                     if decisions:
                         last = decisions[-1]
                         if last['outcome'] == 'rejected':
@@ -558,7 +650,7 @@ class Engine:
         artifact = task['artifact']
         if not artifact:
             fail('STALE_ARTIFACT', 'Task ' + task['id'] + ' has no registered artifact; claim the task and register one first')
-        if artifact['contract_revision'] != state['contract_revision']:
+        if not bound(artifact, task, state):
             fail('STALE_ARTIFACT', 'Artifact revision ' + str(artifact['revision']) + ' was registered under contract revision ' + str(artifact['contract_revision']) + '; register it again under revision ' + str(state['contract_revision']))
         if revision != artifact['revision']:
             fail('STALE_ARTIFACT', 'Artifact is at revision ' + str(artifact['revision']) + ', not ' + str(revision) + '; read the current state and retry with its revisions')
@@ -577,6 +669,8 @@ class Engine:
             fail('FORBIDDEN', 'Read-only principal')
         if action == 'submit_review' and self.role != 'reviewer':
             fail('FORBIDDEN', 'A configured reviewer principal is required')
+        if (action == 'attest_ci') != (self.role == 'ci'):
+            fail('FORBIDDEN', 'Only a configured CI principal attests CI results, and it can do nothing else')
         fields(arguments, *ACTION_FIELDS[action])
         if len(canonical(arguments).encode()) > (1024*1024 if action=='ingest_artifact' else 256000):
             fail('BAD_INPUT', 'Action too large')
@@ -635,14 +729,25 @@ class Engine:
                 fail('LEASE_CONFLICT', 'Another actor holds an unexpired lease')
             return dict(task_id=task['id'], lease=dict(actor=self.actor, expires_at=now+ttl, contract_revision=rev))
         tasks = {t['id']: t for t in state['tasks']}
-        if action in ('submit_artifact','ingest_artifact'):
+        scoped = state.get('revision_scope') == 'task'
+        fingerprint = dict(task_fingerprint=task_fingerprint(state, task)) if scoped else {}
+        if action in ('submit_artifact','ingest_artifact','submit_commit'):
             if not task['lease']:
                 fail('LEASE_REQUIRED', 'No unexpired lease on ' + task['id'] + '; claim the task first. Leases expire and do not carry over to a new connection')
             if task['lease']['actor'] != self.actor:
                 fail('LEASE_REQUIRED', 'Another actor holds the unexpired lease on ' + task['id'] + '; only the lease holder can register its artifact')
             if task['status'] == 'blocked':
                 fail('DEPENDENCY_BLOCKED', task['stale_reason'])
-            if action=='ingest_artifact':
+            if action=='submit_commit':
+                self._git_top()
+                raw=self._commit_object(args['commit'])
+                names=self._git('diff-tree','--root','--no-commit-id','--name-only','-r','-z','--no-ext-diff','--no-textconv',args['commit']).split(b'\0')
+                files=sorted({n.decode('utf-8','surrogateescape') for n in names if n})
+                if len(files)>MAX_COMMIT_FILES:
+                    fail('PATH_TOO_LARGE','Commit artifacts are limited to '+str(MAX_COMMIT_FILES)+' changed files')
+                digest=hashlib.sha256(raw).hexdigest();size=len(raw)
+                metadata=dict(path='git:'+args['commit'],source='git_commit',commit=args['commit'],files=files)
+            elif action=='ingest_artifact':
                 filename=string(args['filename'],'filename',128)
                 if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,127}',filename) or filename.lower().endswith(('.pem','.key','.p12','.pfx')):
                     fail('PATH_INVALID','Use a simple display filename; paths and credential filenames are not accepted')
@@ -660,7 +765,7 @@ class Engine:
                 digest, size, _ = self._digest(args['path'])
                 metadata=dict(path=args['path'],source='project_file')
             revision = task['artifact']['revision']+1 if task['artifact'] else 1
-            return dict(task_id=task['id'], artifact=dict(**metadata, sha256=digest, size=size, revision=revision, contract_revision=rev, maker=self.actor, at=now, dependencies=self._dependency_stamp(task,tasks)))
+            return dict(task_id=task['id'], artifact=dict(**metadata, sha256=digest, size=size, revision=revision, contract_revision=rev, maker=self.actor, at=now, dependencies=self._dependency_stamp(task,tasks), **fingerprint))
         integer(args['artifact_revision'], 'artifact_revision')
         artifact = self._current_artifact(task, args['artifact_revision'], state)
         digest, _, raw = self._digest_artifact(artifact)
@@ -670,27 +775,32 @@ class Engine:
             fail('DEPENDENCY_BLOCKED', task['stale_reason'])
         if artifact.get('dependencies',{}) != self._dependency_stamp(task,tasks):
             fail('DEPENDENCY_BLOCKED', 'A dependency was decided or changed after artifact revision ' + str(artifact['revision']) + ' was registered; register the artifact again')
-        common = dict(actor=self.actor, role=self.role, contract_revision=rev, artifact_revision=artifact['revision'], artifact_sha256=digest, at=now)
+        common = dict(actor=self.actor, role=self.role, contract_revision=rev, artifact_revision=artifact['revision'], artifact_sha256=digest, at=now, **fingerprint)
         if action == 'run_checks':
             evidence = []
-            json_parsed = False
-            json_value = None
+            parsed = {}
+            is_commit = artifact.get('source') == 'git_commit'
             for check in task['acceptance']:
                 kind = check['kind']
-                if kind == 'manual_review':
+                if kind in ('manual_review', 'ci_status'):
                     continue
                 passed = False
                 try:
+                    # A file check reads that path in the commit; without one, the artifact's own bytes.
+                    target = check.get('file')
+                    if target is not None and not is_commit:
+                        raise ValueError('file applies only to commit artifacts')
+                    data = self._commit_file(artifact['commit'], target) if target is not None else raw
                     if kind == 'sha256':
-                        passed = digest == check['value']
+                        passed = hashlib.sha256(data).hexdigest() == check['value']
                     elif kind == 'file_contains':
-                        passed = check['value'] in raw.decode('utf-8')
+                        passed = check['value'] in data.decode('utf-8')
                     elif kind == 'json_equals':
-                        if not json_parsed:
+                        if target not in parsed:
                             # Cache failed parses too, only for these exact bytes in this action.
-                            json_parsed = True
-                            json_value = artifact_json(raw)
-                        value = json_value
+                            parsed[target] = None
+                            parsed[target] = artifact_json(data)
+                        value = parsed[target]
                         passed = isinstance(value, dict) and check['key'] in value and canonical(value[check['key']]) == canonical(check['value'])
                 except (ValueError, UnicodeError, RumboError, RecursionError):
                     passed = False
@@ -706,11 +816,26 @@ class Engine:
                 fail('BAD_INPUT', 'Review outcome must be pass, fail or uncertain')
             string(args['detail'], 'detail')
             return dict(task_id=task['id'], evidence=[dict(common, id=eventid, kind='reviewer_assertion', check_id=args['check_id'], outcome=args['outcome'], detail=args['detail'])])
+        if action == 'attest_ci':
+            # The CI principal attests a result for one exact commit; Rumbo never runs the tests itself.
+            if artifact.get('source') != 'git_commit':
+                fail('BAD_INPUT', 'CI results attach only to commit artifacts')
+            if args['commit'] != artifact['commit']:
+                fail('STALE_ARTIFACT', 'CI ran on ' + str(args['commit'])[:12] + ' but the registered commit is ' + artifact['commit'][:12])
+            if self.actor == artifact['maker']:
+                fail('SELF_REVIEW', 'The CI principal must differ from the artifact maker')
+            identifier(args['check_id'], 'check_id')
+            if not any(c['id'] == args['check_id'] and c['kind'] == 'ci_status' for c in task['acceptance']):
+                fail('BAD_INPUT', 'Only ci_status criteria accept CI attestations')
+            if args['outcome'] not in ('pass', 'fail'):
+                fail('BAD_INPUT', 'CI outcome must be pass or fail')
+            string(args['detail'], 'detail', 2000)
+            return dict(task_id=task['id'], evidence=[dict(common, id=eventid, kind='ci_attestation', check_id=args['check_id'], outcome=args['outcome'], commit=artifact['commit'], detail=args['detail'])])
         if action == 'decide':
             if args['outcome'] not in ('accepted','rejected'):
                 fail('BAD_INPUT', 'Decision must be accepted or rejected')
             string(args['reason'], 'reason')
-            ev = self._current_evidence(task, rev)
+            ev = self._current_evidence(task, state)
             if args['outcome'] == 'accepted' and not all(ev.get(c['id'],{}).get('outcome') == 'pass' for c in task['acceptance']):
                 fail('CHECKS_INCOMPLETE', 'Every current acceptance criterion needs passing evidence')
             return dict(task_id=task['id'], decision=dict(common, id=eventid, outcome=args['outcome'], reason=args['reason'], evidence_ids=sorted(e['id'] for e in ev.values())))
