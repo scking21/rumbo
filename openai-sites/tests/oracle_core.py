@@ -12,7 +12,6 @@ import os
 from pathlib import Path
 import re
 import sqlite3
-import subprocess
 import time
 
 MAX_ARTIFACT = 5 * 1024 * 1024
@@ -22,11 +21,8 @@ MAX_EVENTS = 10000
 MAX_LEDGER_BYTES = 16 * 1024 * 1024
 MAX_ARTIFACT_JSON_DEPTH = 512
 MAX_ARTIFACT_JSON_INTEGER_DIGITS = 4300
-ROLES = {'human', 'worker', 'reviewer', 'viewer', 'ci'}
+ROLES = {'human', 'worker', 'reviewer', 'viewer'}
 REVISION_SCOPES = ('contract', 'task')
-GIT_OBJECT = re.compile(r'^[0-9a-f]{40}(?:[0-9a-f]{24})?$')
-MAX_COMMIT_FILES = 1000
-FORBIDDEN_PARTS = {'.git','.rumbo','.ssh','.aws','.codex','.agents','.docker','.kube','.config','.gcloud','.azure','.gnupg','.password-store','.npmrc','.pypirc','.netrc','.git-credentials','.gitconfig','.yarnrc','.yarnrc.yml','id_rsa','id_ed25519','node_modules','__pycache__'}
 IDENTIFIER = re.compile(r'^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$')
 ACTION_FIELDS = {
     'create_contract': ({'project_id','goal','original_request','decision_owner','constraints','tasks'}, {'demo','revision_scope'}),
@@ -34,10 +30,8 @@ ACTION_FIELDS = {
     'claim_task': ({'task_id','contract_revision','lease_seconds'}, set()),
     'submit_artifact': ({'task_id','contract_revision','path'}, set()),
     'ingest_artifact': ({'task_id','contract_revision','filename','content'}, set()),
-    'submit_commit': ({'task_id','contract_revision','commit'}, set()),
     'run_checks': ({'task_id','contract_revision','artifact_revision'}, set()),
     'submit_review': ({'task_id','contract_revision','artifact_revision','check_id','outcome','detail'}, set()),
-    'attest_ci': ({'task_id','contract_revision','artifact_revision','check_id','commit','outcome','detail'}, set()),
     'request_decision': ({'task_id','question'}, set()),
     'decide': ({'task_id','contract_revision','artifact_revision','outcome','reason'}, set()),
 }
@@ -137,19 +131,6 @@ def integer(value, name, minimum=1, maximum=1000000000):
     return value
 
 
-def relative_path(relative, name='path'):
-    """Validate a project- or commit-relative path; refuse traversal and private locations."""
-    if not isinstance(relative, str) or not relative or len(relative) > 512 or '\\' in relative or '\x00' in relative:
-        fail('PATH_INVALID', 'Use a relative ' + name + ' of at most 512 characters with forward slashes')
-    parts = relative.split('/')
-    if relative.startswith('/') or any(p in ('', '.', '..') for p in parts):
-        fail('PATH_INVALID', 'Use a relative ' + name + ' without traversal')
-    for part in parts:
-        if part in FORBIDDEN_PARTS or part == '.env' or part.startswith('.env.') or part.lower().endswith(('.pem','.key','.p12','.pfx')):
-            fail('PATH_PRIVATE', 'Private/configuration paths cannot be artifacts')
-    return relative
-
-
 def task_fingerprint(state, task):
     """Identity of what was agreed for one task: its definition plus the shared goal and constraints.
 
@@ -207,15 +188,10 @@ def validate_contract(data, actor):
                 fail('BAD_INPUT', 'Acceptance must contain objects')
             kind = check.get('kind')
             required = {'id','kind'}
-            extras = {'file_contains': {'value'}, 'json_equals': {'key','value'}, 'sha256': {'value'}, 'manual_review': {'prompt'}, 'ci_status': {'name'}}
+            extras = {'file_contains': {'value'}, 'json_equals': {'key','value'}, 'sha256': {'value'}, 'manual_review': {'prompt'}}
             if not isinstance(kind, str) or kind not in extras:
                 fail('BAD_INPUT', 'Unsupported check kind')
-            # file names one path inside a commit artifact; it does not apply to single-file artifacts.
-            fields(check, required | extras[kind], {'file'} if kind in ('file_contains', 'json_equals', 'sha256') else ())
-            if 'file' in check:
-                relative_path(check['file'], 'check file')
-            if kind == 'ci_status':
-                string(check['name'], 'CI check name', 256)
+            fields(check, required | extras[kind])
             identifier(check['id'], 'check id')
             if check['id'] in seen:
                 fail('BAD_INPUT', 'Duplicate check id')
@@ -344,9 +320,9 @@ class Engine:
             task = next(t for t in state['tasks'] if t['id'] == data['task_id'])
             if action == 'claim_task':
                 task['lease'] = data['lease']
-            elif action in ('submit_artifact','ingest_artifact','submit_commit'):
+            elif action in ('submit_artifact','ingest_artifact'):
                 task['artifact'] = data['artifact']
-            elif action in ('run_checks', 'submit_review', 'attest_ci'):
+            elif action in ('run_checks', 'submit_review'):
                 task['evidence'].extend(data['evidence'])
             elif action == 'decide':
                 task['decisions'].append(data['decision'])
@@ -354,8 +330,15 @@ class Engine:
                 raise ValueError('Unknown ledger action')
 
     def _artifact_bytes(self, relative):
-        relative_path(relative, 'project file path')
+        if not isinstance(relative, str) or not relative or len(relative) > 512 or '\\' in relative or '\x00' in relative:
+            fail('PATH_INVALID', 'Use a project-relative file path of at most 512 characters with forward slashes')
         path = Path(relative)
+        if path.is_absolute() or any(p in ('.','..') for p in relative.split('/')):
+            fail('PATH_INVALID', 'Use a project-relative file path without traversal')
+        forbidden = {'.git','.rumbo','.ssh','.aws','.codex','.agents','.docker','.kube','.config','.gcloud','.azure','.gnupg','.password-store','.npmrc','.pypirc','.netrc','.git-credentials','.gitconfig','.yarnrc','.yarnrc.yml','id_rsa','id_ed25519','node_modules','__pycache__'}
+        for part in path.parts:
+            if part in forbidden or part == '.env' or part.startswith('.env.') or part.lower().endswith(('.pem','.key','.p12','.pfx')):
+                fail('PATH_PRIVATE', 'Private/configuration paths cannot be artifacts')
         candidate = self.root / path
         current = self.root
         for part in path.parts:
@@ -457,66 +440,7 @@ class Engine:
             fail('PATH_UNSAFE','Could not safely store uploaded bytes')
         finally:os.close(fd)
 
-    def _git(self, *args):
-        """Run one fixed read-only git plumbing command in the project root; never a shell."""
-        env = {k: v for k, v in os.environ.items() if not k.startswith('GIT_')}
-        env.update(GIT_TERMINAL_PROMPT='0', GIT_OPTIONAL_LOCKS='0')
-        try:
-            # Replacement refs could swap in other bytes under the same commit id, so never use them.
-            result = subprocess.run(['git', '--no-replace-objects', '-C', str(self.root), '-c', 'core.fsmonitor=false', *args],
-                                    stdin=subprocess.DEVNULL, capture_output=True, env=env, timeout=15)
-        except (OSError, subprocess.SubprocessError):
-            fail('GIT_UNAVAILABLE', 'git is not available to read commit artifacts')
-        if result.returncode != 0:
-            fail('GIT_OBJECT_MISSING', 'git could not read the requested object in the project repository')
-        if len(result.stdout) > MAX_ARTIFACT:
-            fail('PATH_TOO_LARGE', 'Git objects read as evidence are limited to 5 MiB')
-        return result.stdout
-
-    def _git_top(self):
-        top = self._git('rev-parse', '--show-toplevel').decode('utf-8', 'surrogateescape').strip()
-        if Path(top).resolve() != self.root:
-            fail('PATH_INVALID', 'Commit artifacts need the project root to be the repository top level')
-
-    def _object_size(self, spec):
-        # Ask for the size first, so an oversized object is refused before any of it is buffered.
-        try:
-            size = int(self._git('cat-file', '-s', spec))
-        except ValueError:
-            fail('GIT_OBJECT_MISSING', 'git reported an unreadable object size')
-        if size > MAX_ARTIFACT:
-            fail('PATH_TOO_LARGE', 'Git objects read as evidence are limited to 5 MiB')
-        return size
-
-    def _commit_object(self, commit):
-        if not isinstance(commit, str) or not GIT_OBJECT.fullmatch(commit):
-            fail('BAD_INPUT', 'commit must be a full lowercase hexadecimal commit id')
-        if self._git('cat-file', '-t', commit) != b'commit\n':
-            fail('GIT_OBJECT_MISSING', 'Not a commit in the project repository')
-        self._object_size(commit)
-        return self._git('cat-file', 'commit', commit)
-
-    def _commit_file(self, commit, relative):
-        relative_path(relative, 'check file')
-        if self._git('cat-file', '-t', commit + ':' + relative) != b'blob\n':
-            fail('GIT_OBJECT_MISSING', 'No file ' + relative + ' in commit ' + commit[:12])
-        self._object_size(commit + ':' + relative)
-        return self._git('cat-file', 'blob', commit + ':' + relative)
-
-    def _commit_contains(self, artifact, value):
-        """file_contains with no file: pass when any file the commit changed contains the value."""
-        for name in artifact.get('files', []):
-            try:
-                if value in self._commit_file(artifact['commit'], name).decode('utf-8'):
-                    return True, 'file_contains found in ' + name + ' at the recorded commit'
-            except (RumboError, UnicodeError):
-                continue  # deleted, private, oversized or binary files cannot match
-        return False, 'file_contains matched none of the files this commit changed'
-
     def _digest_artifact(self,artifact):
-        if artifact.get('source')=='git_commit':
-            raw = self._commit_object(artifact['commit'])
-            return hashlib.sha256(raw).hexdigest(), len(raw), raw
         if artifact.get('source')!='uploaded_text':
             return self._digest(artifact['path'])
         import stat
@@ -678,8 +602,6 @@ class Engine:
             fail('FORBIDDEN', 'Read-only principal')
         if action == 'submit_review' and self.role != 'reviewer':
             fail('FORBIDDEN', 'A configured reviewer principal is required')
-        if (action == 'attest_ci') != (self.role == 'ci'):
-            fail('FORBIDDEN', 'Only a configured CI principal attests CI results, and it can do nothing else')
         fields(arguments, *ACTION_FIELDS[action])
         if len(canonical(arguments).encode()) > (1024*1024 if action=='ingest_artifact' else 256000):
             fail('BAD_INPUT', 'Action too large')
@@ -740,28 +662,14 @@ class Engine:
         tasks = {t['id']: t for t in state['tasks']}
         scoped = state.get('revision_scope') == 'task'
         fingerprint = dict(task_fingerprint=task_fingerprint(state, task)) if scoped else {}
-        if action in ('submit_artifact','ingest_artifact','submit_commit'):
+        if action in ('submit_artifact','ingest_artifact'):
             if not task['lease']:
                 fail('LEASE_REQUIRED', 'No unexpired lease on ' + task['id'] + '; claim the task first. Leases expire and do not carry over to a new connection')
             if task['lease']['actor'] != self.actor:
                 fail('LEASE_REQUIRED', 'Another actor holds the unexpired lease on ' + task['id'] + '; only the lease holder can register its artifact')
             if task['status'] == 'blocked':
                 fail('DEPENDENCY_BLOCKED', task['stale_reason'])
-            if action=='submit_commit':
-                self._git_top()
-                raw=self._commit_object(args['commit'])
-                # Files changed against the first parent (also for merges); a root commit lists all its files.
-                parents=[line[7:].decode() for line in raw.split(b'\n\n',1)[0].split(b'\n') if line.startswith(b'parent ')]
-                if parents and not GIT_OBJECT.fullmatch(parents[0]):
-                    fail('GIT_OBJECT_MISSING','Commit has an unreadable parent id')
-                compare=[parents[0],args['commit']] if parents else ['--root',args['commit']]
-                names=self._git('diff-tree','--no-commit-id','--name-only','-r','-z','--no-ext-diff','--no-textconv',*compare).split(b'\0')
-                files=sorted({n.decode('utf-8','surrogateescape') for n in names if n})
-                if len(files)>MAX_COMMIT_FILES:
-                    fail('PATH_TOO_LARGE','Commit artifacts are limited to '+str(MAX_COMMIT_FILES)+' changed files')
-                digest=hashlib.sha256(raw).hexdigest();size=len(raw)
-                metadata=dict(path='git:'+args['commit'],source='git_commit',commit=args['commit'],files=files)
-            elif action=='ingest_artifact':
+            if action=='ingest_artifact':
                 filename=string(args['filename'],'filename',128)
                 if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,127}',filename) or filename.lower().endswith(('.pem','.key','.p12','.pfx')):
                     fail('PATH_INVALID','Use a simple display filename; paths and credential filenames are not accepted')
@@ -792,44 +700,28 @@ class Engine:
         common = dict(actor=self.actor, role=self.role, contract_revision=rev, artifact_revision=artifact['revision'], artifact_sha256=digest, at=now, **fingerprint)
         if action == 'run_checks':
             evidence = []
-            parsed = {}
-            is_commit = artifact.get('source') == 'git_commit'
+            json_parsed = False
+            json_value = None
             for check in task['acceptance']:
                 kind = check['kind']
-                if kind in ('manual_review', 'ci_status'):
+                if kind == 'manual_review':
                     continue
                 passed = False
-                detail = kind+' evaluated against the recorded artifact bytes'
-                target = check.get('file')
-                if is_commit and target is None:
-                    # A commit object holds no file content, so an unnamed check looks at the changed files.
-                    if kind == 'file_contains':
-                        passed, detail = self._commit_contains(artifact, check['value'])
-                    else:
-                        detail = kind+' on a commit artifact needs a file; none was named, so it cannot pass'
-                    evidence.append(dict(common, id=eventid+'-'+check['id'], kind='deterministic', check_id=check['id'], outcome='pass' if passed else 'fail', detail=detail))
-                    continue
                 try:
-                    # A file check reads that path in the commit; without one, the artifact's own bytes.
-                    if target is not None and not is_commit:
-                        raise ValueError('file applies only to commit artifacts')
-                    data = self._commit_file(artifact['commit'], target) if target is not None else raw
-                    if target is not None:
-                        detail = kind+' evaluated against '+target+' at the recorded commit'
                     if kind == 'sha256':
-                        passed = hashlib.sha256(data).hexdigest() == check['value']
+                        passed = digest == check['value']
                     elif kind == 'file_contains':
-                        passed = check['value'] in data.decode('utf-8')
+                        passed = check['value'] in raw.decode('utf-8')
                     elif kind == 'json_equals':
-                        if target not in parsed:
+                        if not json_parsed:
                             # Cache failed parses too, only for these exact bytes in this action.
-                            parsed[target] = None
-                            parsed[target] = artifact_json(data)
-                        value = parsed[target]
+                            json_parsed = True
+                            json_value = artifact_json(raw)
+                        value = json_value
                         passed = isinstance(value, dict) and check['key'] in value and canonical(value[check['key']]) == canonical(check['value'])
                 except (ValueError, UnicodeError, RumboError, RecursionError):
                     passed = False
-                evidence.append(dict(common, id=eventid+'-'+check['id'], kind='deterministic', check_id=check['id'], outcome='pass' if passed else 'fail', detail=detail))
+                evidence.append(dict(common, id=eventid+'-'+check['id'], kind='deterministic', check_id=check['id'], outcome='pass' if passed else 'fail', detail=kind+' evaluated against the recorded artifact bytes'))
             return dict(task_id=task['id'], evidence=evidence)
         if action == 'submit_review':
             if self.actor == artifact['maker']:
@@ -841,21 +733,6 @@ class Engine:
                 fail('BAD_INPUT', 'Review outcome must be pass, fail or uncertain')
             string(args['detail'], 'detail')
             return dict(task_id=task['id'], evidence=[dict(common, id=eventid, kind='reviewer_assertion', check_id=args['check_id'], outcome=args['outcome'], detail=args['detail'])])
-        if action == 'attest_ci':
-            # The CI principal attests a result for one exact commit; Rumbo never runs the tests itself.
-            if artifact.get('source') != 'git_commit':
-                fail('BAD_INPUT', 'CI results attach only to commit artifacts')
-            if args['commit'] != artifact['commit']:
-                fail('STALE_ARTIFACT', 'CI ran on ' + str(args['commit'])[:12] + ' but the registered commit is ' + artifact['commit'][:12])
-            if self.actor == artifact['maker']:
-                fail('SELF_REVIEW', 'The CI principal must differ from the artifact maker')
-            identifier(args['check_id'], 'check_id')
-            if not any(c['id'] == args['check_id'] and c['kind'] == 'ci_status' for c in task['acceptance']):
-                fail('BAD_INPUT', 'Only ci_status criteria accept CI attestations')
-            if args['outcome'] not in ('pass', 'fail'):
-                fail('BAD_INPUT', 'CI outcome must be pass or fail')
-            string(args['detail'], 'detail', 2000)
-            return dict(task_id=task['id'], evidence=[dict(common, id=eventid, kind='ci_attestation', check_id=args['check_id'], outcome=args['outcome'], commit=artifact['commit'], detail=args['detail'])])
         if action == 'decide':
             if args['outcome'] not in ('accepted','rejected'):
                 fail('BAD_INPUT', 'Decision must be accepted or rejected')

@@ -318,23 +318,20 @@ function renderDetail() {
     box.append(element('p',task.artifact.path,'artifact-path'),
       element('p','Revision ' + text(task.artifact.revision) + ' · ' + text(task.artifact.size) + ' bytes · maker ' + text(task.artifact.maker),'metadata'),
       element('p','SHA256: ' + text(task.artifact.sha256),'metadata mono'));
-    box.append(element('p',task.artifact.source === 'uploaded_text' ? 'Uploaded text: received bytes only; no Git or repository authenticity implied.' : task.artifact.source === 'git_commit' ? 'Git commit in the configured repository. Changed files: ' + array(task.artifact.files).join(', ') : 'Registered project file: exact bytes from the configured root.','metadata'));
+    box.append(element('p',task.artifact.source === 'uploaded_text' ? 'Uploaded text: received bytes only; no Git or repository authenticity implied.' : 'Registered project file: exact bytes from the configured root.','metadata'));
     artifact.append(box);
   } else { artifact.dataset.empty = 'true'; artifact.append(element('p','No artifact submitted','quiet')); }
   frag.append(artifact);
   const groups = [ ['Deterministic receipts', e => e.kind === 'deterministic', false, 'No deterministic receipts recorded'],
-    ['Reviewer assertions', e => e.kind === 'reviewer_assertion', true, 'No reviewer assertions recorded'],
-    ['CI attestations', e => e.kind === 'ci_attestation', true, 'No CI results attested'] ];
+    ['Reviewer assertions', e => e.kind === 'reviewer_assertion', true, 'No reviewer assertions recorded'] ];
   for (const [name, include, assertion, empty] of groups) {
-    const records = array(task.evidence).filter(include);
-    if (name === 'CI attestations' && !records.length && !array(task.acceptance).some(c => c.kind === 'ci_status')) continue;
-    const group = section(name);
-    if (assertion) group.append(element('p',name === 'CI attestations' ? 'Results reported by the configured CI principal for the exact commit; Rumbo did not run them.' : 'Attributed reviewer statements; not deterministic proof.','explanation'));
+    const group = section(name), records = array(task.evidence).filter(include);
+    if (assertion) group.append(element('p','Attributed reviewer statements; not deterministic proof.','explanation'));
     for (const record of records) group.append(receipt(record,task,assertion));
     if (!records.length) { group.dataset.empty = 'true'; group.append(element('p',empty,'quiet')); }
     frag.append(group);
   }
-  const unknown = array(task.evidence).filter(e => !['deterministic','reviewer_assertion','ci_attestation'].includes(e.kind));
+  const unknown = array(task.evidence).filter(e => !['deterministic','reviewer_assertion'].includes(e.kind));
   if (unknown.length) {
     const group = section('Other recorded evidence');
     group.append(element('p','Unrecognized evidence kind; no proof classification is assumed.','quiet'));

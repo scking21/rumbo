@@ -345,19 +345,6 @@ class BoardBrowserTests(unittest.TestCase):
         self.page.goto(self.url)
         self.page.get_by_role('heading', name=STATE['goal'], exact=True).wait_for()
 
-    def test_renders_commit_artifacts_and_ci_attestations(self):
-        state = copy.deepcopy(STATE)
-        task = state['tasks'][0]
-        task['acceptance'].append(dict(id='unit', kind='ci_status', name='unit tests'))
-        task['artifact'].update(source='git_commit', commit='a' * 40, path='git:' + 'a' * 40, files=['checkout.py', 'tests/test_checkout.py'])
-        task['evidence'].append(dict(task['evidence'][0], id='ci-1', kind='ci_attestation', check_id='unit', commit='a' * 40, detail='https://ci.example.invalid/run/7'))
-        type(self).current_state = state
-        self.open_board()
-        body = self.page.locator('body').inner_text()
-        self.assertIn('Changed files: checkout.py, tests/test_checkout.py', body)
-        self.assertIn('Rumbo did not run them', body)
-        self.assertIn('https://ci.example.invalid/run/7', body)
-
     def test_renders_evidence_provenance_and_demo(self):
         self.open_board()
         body = self.page.locator('body').inner_text()

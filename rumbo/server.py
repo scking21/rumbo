@@ -51,7 +51,7 @@ def validate_principals(principals,mode):
             if not isinstance(key,str) or not key or key in seen:
                 raise ValueError('Principals require unique configured identities')
             seen.add(key)
-        if principal.get('role') not in ('worker','reviewer','viewer','ci'):
+        if principal.get('role') not in ('worker','reviewer','viewer'):
             raise ValueError('MCP principals cannot acquire human authority')
         if not isinstance(principal.get('actor'),str) or not isinstance(principal.get('root'),str):
             raise ValueError('Principal actor and root are required')
