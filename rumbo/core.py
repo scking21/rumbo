@@ -479,7 +479,8 @@ class Engine:
         env = {k: v for k, v in os.environ.items() if not k.startswith('GIT_')}
         env.update(GIT_TERMINAL_PROMPT='0', GIT_OPTIONAL_LOCKS='0')
         try:
-            result = subprocess.run(['git', '-C', str(self.root), '-c', 'core.fsmonitor=false', *args],
+            # Replacement refs could swap in other bytes under the same commit id, so never use them.
+            result = subprocess.run(['git', '--no-replace-objects', '-C', str(self.root), '-c', 'core.fsmonitor=false', *args],
                                     stdin=subprocess.DEVNULL, capture_output=True, env=env, timeout=15)
         except (OSError, subprocess.SubprocessError):
             fail('GIT_UNAVAILABLE', 'git is not available to read commit artifacts')
@@ -744,7 +745,12 @@ class Engine:
             if action=='submit_commit':
                 self._git_top()
                 raw=self._commit_object(args['commit'])
-                names=self._git('diff-tree','--root','--no-commit-id','--name-only','-r','-z','--no-ext-diff','--no-textconv',args['commit']).split(b'\0')
+                # Files changed against the first parent (also for merges); a root commit lists all its files.
+                parents=[line[7:].decode() for line in raw.split(b'\n\n',1)[0].split(b'\n') if line.startswith(b'parent ')]
+                if parents and not GIT_OBJECT.fullmatch(parents[0]):
+                    fail('GIT_OBJECT_MISSING','Commit has an unreadable parent id')
+                compare=[parents[0],args['commit']] if parents else ['--root',args['commit']]
+                names=self._git('diff-tree','--no-commit-id','--name-only','-r','-z','--no-ext-diff','--no-textconv',*compare).split(b'\0')
                 files=sorted({n.decode('utf-8','surrogateescape') for n in names if n})
                 if len(files)>MAX_COMMIT_FILES:
                     fail('PATH_TOO_LARGE','Commit artifacts are limited to '+str(MAX_COMMIT_FILES)+' changed files')

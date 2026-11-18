@@ -191,6 +191,25 @@ class CommitArtifactTests(Base):
                 dict(id='env', kind='file_contains', file='.env', value='x')])])))
         self.assertEqual(private.exception.code, 'PATH_PRIVATE')
 
+    def test_merge_commits_list_files_changed_against_the_first_parent(self):
+        git(self.root, 'checkout', '-qb', 'side')
+        (self.root/'config.json').write_text('{"format": "csv", "side": true}\n')
+        git(self.root, 'commit', '-qam', 'side change')
+        git(self.root, 'checkout', '-q', '-')
+        (self.root/'export.py').write_text('COLUMNS = ["id", "name", "email"]\n')
+        git(self.root, 'commit', '-qam', 'main change')
+        git(self.root, 'merge', '-q', '--no-edit', 'side')
+        artifact = self.submit(git(self.root, 'rev-parse', 'HEAD'))['tasks'][0]['artifact']
+        self.assertEqual(artifact['files'], ['config.json'])
+
+    def test_replacement_refs_cannot_change_what_a_commit_holds(self):
+        self.submit()
+        fake = subprocess.run(['git', '-C', str(self.root), 'hash-object', '-w', '--stdin'], input='nothing here\n',
+                              text=True, capture_output=True, check=True).stdout.strip()
+        git(self.root, 'replace', git(self.root, 'rev-parse', self.commit + ':export.py'), fake)
+        state = self.worker.execute('run_checks', dict(task_id='export', contract_revision=1, artifact_revision=1))
+        self.assertEqual({e['check_id']: e['outcome'] for e in state['tasks'][0]['evidence']}['code'], 'pass')
+
     def test_file_checks_on_a_single_file_artifact_fail_instead_of_reading_elsewhere(self):
         self.owner.execute('revise_contract', dict(expected_revision=1, reason='file artifact', contract=contract([task('export', [
             dict(id='code', kind='file_contains', file='export.py', value='COLUMNS')])])))
