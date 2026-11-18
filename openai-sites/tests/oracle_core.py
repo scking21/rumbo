@@ -141,11 +141,16 @@ def task_fingerprint(state, task):
     return hashlib.sha256(canonical(material).encode()).hexdigest()
 
 
-def bound(item, task, state):
-    """Whether an artifact, evidence item or decision still belongs to the task as now agreed."""
+def binder(task, state):
+    """Return a test for whether an artifact, evidence item or decision still belongs to the task as now agreed.
+
+    The task's fingerprint is computed once here, so testing a long history stays cheap.
+    """
     if state.get('revision_scope') == 'task':
-        return item.get('task_fingerprint') == task_fingerprint(state, task)
-    return item['contract_revision'] == state['contract_revision']
+        current = task_fingerprint(state, task)
+        return lambda item: item.get('task_fingerprint') == current
+    revision = state['contract_revision']
+    return lambda item: item['contract_revision'] == revision
 
 
 def validate_contract(data, actor):
@@ -463,8 +468,9 @@ class Engine:
         if not artifact:
             return {}
         latest = {}
+        belongs = binder(task, state)
         for item in task['evidence']:
-            if bound(item, task, state) and item['artifact_revision'] == artifact['revision'] and item['artifact_sha256'] == artifact['sha256']:
+            if belongs(item) and item['artifact_revision'] == artifact['revision'] and item['artifact_sha256'] == artifact['sha256']:
                 latest[item['check_id']] = item
         return latest
 
@@ -505,7 +511,8 @@ class Engine:
                 result = 'blocked'; task['stale_reason'] = 'Dependencies need acceptance: ' + ', '.join(blocked)
             elif artifact:
                 reason = ''
-                if not bound(artifact, task, state):
+                belongs = binder(task, state)
+                if not belongs(artifact):
                     reason = 'This task\'s agreed definition, goal or constraints changed' if state.get('revision_scope') == 'task' else 'Contract revision changed'
                 elif artifact.get('dependencies', {}) != self._dependency_stamp(task, tasks):
                     reason = 'Dependency acceptance changed'
@@ -524,7 +531,7 @@ class Engine:
                     complete = all(ev.get(c['id'], {}).get('outcome') == 'pass' for c in task['acceptance'])
                     if complete:
                         result = 'checks_passed'
-                    decisions = [d for d in task['decisions'] if bound(d, task, state) and d['artifact_revision'] == artifact['revision'] and d['artifact_sha256'] == artifact['sha256']]
+                    decisions = [d for d in task['decisions'] if belongs(d) and d['artifact_revision'] == artifact['revision'] and d['artifact_sha256'] == artifact['sha256']]
                     if decisions:
                         last = decisions[-1]
                         if last['outcome'] == 'rejected':
@@ -583,7 +590,7 @@ class Engine:
         artifact = task['artifact']
         if not artifact:
             fail('STALE_ARTIFACT', 'Task ' + task['id'] + ' has no registered artifact; claim the task and register one first')
-        if not bound(artifact, task, state):
+        if not binder(task, state)(artifact):
             fail('STALE_ARTIFACT', 'Artifact revision ' + str(artifact['revision']) + ' was registered under contract revision ' + str(artifact['contract_revision']) + '; register it again under revision ' + str(state['contract_revision']))
         if revision != artifact['revision']:
             fail('STALE_ARTIFACT', 'Artifact is at revision ' + str(artifact['revision']) + ', not ' + str(revision) + '; read the current state and retry with its revisions')

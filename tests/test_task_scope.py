@@ -100,6 +100,22 @@ class PerTaskStalenessTests(Base):
         self.assertEqual(task_fingerprint(state, state['tasks'][0]), before)
 
 
+class FingerprintCostTests(Base):
+    def test_projection_computes_each_task_fingerprint_once(self):
+        from unittest import mock
+        import rumbo.core as core
+        checks = [dict(id='c%d' % i, kind='file_contains', value='ok') for i in range(5)]
+        self.start(contract([task('a', checks)], revision_scope='task'))
+        (self.root/'a.txt').write_text('ok')
+        self.worker.execute('claim_task', dict(task_id='a', contract_revision=1, lease_seconds=300))
+        self.worker.execute('submit_artifact', dict(task_id='a', contract_revision=1, path='a.txt'))
+        for _ in range(10):
+            self.worker.execute('run_checks', dict(task_id='a', contract_revision=1, artifact_revision=1))
+        with mock.patch.object(core, 'task_fingerprint', wraps=core.task_fingerprint) as counted:
+            self.assertEqual(status(self.owner.snapshot())['a'], 'checks_passed')
+        # One for the exposed fingerprint and one per record test, not one per record.
+        self.assertLessEqual(counted.call_count, 3)
+
 
 if __name__ == "__main__":
     unittest.main()
