@@ -22,9 +22,10 @@ MAX_LEDGER_BYTES = 16 * 1024 * 1024
 MAX_ARTIFACT_JSON_DEPTH = 512
 MAX_ARTIFACT_JSON_INTEGER_DIGITS = 4300
 ROLES = {'human', 'worker', 'reviewer', 'viewer'}
+REVISION_SCOPES = ('contract', 'task')
 IDENTIFIER = re.compile(r'^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$')
 ACTION_FIELDS = {
-    'create_contract': ({'project_id','goal','original_request','decision_owner','constraints','tasks'}, {'demo'}),
+    'create_contract': ({'project_id','goal','original_request','decision_owner','constraints','tasks'}, {'demo','revision_scope'}),
     'revise_contract': ({'contract','expected_revision','reason'}, set()),
     'claim_task': ({'task_id','contract_revision','lease_seconds'}, set()),
     'submit_artifact': ({'task_id','contract_revision','path'}, set()),
@@ -130,6 +131,28 @@ def integer(value, name, minimum=1, maximum=1000000000):
     return value
 
 
+def task_fingerprint(state, task):
+    """Identity of what was agreed for one task: its definition plus the shared goal and constraints.
+
+    Under revision_scope "task", only a change to this fingerprint makes the task's work stale.
+    """
+    material = dict(goal=state['goal'], constraints=state['constraints'],
+                    task={key: task[key] for key in ('id', 'title', 'dependencies', 'acceptance')})
+    return hashlib.sha256(canonical(material).encode()).hexdigest()
+
+
+def binder(task, state):
+    """Return a test for whether an artifact, evidence item or decision still belongs to the task as now agreed.
+
+    The task's fingerprint is computed once here, so testing a long history stays cheap.
+    """
+    if state.get('revision_scope') == 'task':
+        current = task_fingerprint(state, task)
+        return lambda item: item.get('task_fingerprint') == current
+    revision = state['contract_revision']
+    return lambda item: item['contract_revision'] == revision
+
+
 def validate_contract(data, actor):
     fields(data, *ACTION_FIELDS['create_contract'])
     identifier(data['project_id'], 'project_id')
@@ -139,6 +162,8 @@ def validate_contract(data, actor):
         fail('FORBIDDEN', 'The authenticated decision owner must own the contract')
     if 'demo' in data and type(data['demo']) is not bool:
         fail('BAD_INPUT', 'demo must be boolean')
+    if 'revision_scope' in data and data['revision_scope'] not in REVISION_SCOPES:
+        fail('BAD_INPUT', 'revision_scope must be contract or task')
     if not isinstance(data['constraints'], list) or len(data['constraints']) > 50:
         fail('BAD_INPUT', 'constraints must be an array of at most 50 strings')
     for value in data['constraints']:
@@ -285,6 +310,8 @@ class Engine:
         if action in ('create_contract', 'revise_contract'):
             prior = {t['id']: t for t in state['tasks']}
             state.update(copy.deepcopy(data))
+            if 'revision_scope' not in data:
+                state.pop('revision_scope', None)
             tasks = []
             for item in data['tasks']:
                 task = copy.deepcopy(item)
@@ -436,13 +463,14 @@ class Engine:
         return hashlib.sha256(data).hexdigest(),len(data),data
 
     @staticmethod
-    def _current_evidence(task, revision):
+    def _current_evidence(task, state):
         artifact = task.get('artifact')
         if not artifact:
             return {}
         latest = {}
+        belongs = binder(task, state)
         for item in task['evidence']:
-            if item['contract_revision'] == revision and item['artifact_revision'] == artifact['revision'] and item['artifact_sha256'] == artifact['sha256']:
+            if belongs(item) and item['artifact_revision'] == artifact['revision'] and item['artifact_sha256'] == artifact['sha256']:
                 latest[item['check_id']] = item
         return latest
 
@@ -471,6 +499,9 @@ class Engine:
             for dep in task['dependencies']:
                 status(tasks[dep])
             task['stale_reason'] = ''
+            if state.get('revision_scope') == 'task':
+                # Exposed so readers can tell which records still apply to the task as now agreed.
+                task['task_fingerprint'] = task_fingerprint(state, task)
             artifact = task['artifact']
             if task['lease'] and task['lease']['expires_at'] <= now:
                 task['lease'] = None
@@ -480,8 +511,9 @@ class Engine:
                 result = 'blocked'; task['stale_reason'] = 'Dependencies need acceptance: ' + ', '.join(blocked)
             elif artifact:
                 reason = ''
-                if artifact['contract_revision'] != state['contract_revision']:
-                    reason = 'Contract revision changed'
+                belongs = binder(task, state)
+                if not belongs(artifact):
+                    reason = 'Not registered under this task\'s current agreed definition, goal and constraints' if state.get('revision_scope') == 'task' else 'Contract revision changed'
                 elif artifact.get('dependencies', {}) != self._dependency_stamp(task, tasks):
                     reason = 'Dependency acceptance changed'
                 else:
@@ -495,11 +527,11 @@ class Engine:
                     result = 'stale'; task['stale_reason'] = reason
                 else:
                     result = 'produced'
-                    ev = self._current_evidence(task, state['contract_revision'])
+                    ev = self._current_evidence(task, state)
                     complete = all(ev.get(c['id'], {}).get('outcome') == 'pass' for c in task['acceptance'])
                     if complete:
                         result = 'checks_passed'
-                    decisions = [d for d in task['decisions'] if d['contract_revision'] == state['contract_revision'] and d['artifact_revision'] == artifact['revision'] and d['artifact_sha256'] == artifact['sha256']]
+                    decisions = [d for d in task['decisions'] if belongs(d) and d['artifact_revision'] == artifact['revision'] and d['artifact_sha256'] == artifact['sha256']]
                     if decisions:
                         last = decisions[-1]
                         if last['outcome'] == 'rejected':
@@ -558,7 +590,9 @@ class Engine:
         artifact = task['artifact']
         if not artifact:
             fail('STALE_ARTIFACT', 'Task ' + task['id'] + ' has no registered artifact; claim the task and register one first')
-        if artifact['contract_revision'] != state['contract_revision']:
+        if not binder(task, state)(artifact):
+            if state.get('revision_scope') == 'task':
+                fail('STALE_ARTIFACT', 'Artifact revision ' + str(artifact['revision']) + ' was not registered under task ' + task['id'] + '\'s current agreed definition, goal and constraints; register it again under revision ' + str(state['contract_revision']))
             fail('STALE_ARTIFACT', 'Artifact revision ' + str(artifact['revision']) + ' was registered under contract revision ' + str(artifact['contract_revision']) + '; register it again under revision ' + str(state['contract_revision']))
         if revision != artifact['revision']:
             fail('STALE_ARTIFACT', 'Artifact is at revision ' + str(artifact['revision']) + ', not ' + str(revision) + '; read the current state and retry with its revisions')
@@ -622,9 +656,11 @@ class Engine:
             return dict(copy.deepcopy(args['contract']), demo=args['contract'].get('demo', False), contract_revision=rev+1, contract_change_reason=args['reason'])
         identifier(args['task_id'], 'task_id')
         task = self._task(args['task_id'], state)
+        scoped = state.get('revision_scope') == 'task'
+        fingerprint = dict(task_fingerprint=task_fingerprint(state, task)) if scoped else {}
         if action == 'request_decision':
             string(args['question'], 'question')
-            return dict(id=eventid, task_id=task['id'], question=args['question'], actor=self.actor, contract_revision=rev, at=now)
+            return dict(id=eventid, task_id=task['id'], question=args['question'], actor=self.actor, contract_revision=rev, at=now, **fingerprint)
         integer(args['contract_revision'], 'contract_revision')
         self._current_contract(args['contract_revision'], state)
         if action == 'claim_task':
@@ -660,7 +696,7 @@ class Engine:
                 digest, size, _ = self._digest(args['path'])
                 metadata=dict(path=args['path'],source='project_file')
             revision = task['artifact']['revision']+1 if task['artifact'] else 1
-            return dict(task_id=task['id'], artifact=dict(**metadata, sha256=digest, size=size, revision=revision, contract_revision=rev, maker=self.actor, at=now, dependencies=self._dependency_stamp(task,tasks)))
+            return dict(task_id=task['id'], artifact=dict(**metadata, sha256=digest, size=size, revision=revision, contract_revision=rev, maker=self.actor, at=now, dependencies=self._dependency_stamp(task,tasks), **fingerprint))
         integer(args['artifact_revision'], 'artifact_revision')
         artifact = self._current_artifact(task, args['artifact_revision'], state)
         digest, _, raw = self._digest_artifact(artifact)
@@ -670,7 +706,7 @@ class Engine:
             fail('DEPENDENCY_BLOCKED', task['stale_reason'])
         if artifact.get('dependencies',{}) != self._dependency_stamp(task,tasks):
             fail('DEPENDENCY_BLOCKED', 'A dependency was decided or changed after artifact revision ' + str(artifact['revision']) + ' was registered; register the artifact again')
-        common = dict(actor=self.actor, role=self.role, contract_revision=rev, artifact_revision=artifact['revision'], artifact_sha256=digest, at=now)
+        common = dict(actor=self.actor, role=self.role, contract_revision=rev, artifact_revision=artifact['revision'], artifact_sha256=digest, at=now, **fingerprint)
         if action == 'run_checks':
             evidence = []
             json_parsed = False
@@ -710,7 +746,7 @@ class Engine:
             if args['outcome'] not in ('accepted','rejected'):
                 fail('BAD_INPUT', 'Decision must be accepted or rejected')
             string(args['reason'], 'reason')
-            ev = self._current_evidence(task, rev)
+            ev = self._current_evidence(task, state)
             if args['outcome'] == 'accepted' and not all(ev.get(c['id'],{}).get('outcome') == 'pass' for c in task['acceptance']):
                 fail('CHECKS_INCOMPLETE', 'Every current acceptance criterion needs passing evidence')
             return dict(task_id=task['id'], decision=dict(common, id=eventid, outcome=args['outcome'], reason=args['reason'], evidence_ids=sorted(e['id'] for e in ev.values())))

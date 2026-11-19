@@ -160,6 +160,24 @@ class BoardRuntimeTests(unittest.TestCase):
         result=self.run_ui(state=state)
         self.assertIn('Uploaded text: received bytes only',result['texts']['task-detail'])
 
+    def test_task_scope_marks_only_the_changed_tasks_requests_historical(self):
+        from rumbo.core import Engine
+        with tempfile.TemporaryDirectory() as root:
+            owner=Engine(root,'owner','human');maker=Engine(root,'maker','worker')
+            tasks=[dict(id=t,title='Task '+t,dependencies=[],acceptance=[dict(id='c',kind='manual_review',prompt='ok?')]) for t in ('a','b')]
+            data=dict(project_id='p',goal='g',original_request='r',decision_owner='owner',constraints=[],tasks=tasks,revision_scope='task')
+            owner.execute('create_contract',data)
+            for t in ('a','b'):maker.execute('request_decision',dict(task_id=t,question='Is %s ready?'%t))
+            data=copy.deepcopy(data);data['tasks'][1]['title']='Task b, reworded'
+            state=owner.execute('revise_contract',dict(contract=data,expected_revision=1,reason='Reword b only'))
+            details={}
+            for t in ('a','b'):
+                view=copy.deepcopy(state);view['tasks']=[x for x in view['tasks'] if x['id']==t]
+                details[t]=self.run_ui(state=view)['texts']['task-detail']
+            self.assertIn('Is a ready?',details['a'])
+            self.assertNotIn('Historical request',details['a'])
+            self.assertIn('Historical request · task agreement changed',details['b'])
+
     def test_repeated_checks_mark_old_acceptance_not_current(self):
         from rumbo.core import Engine
         from test_core import contract

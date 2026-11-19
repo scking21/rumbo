@@ -467,5 +467,10 @@ class OwnerPortal:
         contract['tasks'] = [{key: task[key] for key in ('id', 'title', 'dependencies', 'acceptance')} for task in state['tasks']]
         if state.get('demo'):
             contract['demo'] = True
-        content += self._action_form('revise_contract', dict(contract=contract, expected_revision=state['contract_revision'], reason=''), csrf, 'Revise the contract', 'Edit the full contract and give an explicit nonempty reason. The project ID remains fixed. A new revision makes existing work stale until refreshed; it does not delete earlier evidence.')
+        if 'revision_scope' in state:
+            # Keep the owner's staleness rule; deleting this line from the form returns to contract-wide staleness.
+            contract['revision_scope'] = state['revision_scope']
+        staleness = ('A new revision makes a task\'s work stale only when that task\'s definition, or the shared goal or constraints, change, and work that depends on a stale task waits for it again'
+                     if state.get('revision_scope') == 'task' else 'A new revision makes existing work stale until refreshed')
+        content += self._action_form('revise_contract', dict(contract=contract, expected_revision=state['contract_revision'], reason=''), csrf, 'Revise the contract', 'Edit the full contract and give an explicit nonempty reason. The project ID remains fixed. ' + staleness + '; it does not delete earlier evidence.')
         return self._page(state['project_id'] + ' · Owner review', content)

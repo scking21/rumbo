@@ -1359,14 +1359,21 @@ class RecordTest(unittest.TestCase):
                 self.assertEqual((code, err), (0, ""))
                 outs.append(out.strip())
             self.assertIn("do not delete or weaken a check to pass", json.loads(outs[0])["reason"])
-            # An unchanged repeat still blocks, but only asks for a one-line status.
-            repeat = json.loads(outs[1])
+            # The agent already answered this exact block in this stop, so the unchanged repeat passes.
+            self.assertEqual(outs[1], "")
+            self.assertIn("do not delete or weaken a check to pass", json.loads(outs[2])["reason"])
+            self.assertIn("do not delete or weaken a check to pass", json.loads(outs[3])["reason"])
+            self.assertEqual(outs[4], "")
+            # In a later stop the same open problem asks only for a one-line status.
+            state2 = os.path.join(self.dir, "state-repeat")
+            env2 = dict(os.environ, RUMBO_STATE_DIR=state2)
+            hook = json.dumps({"session_id": "s2"})
+            run_record(["stop-gate", "--record", self.record_path], hook, env=env2)
+            code, out, err = run_record(["stop-gate", "--record", self.record_path], hook, env=env2)
+            repeat = json.loads(out)
             self.assertEqual(repeat["decision"], "block")
             self.assertIn("still open, unchanged since the last block: C1", repeat["reason"])
             self.assertNotIn("do not delete or weaken", repeat["reason"])
-            self.assertIn("do not delete or weaken a check to pass", json.loads(outs[2])["reason"])
-            self.assertEqual(outs[3], "")
-            self.assertEqual(outs[4], "")
 
     def _transcript_file(self, folder, name, text):
         path = os.path.join(folder, name)
@@ -1733,8 +1740,9 @@ class RecordTest(unittest.TestCase):
                     self.assertEqual(result["decision"], "block")
                     self.assertIn("TRANSCRIPT_UNREADABLE", result["reason"])
                     self.assertIn("cannot verify", result["reason"])
-                    # The same problem again gets a short block asking for a one-line status.
-                    repeat = self._gate(dict(hook, stop_hook_active=True), env)
+                    # Answered in this stop, the unchanged repeat passes; a later stop gets a short block.
+                    self.assertIsNone(self._gate(dict(hook, stop_hook_active=True), env))
+                    repeat = self._gate(hook, env)
                     self.assertIn("still open, unchanged since the last block: transcript_path", repeat["reason"])
                     self.assertIsNone(self._gate({"session_id": session, "transcript_path": readable}, env))
                     self.assertFalse(os.path.exists(marker(state, session, ".blocks")))
@@ -1807,8 +1815,9 @@ class RecordTest(unittest.TestCase):
                          "items": [{"id": "I1", "text": "t", "status": "draft"}], "checks": []})
             reason = self._gate({"session_id": "s1", "stop_hook_active": True}, env)["reason"]
             self.assertIn("items[0].quote: RECORD_MISSING_FIELD", reason)
-            self.assertIn("still open", self._gate({"session_id": "s1", "stop_hook_active": True}, env)["reason"])
             self.assertIsNone(self._gate({"session_id": "s1", "stop_hook_active": True}, env))
+            self.assertIn("still open", self._gate({"session_id": "s1"}, env)["reason"])
+            self.assertIsNone(self._gate({"session_id": "s1"}, env))
             self.assertIsNotNone(self._gate({}, env))
             self.assertIsNone(self._gate({"stop_hook_active": True}, env))
 
@@ -1932,10 +1941,11 @@ class RecordTest(unittest.TestCase):
             self._write(record)
             reason = self._gate({"session_id": "s1", "stop_hook_active": True}, env)["reason"]
             self.assertIn("C1: check was failing and has been removed from the record", reason)
-            repeat = self._gate({"session_id": "s1", "stop_hook_active": True}, env)["reason"]
+            self.assertIsNone(self._gate({"session_id": "s1", "stop_hook_active": True}, env))
+            repeat = self._gate({"session_id": "s1"}, env)["reason"]
             self.assertIn("still open, unchanged since the last block:", repeat)
             self.assertIn("C1", repeat)
-            self.assertIsNone(self._gate({"session_id": "s1", "stop_hook_active": True}, env))
+            self.assertIsNone(self._gate({"session_id": "s1"}, env))
 
     def test_session_ids_that_sanitize_alike_get_distinct_markers(self):
         prompt = {"prompt": "Please draft the schedule: 9:00 arrival."}
@@ -2504,9 +2514,9 @@ class RecordTest(unittest.TestCase):
             for _turn in range(2):
                 self.assertIn("STATE_UNAVAILABLE", gate(state, False))
                 self.assertIsNone(gate(state, True))
-            # Once markers can be saved again the per-session count applies, chained or not.
+            # Once markers can be saved again the per-session count applies.
             os.remove(state)
-            reasons = [gate(state, True) for _ in range(4)]
+            reasons = [gate(state, False) for _ in range(4)]
             self.assertTrue(all(reason and "STATE_UNAVAILABLE" not in reason for reason in reasons[:3]), reasons)
             self.assertIsNone(reasons[3])
 
@@ -2683,7 +2693,7 @@ class RecordTest(unittest.TestCase):
                 with open(old, "w", encoding="utf-8") as handle:
                     handle.write("0")
                 os.chmod(old, 0o644)
-                outs = [self._workshop_gate(state, chained=call > 0) for call in range(5)]
+                outs = [self._workshop_gate(state) for call in range(5)]
                 self.assertEqual(os.stat(state).st_mode & 0o777, 0o700)
                 self.assertEqual({os.stat(os.path.join(state, name)).st_mode & 0o777 for name in os.listdir(state)}, {0o600})
                 self.assertEqual([bool(out) for out in outs], [True, True, True, False, False])
