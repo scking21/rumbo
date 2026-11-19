@@ -65,6 +65,29 @@ class ReviewSourcingBoundaryTests(unittest.TestCase):
             dict(kind='within_budget', amounts=[1000000], total_cap=2000000))
         self.assertIn('PASS', result.stdout, result.stdout + result.stderr)
 
+    def test_hours_continued_with_an_ordinal_fraction_never_source_the_whole_hours(self):
+        for phrase, hours in (('an hour and three fourths', 1), ('two hours and five sixths', 2),
+                              ('an hour and seven eighths', 1)):
+            with self.subTest(phrase=phrase):
+                result = self.check_output('Start 9:00; rehearsal takes %s; finish 12:00.' % phrase,
+                    dict(kind='fits_window', start='09:00', end='12:00', segments_min=[60 * hours]))
+                self.assertIn('UNSOURCED', result.stdout)
+
+    def test_spelled_hundreds_continued_with_digits_never_source_the_hundreds(self):
+        for phrase, head in (('one hundred and 50 dollars', 100), ('two hundred and 5 dollars', 200)):
+            with self.subTest(phrase=phrase):
+                result = self.check_output('Venue %s; budget 1000.' % phrase,
+                    dict(kind='within_budget', amounts=[head], total_cap=1000))
+                self.assertIn('UNSOURCED', result.stdout)
+
+    def test_spelled_hundreds_and_plain_hours_are_still_sourced(self):
+        result = self.check_output('Venue one hundred and fifty dollars; budget 1000.',
+            dict(kind='within_budget', amounts=[150], total_cap=1000))
+        self.assertIn('PASS', result.stdout, result.stdout + result.stderr)
+        result = self.check_output('Start 9:00; rehearsal takes an hour and a half; finish 11:00.',
+            dict(kind='fits_window', start='09:00', end='11:00', segments_min=[90]))
+        self.assertIn('PASS', result.stdout, result.stdout + result.stderr)
+
     def test_currency_sign_does_not_drop_negative_spelled_amount(self):
         for sign in ('-', '\u2212'):
             for currency in ('$', '\u20ac', '\u00a3'):

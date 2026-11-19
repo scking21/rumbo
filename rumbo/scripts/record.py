@@ -392,7 +392,7 @@ def _is_number_sourced(num, source_text, excluded_unit=None):
     for start, end, value in _word_numbers(source_text):
         if value is None or excluded_unit is not None and excluded_unit.match(source_text, end):
             continue
-        ends_scaled = re.search(r"(?:thousand|million|billion)$", source_text[start:end], re.IGNORECASE)
+        ends_scaled = re.search(r"(?:hundred|thousand|million|billion)$", source_text[start:end], re.IGNORECASE)
         if (_after_fraction_prefix(source_text, start)
                 or AMOUNT_CONTINUED.match(source_text, end)
                 or _after_decimal_word(source_text, start)
@@ -522,13 +522,13 @@ def _stated_minutes(source_text):
 
     continuation_pattern = re.compile(r"\s*(?:,\s*)?(?:(and|plus)[\s-]+)?", flags)
     count_pattern = re.compile(r"(?:an?\b|\d+(?:\.\d+)?)", flags)
-    fraction_pattern = re.compile(r"(?:half|halves|quarters?|thirds?)\b", flags)
+    fraction_pattern = re.compile(r"(?:half|halves|quarters?|thirds?|" + ORDINAL_FRACTION + r")\b", flags)
     # Unparsed continuations in any recognized non-hour time unit invalidate
     # a shorter duration. This vocabulary is shared by whole/fraction guards;
     # only the existing explicit hour-plus-minute grammar performs arithmetic.
     non_hour_unit = r"(?:minutes?|mins?|m|seconds?|secs?|days?|weeks?|months?|years?|nights?)\b\.?"
     duration_end_pattern = re.compile(
-        r"[\s-]*(?:half\b|halves\b|quarters?\b|thirds?\b|" + non_hour_unit + r"|[,.;)]|$)", flags)
+        r"[\s-]*(?:half\b|halves\b|quarters?\b|thirds?\b|(?:" + ORDINAL_FRACTION + r")\b|" + non_hour_unit + r"|[,.;)]|$)", flags)
 
     adjacent_time_unit_pattern = re.compile(r"[\s-]*" + non_hour_unit, flags)
 
