@@ -246,12 +246,15 @@ def _word_numbers(text):
         i = max(j, i + 1)
 
 
+# Ordinal fraction words from "fourths" up: "tenths", "twelfths", "sixteenths", "hundredths".
+ORDINAL_FRACTION = (r"[a-z]*(?:fourth|fifth|sixth|seventh|eighth|ninth|tenth|eleventh|twelfth|teenth|tieth"
+                    r"|hundredth|thousandth|millionth|billionth|trillionth)s?")
 # A number the user continued with a fraction ("one and a half thousand", "1 point 5
-# million", "three quarters") was not stated as that number: it sources nothing as an
-# amount.
+# million", "three quarters", "eleven twelfths") was not stated as that number: it
+# sources nothing as an amount.
 AMOUNT_CONTINUED = re.compile(
     r"[\s-]+(?:and[\s-]+(?:an?|one|two|three)[\s-]+(?:half|halves|quarters?|thirds?)\b|(?:point|dot)\b"
-    r"|(?:half|halves|quarters?|thirds?|fourths?|fifths?|sixths?|sevenths?|eighths?|ninths?|tenths?)\b(?!-(?:hours?|days?|weeks?|minutes?)\b))",
+    r"|(?:half|halves|quarters?|thirds?|" + ORDINAL_FRACTION + r")\b(?!-(?:hours?|days?|weeks?|minutes?)\b))",
     re.IGNORECASE)
 # Nor is the part after a spelled decimal point: "five million" in "one point five million".
 AMOUNT_AFTER_POINT = re.compile(r"\b(?:point|dot)[\s-]+$", re.IGNORECASE)
@@ -268,18 +271,19 @@ def _after_decimal_word(text, start):
     return re.search(r"\b(?:point|dot)$", text[max(0, pos - 6):pos], re.IGNORECASE) is not None
 
 # A scaled amount that runs into another number is one amount, "1 million 500 thousand"
-# (1500000), "1 million five hundred thousand" or "2 thousand 500 dollars" (2500): no
-# group is the user's amount alone, in digits or words.
+# (1500000), "1 million five hundred thousand", "2 thousand 500 dollars" (2500) or
+# "1 million and 500", where "and" joins them without a unit: no group is the user's
+# amount alone, in digits or words.
 _SPELLED = "|".join(sorted(list(UNIT_WORDS) + list(TENS_WORDS), key=len, reverse=True))
 SCALED_CONTINUED = re.compile(
-    r"[\s,]*(?:and\s+)?(?:\d+(?:\.\d+)?|(?:%s)(?:[\s-]+(?:%s|hundred|and))*)"
-    r"\s*(?:thousand|million|billion|hundred|k\b|dollars?|euros?|pounds?|bucks)" % (_SPELLED, _SPELLED),
+    r"[\s,]*(?:and\s+(?:\d+(?:\.\d+)?|(?:%s))\b"
+    r"|(?:and\s+)?(?:\d+(?:\.\d+)?|(?:%s)(?:[\s-]+(?:%s|hundred|and))*)"
+    r"\s*(?:thousand|million|billion|hundred|k\b|dollars?|euros?|pounds?|bucks))" % (_SPELLED, _SPELLED, _SPELLED),
     re.IGNORECASE)
 AFTER_SCALE = re.compile(r"\b(?:thousand|million|billion)[\s,]*(?:and\s+)?$", re.IGNORECASE)
 
 
-ORDINAL_WORD = re.compile(r"[a-z]*(?:fourth|fifth|sixth|seventh|eighth|ninth|tenth|eleventh|twelfth|teenth|tieth"
-                          r"|hundredth|thousandth|millionth|billionth|trillionth)s?", re.IGNORECASE)
+ORDINAL_WORD = re.compile(ORDINAL_FRACTION, re.IGNORECASE)
 
 
 def _after_fraction_prefix(text, start):
@@ -623,7 +627,8 @@ def _stated_minutes(source_text):
               and not is_rate(m.start(), m.group(1).lower() in ("a", "an")))
         found.append((m.start(), m.end(), hours * 60 + fraction if ok else None))
     for m in re.finditer(r"\b(?:(?:a|one)\s+)?half(?:[\s-]+an?)?[\s-]*hour\b", text, flags):
-        ok = not is_signed_duration(m.start()) and not is_rate(m.start(), True) and not continues(m.start())
+        ok = (not is_signed_duration(m.start()) and not _after_fraction_prefix(text, m.start())
+              and not is_rate(m.start(), True) and not continues(m.start()))
         found.append((m.start(), m.end(), decimal.Decimal(30) if ok else None))
     # "a quarter-hour" and "a quarter of an hour" are 15; "three-quarter hour" and "three
     # quarters of an hour" are 45; "three quarter-hour breaks" are three of 15 (the count
@@ -640,7 +645,7 @@ def _stated_minutes(source_text):
                 minutes = None
         else:
             minutes = None if plural else 15
-        ok = (minutes is not None and not is_signed_duration(m.start())
+        ok = (minutes is not None and not is_signed_duration(m.start()) and not _after_fraction_prefix(text, m.start())
               and not is_rate(m.start(), True) and not continues(m.start()))
         found.append((m.start(), m.end(), decimal.Decimal(minutes) if ok else None))
 

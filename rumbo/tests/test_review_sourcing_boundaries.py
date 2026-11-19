@@ -20,6 +20,51 @@ class ReviewSourcingBoundaryTests(unittest.TestCase):
                                     capture_output=True, text=True, timeout=10)
         return result
 
+    def test_fraction_prefix_never_sources_a_standalone_half_or_quarter_hour(self):
+        for phrase in ('150 percent of half an hour', '200 percent of half an hour', '150% of a half hour',
+                       'two thirds of a quarter hour', 'half of half an hour'):
+            with self.subTest(phrase=phrase):
+                result = self.check_output('Start 9:00; rehearsal takes %s; finish 9:30.' % phrase,
+                    dict(kind='fits_window', start='09:00', end='09:30', segments_min=[30 if 'half an' in phrase or 'half hour' in phrase else 15]))
+                self.assertIn('UNSOURCED', result.stdout)
+
+    def test_larger_ordinal_fractions_never_leave_the_numerator_as_the_amount(self):
+        for phrase in ('eleven twelfths', 'three hundredths', 'two thousandths', 'nine sixteenths'):
+            with self.subTest(phrase=phrase):
+                number = phrase.split()[0]
+                value = {'eleven': 11, 'three': 3, 'two': 2, 'nine': 9}[number]
+                result = self.check_output('Cost $1; budget %s of a dollar.' % phrase,
+                    dict(kind='within_budget', amounts=[1], total_cap=value))
+                self.assertIn('UNSOURCED', result.stdout)
+
+    def test_scale_ordinal_fractions_never_source_the_inner_duration(self):
+        for phrase in ('two billionths of 2 hours', 'three millionths of 2 hours', 'one thousandth of 2 hours'):
+            with self.subTest(phrase=phrase):
+                result = self.check_output('Start 9:00; rehearsal takes %s; finish 11:00.' % phrase,
+                    dict(kind='fits_window', start='09:00', end='11:00', segments_min=[120]))
+                self.assertIn('UNSOURCED', result.stdout)
+
+    def test_plain_half_hour_and_quarter_hour_are_still_sourced(self):
+        for phrase, minutes in (('half an hour', 30), ('a quarter hour', 15), ('a half-hour', 30)):
+            with self.subTest(phrase=phrase):
+                result = self.check_output('Start 9:00; rehearsal takes %s; finish 10:00.' % phrase,
+                    dict(kind='fits_window', start='09:00', end='10:00', segments_min=[minutes]))
+                self.assertIn('PASS', result.stdout, result.stdout + result.stderr)
+
+    def test_and_after_a_scale_joins_one_amount_even_without_a_unit(self):
+        for phrase, cap in (('$1 million and 500', 1000100), ('one million and five hundred dollars', 1000100),
+                            ('$2 thousand and 50', 2010)):
+            with self.subTest(phrase=phrase):
+                head = int(1e6) if 'million' in phrase else 2000
+                result = self.check_output('Venue %s; budget %d.' % (phrase, cap),
+                    dict(kind='within_budget', amounts=[head], total_cap=cap))
+                self.assertIn('UNSOURCED', result.stdout)
+
+    def test_scaled_amount_on_its_own_is_still_sourced(self):
+        result = self.check_output('Venue $1 million; budget $2 million.',
+            dict(kind='within_budget', amounts=[1000000], total_cap=2000000))
+        self.assertIn('PASS', result.stdout, result.stdout + result.stderr)
+
     def test_currency_sign_does_not_drop_negative_spelled_amount(self):
         for sign in ('-', '\u2212'):
             for currency in ('$', '\u20ac', '\u00a3'):
