@@ -90,6 +90,7 @@ class ReviewSourcingBoundaryTests(unittest.TestCase):
 
     def test_amounts_continued_with_and_an_ordinal_fraction_never_source_the_whole_part(self):
         for phrase in ('one and three fourths dollars', 'two and five eighths dollars', '1 and 7 sixteenths dollars',
+                       'one and twenty-five hundredths dollars', 'two and one hundred twenty-five thousandths dollars',
                        'one and a half dollars', 'three and two thirds dollars'):
             with self.subTest(phrase=phrase):
                 head = {'one': 1, 'two': 2, '1': 1, 'three': 3}[phrase.split()[0]]

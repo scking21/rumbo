@@ -252,7 +252,8 @@ ORDINAL_FRACTION = (r"[a-z]*(?:fourth|fifth|sixth|seventh|eighth|ninth|tenth|ele
 # A number the user continued with a fraction ("one and a half thousand", "1 point 5
 # million", "three quarters", "eleven twelfths") was not stated as that number: it
 # sources nothing as an amount.
-_FRACTION_COUNT = r"(?:an?|\d+|" + "|".join(sorted(list(UNIT_WORDS) + list(TENS_WORDS), key=len, reverse=True)) + r")"
+_COUNT_WORD = "|".join(sorted(list(UNIT_WORDS) + list(TENS_WORDS), key=len, reverse=True))
+_FRACTION_COUNT = r"(?:an?|\d+|(?:%s)(?:[\s-]+(?:%s|hundred))*)" % (_COUNT_WORD, _COUNT_WORD)
 AMOUNT_CONTINUED = re.compile(
     r"[\s-]+(?:and[\s-]+" + _FRACTION_COUNT + r"[\s-]+(?:half|halves|quarters?|thirds?|" + ORDINAL_FRACTION + r")\b|(?:point|dot)\b"
     r"|(?:half|halves|quarters?|thirds?|" + ORDINAL_FRACTION + r")\b(?!-(?:hours?|days?|weeks?|minutes?)\b))",
