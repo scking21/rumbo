@@ -1,0 +1,417 @@
+"""Independent PR19 regressions: never shorten or change signed user values."""
+import json
+from pathlib import Path
+import subprocess
+import sys
+import tempfile
+import unittest
+
+SCRIPT = Path(__file__).resolve().parents[1] / 'scripts' / 'record.py'
+
+
+class ReviewSourcingBoundaryTests(unittest.TestCase):
+    def check_output(self, quote, check):
+        record = dict(version=1, objective=dict(text='Synthetic plan', quote=quote),
+                      items=[], checks=[dict(check, id='C1')])
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / 'record.json'
+            path.write_text(json.dumps(record), encoding='utf-8')
+            result = subprocess.run([sys.executable, str(SCRIPT), 'check', '--record', str(path)],
+                                    capture_output=True, text=True, timeout=10)
+        return result
+
+    def test_fraction_prefix_never_sources_a_standalone_half_or_quarter_hour(self):
+        for phrase in ('150 percent of half an hour', '200 percent of half an hour', '150% of a half hour',
+                       'two thirds of a quarter hour', 'half of half an hour'):
+            with self.subTest(phrase=phrase):
+                result = self.check_output('Start 9:00; rehearsal takes %s; finish 9:30.' % phrase,
+                    dict(kind='fits_window', start='09:00', end='09:30', segments_min=[30 if 'half an' in phrase or 'half hour' in phrase else 15]))
+                self.assertIn('UNSOURCED', result.stdout)
+
+    def test_larger_ordinal_fractions_never_leave_the_numerator_as_the_amount(self):
+        for phrase in ('eleven twelfths', 'three hundredths', 'two thousandths', 'nine sixteenths'):
+            with self.subTest(phrase=phrase):
+                number = phrase.split()[0]
+                value = {'eleven': 11, 'three': 3, 'two': 2, 'nine': 9}[number]
+                result = self.check_output('Cost $1; budget %s of a dollar.' % phrase,
+                    dict(kind='within_budget', amounts=[1], total_cap=value))
+                self.assertIn('UNSOURCED', result.stdout)
+
+    def test_scale_ordinal_fractions_never_source_the_inner_duration(self):
+        for phrase in ('two billionths of 2 hours', 'three millionths of 2 hours', 'one thousandth of 2 hours'):
+            with self.subTest(phrase=phrase):
+                result = self.check_output('Start 9:00; rehearsal takes %s; finish 11:00.' % phrase,
+                    dict(kind='fits_window', start='09:00', end='11:00', segments_min=[120]))
+                self.assertIn('UNSOURCED', result.stdout)
+
+    def test_plain_half_hour_and_quarter_hour_are_still_sourced(self):
+        for phrase, minutes in (('half an hour', 30), ('a quarter hour', 15), ('a half-hour', 30)):
+            with self.subTest(phrase=phrase):
+                result = self.check_output('Start 9:00; rehearsal takes %s; finish 10:00.' % phrase,
+                    dict(kind='fits_window', start='09:00', end='10:00', segments_min=[minutes]))
+                self.assertIn('PASS', result.stdout, result.stdout + result.stderr)
+
+    def test_and_after_a_scale_joins_one_amount_even_without_a_unit(self):
+        for phrase, cap in (('$1 million and 500', 1000100), ('one million and five hundred dollars', 1000100),
+                            ('$2 thousand and 50', 2010)):
+            with self.subTest(phrase=phrase):
+                head = int(1e6) if 'million' in phrase else 2000
+                result = self.check_output('Venue %s; budget %d.' % (phrase, cap),
+                    dict(kind='within_budget', amounts=[head], total_cap=cap))
+                self.assertIn('UNSOURCED', result.stdout)
+
+    def test_scaled_amount_on_its_own_is_still_sourced(self):
+        result = self.check_output('Venue $1 million; budget $2 million.',
+            dict(kind='within_budget', amounts=[1000000], total_cap=2000000))
+        self.assertIn('PASS', result.stdout, result.stdout + result.stderr)
+
+    def test_hours_continued_with_an_ordinal_fraction_never_source_the_whole_hours(self):
+        for phrase, hours in (('an hour and three fourths', 1), ('two hours and five sixths', 2),
+                              ('an hour and seven eighths', 1)):
+            with self.subTest(phrase=phrase):
+                result = self.check_output('Start 9:00; rehearsal takes %s; finish 12:00.' % phrase,
+                    dict(kind='fits_window', start='09:00', end='12:00', segments_min=[60 * hours]))
+                self.assertIn('UNSOURCED', result.stdout)
+
+    def test_spelled_hundreds_continued_with_digits_never_source_the_hundreds(self):
+        for phrase, head in (('one hundred and 50 dollars', 100), ('two hundred and 5 dollars', 200)):
+            with self.subTest(phrase=phrase):
+                result = self.check_output('Venue %s; budget 1000.' % phrase,
+                    dict(kind='within_budget', amounts=[head], total_cap=1000))
+                self.assertIn('UNSOURCED', result.stdout)
+
+    def test_spelled_hundreds_and_plain_hours_are_still_sourced(self):
+        result = self.check_output('Venue one hundred and fifty dollars; budget 1000.',
+            dict(kind='within_budget', amounts=[150], total_cap=1000))
+        self.assertIn('PASS', result.stdout, result.stdout + result.stderr)
+        result = self.check_output('Start 9:00; rehearsal takes an hour and a half; finish 11:00.',
+            dict(kind='fits_window', start='09:00', end='11:00', segments_min=[90]))
+        self.assertIn('PASS', result.stdout, result.stdout + result.stderr)
+
+    def test_amounts_continued_with_and_an_ordinal_fraction_never_source_the_whole_part(self):
+        for phrase in ('one and three fourths dollars', 'two and five eighths dollars', '1 and 7 sixteenths dollars',
+                       'one and twenty-five hundredths dollars', 'two and one hundred twenty-five thousandths dollars',
+                       'one and a half dollars', 'three and two thirds dollars'):
+            with self.subTest(phrase=phrase):
+                head = {'one': 1, 'two': 2, '1': 1, 'three': 3}[phrase.split()[0]]
+                result = self.check_output('Venue %s; budget $10.' % phrase,
+                    dict(kind='within_budget', amounts=[head], total_cap=10))
+                self.assertIn('UNSOURCED', result.stdout)
+
+    def test_currency_sign_does_not_drop_negative_spelled_amount(self):
+        for sign in ('-', '\u2212'):
+            for currency in ('$', '\u20ac', '\u00a3'):
+                with self.subTest(sign=sign, currency=currency):
+                    result = self.check_output('Adjustment %s%sfifty; budget 1000.' % (sign, currency),
+                        dict(kind='within_budget', amounts=[50], total_cap=1000))
+                    self.assertIn('UNSOURCED', result.stdout)
+
+    def test_spaced_currency_sign_is_preserved(self):
+        for phrase in ('- € fifty', '−  $  fifty', '-         £ fifty'):
+            with self.subTest(phrase=phrase):
+                result = self.check_output('Adjustment %s; budget 1000.' % phrase,
+                    dict(kind='within_budget', amounts=[50], total_cap=1000))
+                self.assertIn('UNSOURCED', result.stdout)
+
+    def test_large_continued_minutes_never_source_whole_hour(self):
+        for count in ('one hundred', 'one hundred and five', '100', 'one thousand'):
+            with self.subTest(count=count):
+                result = self.check_output('Start 9:00; an hour and %s minutes of rehearsal; finish 10:00.' % count,
+                    dict(kind='fits_window', start='09:00', end='10:00', segments_min=[60]))
+                self.assertIn('UNSOURCED', result.stdout)
+
+    def test_positive_spelled_currency_amount_is_still_sourced(self):
+        for currency in ('$', '\u20ac', '\u00a3'):
+            result = self.check_output('Fee %sfifty; budget 1000.' % currency,
+                dict(kind='within_budget', amounts=[50], total_cap=1000))
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertIn('PASS', result.stdout)
+
+    def test_unparsed_fraction_never_sources_whole_hours(self):
+        for count in ('four', 'five', '4', '5', 'one hundred and four'):
+            result = self.check_output('Start 9:00; an hour and %s quarters of rehearsal; finish 10:00.' % count,
+                dict(kind='fits_window', start='09:00', end='10:00', segments_min=[60]))
+            self.assertIn('UNSOURCED', result.stdout)
+
+    def test_repeated_number_words_do_not_explode(self):
+        result = self.check_output('Start 9:00; an hour and ' + 'twenty one ' * 30 + 'breaks; finish 10:00.',
+            dict(kind='fits_window', start='09:00', end='10:00', segments_min=[60]))
+        self.assertIn('PASS', result.stdout)
+
+    def test_many_duration_continuations_do_not_rescan_quote(self):
+        result = self.check_output('Start 9:00; ' + 'an hour and four breaks; ' * 5000 + 'finish 10:00.',
+            dict(kind='fits_window', start='09:00', end='10:00', segments_min=[60]))
+        self.assertIn('PASS', result.stdout)
+
+    def test_whitespace_continuation_does_not_backtrack(self):
+        result = self.check_output('Start 9:00; an hour' + ' ' * 100000 + 'of rehearsal; finish 10:00.',
+            dict(kind='fits_window', start='09:00', end='10:00', segments_min=[60]))
+        self.assertIn('PASS', result.stdout)
+
+    def test_fraction_spacing_without_hour_does_not_backtrack(self):
+        for fraction in ('half', 'quarter'):
+            with self.subTest(fraction=fraction):
+                result = self.check_output('Start 9:00; ' + fraction + ' ' * 100000 + 'day; finish 10:00.',
+                    dict(kind='fits_window', start='09:00', end='10:00', segments_min=[30]))
+                self.assertIn('UNSOURCED', result.stdout)
+
+    def test_fraction_spacing_valid_forms_still_source_duration(self):
+        for phrase, minutes in (('half an hour', 30), ('half-hour', 30), ('half hour', 30),
+                                ('quarter of an hour', 15), ('quarter-hour', 15),
+                                ('quarter hour', 15), ('three quarters of an hour', 45)):
+            with self.subTest(phrase=phrase):
+                result = self.check_output('Start 9:00; %s; finish 10:00.' % phrase,
+                    dict(kind='fits_window', start='09:00', end='10:00', segments_min=[minutes]))
+                self.assertIn('PASS', result.stdout)
+
+    def test_many_numeric_tokens_do_not_copy_entire_quote(self):
+        result = self.check_output('1 ' * 600000 + 'budget 1000.',
+            dict(kind='within_budget', amounts=[50], total_cap=1000))
+        self.assertIn('UNSOURCED', result.stdout)
+
+    def test_adjacent_large_minutes_do_not_source_whole_hours(self):
+        for count in ('100', 'one hundred', '120', '1000'):
+            with self.subTest(count=count):
+                result = self.check_output('Start 9:00; 1 hour %s minutes; finish 10:00.' % count,
+                    dict(kind='fits_window', start='09:00', end='10:00', segments_min=[60]))
+                self.assertIn('UNSOURCED', result.stdout)
+
+    def test_adjacent_non_duration_count_preserves_hours(self):
+        result = self.check_output('Start 9:00; 1 hour, 100 guests; finish 10:00.',
+            dict(kind='fits_window', start='09:00', end='10:00', segments_min=[60]))
+        self.assertIn('PASS', result.stdout)
+
+    def test_numeric_currency_spacing_preserves_negative_sign(self):
+        for phrase in ('- € 50', '− £ 50', '- 50', '-$ 50'):
+            with self.subTest(phrase=phrase):
+                result = self.check_output('Adjustment %s; budget 1000.' % phrase,
+                    dict(kind='within_budget', amounts=[50], total_cap=1000))
+                self.assertIn('UNSOURCED', result.stdout)
+
+    def test_unsigned_numeric_spacing_and_ranges_remain_sourced(self):
+        for phrase in ('$50', '$ 50', '€ 50', '+ £ 50', '30-50', '50'):
+            with self.subTest(phrase=phrase):
+                result = self.check_output('Fee %s; budget 1000.' % phrase,
+                    dict(kind='within_budget', amounts=[50], total_cap=1000))
+                self.assertIn('PASS', result.stdout)
+
+    def test_spaced_currency_millions_preserve_complete_value(self):
+        for currency in ('$', '€', '£'):
+            for amount, expected in ((2.5, 'UNSOURCED'), (2500000, 'PASS')):
+                with self.subTest(currency=currency, amount=amount):
+                    result = self.check_output('Fee %s 2.5M; budget 10000000.' % currency,
+                        dict(kind='within_budget', amounts=[amount], total_cap=10000000))
+                    self.assertIn(expected, result.stdout)
+
+    def test_compound_fraction_large_following_minutes_are_unsourced(self):
+        for count in ('one hundred', '1000', 'one thousand', '100.5'):
+            with self.subTest(count=count):
+                result = self.check_output('Start 9:00; one and a half hours and %s minutes of rehearsal; finish 10:30.' % count,
+                    dict(kind='fits_window', start='09:00', end='10:30', segments_min=[90]))
+                self.assertIn('UNSOURCED', result.stdout)
+
+    def test_negative_standalone_fractions_do_not_source_positive_duration(self):
+        for phrase in ('-half an hour', '−half an hour', '- half an hour',
+                       '-a half-hour', '-one half hour', '-quarter of an hour',
+                       '− three quarters of an hour'):
+            with self.subTest(phrase=phrase):
+                minutes = 45 if 'three' in phrase else 15 if 'quarter' in phrase else 30
+                result = self.check_output('Start 9:00; %s; finish 10:30.' % phrase,
+                    dict(kind='fits_window', start='09:00', end='10:30', segments_min=[minutes]))
+                self.assertIn('UNSOURCED', result.stdout)
+
+    def test_compound_fraction_non_duration_continuation_stays_sourced(self):
+        result = self.check_output('Start 9:00; one and a half hours and one hundred guests; finish 10:30.',
+            dict(kind='fits_window', start='09:00', end='10:30', segments_min=[90]))
+        self.assertIn('PASS', result.stdout)
+
+    def test_standalone_fraction_large_following_minutes_are_unsourced(self):
+        for phrase, minutes in (('half an hour', 30), ('quarter of an hour', 15)):
+            for count in ('one hundred', '1000'):
+                with self.subTest(phrase=phrase, count=count):
+                    result = self.check_output('Start 9:00; %s plus %s minutes; finish 10:30.' % (phrase, count),
+                        dict(kind='fits_window', start='09:00', end='10:30', segments_min=[minutes]))
+                    self.assertIn('UNSOURCED', result.stdout)
+
+    def test_simple_fraction_amount_does_not_source_numerator(self):
+        for phrase in ('one-half', 'one half', 'one third', 'one-quarter', 'two fifths'):
+            with self.subTest(phrase=phrase):
+                n = 2 if phrase.startswith('two') else 1
+                result = self.check_output('Fee is %s dollar; cap $10.' % phrase,
+                    dict(kind='within_budget', amounts=[n], total_cap=10))
+                self.assertIn('UNSOURCED', result.stdout)
+
+    def test_whitespace_numeric_range_keeps_positive_endpoint(self):
+        for phrase in ('30 - 50', '30- 50', '30 -50', '30 − 50', '$30 - € 50'):
+            with self.subTest(phrase=phrase):
+                result = self.check_output('Fee range is %s dollars; cap $100.' % phrase,
+                    dict(kind='within_budget', amounts=[50], total_cap=100))
+                self.assertIn('PASS', result.stdout)
+
+    def test_comma_continued_minutes_do_not_source_shorter_fraction(self):
+        for joining in (', plus ', ', and ', ', ', ' , plus '):
+            with self.subTest(joining=joining):
+                result = self.check_output('Start 9:00; one and a half hours%sfifteen minutes of rehearsal; finish 10:30.' % joining,
+                    dict(kind='fits_window', start='09:00', end='10:30', segments_min=[90]))
+                self.assertIn('UNSOURCED', result.stdout)
+
+    def test_non_duration_continuation_preserves_hours(self):
+        result = self.check_output('Start 9:00; an hour and four breaks; finish 10:00.',
+            dict(kind='fits_window', start='09:00', end='10:00', segments_min=[60]))
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('PASS', result.stdout)
+
+
+    def test_decimal_word_duration_never_sources_suffix(self):
+        for phrase in ('two point one hours', 'two point    one hours', 'two dot      one hours', 'two dot one hours', 'two-point-one hours', 'two point 1 hours', 'two point one and a half hours'):
+            for minutes in (60, 90):
+                with self.subTest(phrase=phrase, minutes=minutes):
+                    result = self.check_output('Start 9:00; ' + phrase + ' of rehearsal; finish 10:30.',
+                        dict(kind='fits_window', start='09:00', end='10:30', segments_min=[minutes]))
+                    self.assertIn('UNSOURCED', result.stdout)
+
+    def test_fraction_duration_tail_never_sources_prefix(self):
+        for phrase in ('one and a half hours plus a quarter', 'one and a half hours, and three quarters', 'half an hour plus a half', 'a quarter of an hour and one third'):
+            minutes = 90 if phrase.startswith('one') else (30 if phrase.startswith('half') else 15)
+            with self.subTest(phrase=phrase):
+                result = self.check_output('Start 9:00; ' + phrase + ' of rehearsal; finish 10:30.',
+                    dict(kind='fits_window', start='09:00', end='10:30', segments_min=[minutes]))
+                self.assertIn('UNSOURCED', result.stdout)
+
+    def test_fraction_tail_with_explicit_own_hour_stays_separate(self):
+        result = self.check_output('Start 9:00; one and a half hours plus a quarter-hour break; finish 10:45.',
+            dict(kind='fits_window', start='09:00', end='10:45', segments_min=[90,15]))
+        self.assertIn('PASS', result.stdout)
+
+    def test_decimal_word_amount_whitespace_does_not_source_suffix(self):
+        for phrase in ('two point    one million', 'two dot      one million'):
+            result = self.check_output('Fee ' + phrase + '; cap 2000000.',
+                dict(kind='within_budget', amounts=[1000000], total_cap=2000000))
+            self.assertIn('UNSOURCED', result.stdout)
+
+    def test_unsupported_fraction_does_not_source_inner_hour(self):
+        for phrase in ('four thirds of an hour', 'two fifths of an hour', 'four-thirds of an hour', 'seven eighths of an hour', 'one third of an hour', 'two halves of an hour', 'a twelfth of an hour', 'an eleventh of an hour', 'eleven twelfths of an hour', 'five sixteenths of an hour', 'four hundredths of an hour', '11 twelfths of an hour', '4 thirds of a hour', 'one third of one hour', 'four-thirds-of-an-hour', 'two sixths of an hour', '3 sevenths of an hour', 'two ninths of an hour', 'three tenths of an hour', 'four thirds of' + ' ' * 100000 + 'an hour'):
+            with self.subTest(phrase=phrase):
+                result = self.check_output('Start 9:00; ' + phrase + '; finish 10:00.',
+                    dict(kind='fits_window', start='09:00', end='10:00', segments_min=[60]))
+                self.assertIn('UNSOURCED', result.stdout)
+
+    def test_fraction_context_keeps_supported_and_independent_hours(self):
+        for phrase, minutes in (('half an hour',30),('three quarters of an hour',45),('a quarter of an hour',15),('growth of an hour',60),('discussion of thirds; an hour',60),('four thirds were discussed, then an hour',60)):
+            with self.subTest(phrase=phrase):
+                result = self.check_output('Start 9:00; '+phrase+'; finish 10:00.',
+                    dict(kind='fits_window',start='09:00',end='10:00',segments_min=[minutes]))
+                self.assertIn('PASS',result.stdout)
+
+    def test_spaced_signed_hours_never_source_positive_duration(self):
+        for sign in ('-', '−'):
+            for gap in (' ', '   ', '\t'):
+                for phrase, minutes in (('one and a half hours',90),('1 and a half hours',90),('one hour',60),('1 hour',60),('an hour',60),('a hour',60),('1.5 hours',90),('1 hour 15 minutes',75)):
+                    with self.subTest(sign=sign,gap=gap,phrase=phrase):
+                        result=self.check_output('Start 9:00; duration '+sign+gap+phrase+'; finish 10:30.',
+                            dict(kind='fits_window',start='09:00',end='10:30',segments_min=[minutes]))
+                        self.assertIn('UNSOURCED',result.stdout)
+
+    def test_compound_fraction_other_unit_never_sources_hours(self):
+        for phrase in ('one hour and a quarter of a day', 'one hour and a quarter of one day', 'one hour and a quarter of 2.5 days', 'one hour and a half of an evening', 'one hour and a quarter of a week', 'one hour and a half day', 'one hour and a quarter of a minute'):
+            n=90 if 'half' in phrase else 75
+            with self.subTest(phrase=phrase):
+                result=self.check_output('Start 9:00; '+phrase+' of rehearsal; finish 10:30.',
+                    dict(kind='fits_window',start='09:00',end='10:30',segments_min=[n]))
+                self.assertIn('UNSOURCED',result.stdout)
+
+    def test_decimal_word_minute_continuation_never_sources_prefix(self):
+        for phrase in ('one hour and two point five minutes','one hour plus two dot five minutes','one hour and two-point-five minutes','one and a half hours and two point five minutes','half an hour plus two point five minutes'):
+            n=90 if phrase.startswith('one and') else 30 if phrase.startswith('half') else 60
+            with self.subTest(phrase=phrase):
+                result=self.check_output('Start 9:00; '+phrase+'; finish 10:30.',
+                    dict(kind='fits_window',start='09:00',end='10:30',segments_min=[n]))
+                self.assertIn('UNSOURCED',result.stdout)
+
+    def test_complete_fraction_hours_keep_activity_context(self):
+        for phrase,n in (('one and a half hours of rehearsal',90),('two and a half hours of work',150)):
+            result=self.check_output('Start 9:00; '+phrase+'; finish 12:00.',
+                dict(kind='fits_window',start='09:00',end='12:00',segments_min=[n]))
+            self.assertIn('PASS',result.stdout)
+
+    def test_unparsed_time_units_never_source_shorter_duration(self):
+        for unit in ('seconds','secs','second','days','weeks','months','years','nights'):
+            for phrase,n in (('one hour',60),('one and a half hours',90),('half an hour',30),('a quarter of an hour',15)):
+                for connector in (' and ', ', plus ', ' '):
+                    with self.subTest(unit=unit,phrase=phrase,connector=connector):
+                        result=self.check_output('Start 9:00; '+phrase+connector+'thirty '+unit+'; finish 10:30.',
+                            dict(kind='fits_window',start='09:00',end='10:30',segments_min=[n]))
+                        self.assertIn('UNSOURCED',result.stdout)
+
+    def test_time_unit_guard_preserves_separate_and_non_time_controls(self):
+        for phrase,n in (('one hour; thirty seconds later',60),('one hour and thirty guests',60),('one hour and fifteen minutes',75),('one hour and a half-hour break',60),('one and a half hours; thirty seconds later',90)):
+            result=self.check_output('Start 9:00; '+phrase+'; finish 10:30.',
+                dict(kind='fits_window',start='09:00',end='10:30',segments_min=[n]))
+            self.assertIn('PASS',result.stdout)
+
+    def test_direct_minute_number_respects_explicit_other_unit(self):
+        for count in ('30','thirty'):
+            for unit in ('hours','seconds','days'):
+                result=self.check_output('Start9:00; '+count+' '+unit+'; finish10:00.',
+                    dict(kind='fits_window',start='09:00',end='10:00',segments_min=[30]))
+                self.assertIn('UNSOURCED',result.stdout)
+        for phrase in ('30 minutes','thirty minutes','30','thirty seconds and 30 minutes'):
+            result=self.check_output('Start9:00; '+phrase+'; finish10:00.',
+                dict(kind='fits_window',start='09:00',end='10:00',segments_min=[30]))
+            self.assertIn('PASS',result.stdout)
+        result=self.check_output('Cost thirty dollars; cap100.',dict(kind='within_budget',amounts=[30],total_cap=100))
+        self.assertIn('PASS',result.stdout)
+
+    def test_scaled_minute_candidates_respect_effective_unit_end(self):
+        for phrase,n in (('0.5k seconds',500),('1 thousand seconds',1000),('one thousand seconds',1000)):
+            result=self.check_output('Start1:00; '+phrase+'; finish23:00.',
+                dict(kind='fits_window',start='01:00',end='23:00',segments_min=[n]))
+            self.assertIn('UNSOURCED',result.stdout)
+        for phrase,n in (('0.5k minutes',500),('1 thousand minutes',1000),('one thousand minutes',1000)):
+            result=self.check_output('Start1:00; '+phrase+'; finish23:00.',
+                dict(kind='fits_window',start='01:00',end='23:00',segments_min=[n]))
+            self.assertIn('PASS',result.stdout)
+        result=self.check_output('Fee $0.5k; cap1000.',dict(kind='within_budget',amounts=[500],total_cap=1000))
+        self.assertIn('PASS',result.stdout)
+
+    def test_fraction_prefix_does_not_source_interior_scaled_amount(self):
+        for phrase in ('half a million','50 percent of one million','50% of one million','1/2 of a million','½ a million','1 / 2 of a million','a quarter of a million','half of 1 million','one half of one million','three quarters of 1 million','half of $1M','a twelfth of a million','half a $1M'):
+            with self.subTest(phrase=phrase):
+                result=self.check_output('Cost $750k; budget '+phrase+' dollars.',dict(kind='within_budget',amounts=[750000],total_cap=1000000))
+                self.assertIn('UNSOURCED',result.stdout)
+
+    def test_fraction_prefix_preserves_independent_scaled_amount(self):
+        for phrase in ('a million','one million','$1M','growth of a million','half the work; budget a million'):
+            result=self.check_output('Cost $750k; budget '+phrase+' dollars.',dict(kind='within_budget',amounts=[750000],total_cap=1000000))
+            self.assertIn('PASS',result.stdout)
+
+    def test_fraction_prefix_shared_minute_path(self):
+        for phrase,want in (('half of thirty minutes','UNSOURCED'),('half of30minutes','UNSOURCED'),('half of thirty minutes; independent duration 30 minutes','PASS')):
+            result=self.check_output('Start9:00; '+phrase+'; finish10:00.',
+                dict(kind='fits_window',start='09:00',end='10:00',segments_min=[30]))
+            self.assertIn(want,result.stdout)
+
+    def test_digit_ordinal_fraction_sources_nothing(self):
+        for phrase in ('a 5th of $1000','1/5th of $1000','3 8ths of $1000','a 12th of $1000','a billionth of $1000','a trillionth of $1000'):
+            with self.subTest(phrase=phrase):
+                result=self.check_output('Fee is '+phrase+'; cap $2000.',dict(kind='within_budget',amounts=[1000],total_cap=2000))
+                self.assertIn('UNSOURCED',result.stdout)
+        for phrase,n in (('a 12th of 2 hours',120),('a 5th of an hour',60),('a 12th of 120 minutes',120)):
+            with self.subTest(phrase=phrase):
+                result=self.check_output('Start 9:00; '+phrase+'; finish 12:00.',dict(kind='fits_window',start='09:00',end='12:00',segments_min=[n]))
+                self.assertIn('UNSOURCED',result.stdout)
+
+    def test_fraction_prefix_shared_hour_path(self):
+        for phrase,want in (('150 percent of two hours','UNSOURCED'),('150% of 2 hours','UNSOURCED'),
+                            ('half of two hours','UNSOURCED'),('a third of 2 hours','UNSOURCED'),
+                            ('200 percent of two and a half hours','UNSOURCED'),('9:00 with a 2-hour rehearsal','PASS'),
+                            ('two hours','PASS'),('a 2-hour rehearsal','PASS'),
+                            ('150 percent of two hours; independent duration two hours','PASS')):
+            with self.subTest(phrase=phrase):
+                result=self.check_output('Start 9:00; rehearsal takes '+phrase+'; finish 12:00.',
+                    dict(kind='fits_window',start='09:00',end='12:00',segments_min=[150 if 'half hours' in phrase else 120]))
+                self.assertIn(want,result.stdout)
+
+
+if __name__ == '__main__':
+    unittest.main()

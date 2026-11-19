@@ -54,7 +54,7 @@ def validate_url(name, value):
 def read_plugin(root, review_profile):
     base=root/'openai-plugin/rumbo'
     files={}
-    allowed={'plugin.json','mcp.json','README.md','.codex-plugin/plugin.json','assets/icon.svg','scripts/run_mcp.py','skills/coordinate-work/SKILL.md','skills/review-evidence/SKILL.md'}
+    allowed={'plugin.json','mcp.json','README.md','.codex-plugin/plugin.json','assets/icon.svg','scripts/run_mcp.py','scripts/commitments.py','skills/commitments/SKILL.md','skills/coordinate-work/SKILL.md','skills/review-evidence/SKILL.md'}
     for path in base.rglob('*'):
         if path.is_symlink():
             raise ValueError('Symlink packaging is forbidden')
@@ -130,6 +130,9 @@ def build_local(root,target):
     for path in (root/'rumbo').glob('*.py'):
         files['rumbo/'+path.name]=path.read_bytes()
     files['rumbo/web/board.html']=(root/'rumbo/web/board.html').read_bytes()
+    runtime=root/'rumbo/scripts/record.py'
+    if runtime.is_symlink():raise ValueError('Symlink commitments runtime is forbidden')
+    files['scripts/_commitments_record.py']=runtime.read_bytes()
     files['DEPLOYMENT-GATES.json']=pretty(dict(status='local-review-candidate-not-public-submission',verified_external_gates={k:False for k in sorted(GATES)},note='No public endpoint, account, credentials, video or in-host visual verification is claimed.'))
     return write_zip(target,files)
 
@@ -138,7 +141,7 @@ def build_submission(root,target,config):
     validate_public_config(config)
     files=read_plugin(Path(root), review_profile='hosted')
     # Public package is skills + remote MCP + presentation, not local execution.
-    files={k:v for k,v in files.items() if not k.startswith(('scripts/','.codex-plugin/'))}
+    files={k:v for k,v in files.items() if not k.startswith(('scripts/','.codex-plugin/','skills/commitments/'))}
     manifest=json.loads(files['plugin.json'])
     ext=manifest['extensions']['com.openai']
     ext['interface'].update(websiteURL=config['website_url'],supportURL=config['support_url'],privacyPolicyURL=config['privacy_url'],termsOfServiceURL=config['terms_url'])
