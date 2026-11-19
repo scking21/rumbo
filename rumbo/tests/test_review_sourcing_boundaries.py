@@ -88,6 +88,15 @@ class ReviewSourcingBoundaryTests(unittest.TestCase):
             dict(kind='fits_window', start='09:00', end='11:00', segments_min=[90]))
         self.assertIn('PASS', result.stdout, result.stdout + result.stderr)
 
+    def test_amounts_continued_with_and_an_ordinal_fraction_never_source_the_whole_part(self):
+        for phrase in ('one and three fourths dollars', 'two and five eighths dollars', '1 and 7 sixteenths dollars',
+                       'one and a half dollars', 'three and two thirds dollars'):
+            with self.subTest(phrase=phrase):
+                head = {'one': 1, 'two': 2, '1': 1, 'three': 3}[phrase.split()[0]]
+                result = self.check_output('Venue %s; budget $10.' % phrase,
+                    dict(kind='within_budget', amounts=[head], total_cap=10))
+                self.assertIn('UNSOURCED', result.stdout)
+
     def test_currency_sign_does_not_drop_negative_spelled_amount(self):
         for sign in ('-', '\u2212'):
             for currency in ('$', '\u20ac', '\u00a3'):
