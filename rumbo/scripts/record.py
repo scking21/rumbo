@@ -1888,7 +1888,9 @@ def cmd_pre_write(args):
 
 
 def _pre_write(args):
-    payload = _hook_payload() or {}
+    payload = _hook_payload()
+    if payload is None:
+        return 0
     tool_input = payload.get("tool_input")
     target = None
     if isinstance(tool_input, dict):

@@ -178,10 +178,11 @@ class DriftHookTests(unittest.TestCase):
         self.write({"version": 1, "objective": {"text": "t"}, "items": [], "checks": []})
         self.assertEqual(self.pre_write(), (0, "", ""))
         self.workshop()
-        for payload in ("", "not json", "[]", '{"tool_input": 5}'):
+        for payload in ("", "not json", "[]"):
             with self.subTest(payload=payload):
-                code, out, err = run(["pre-write", "--record", self.record], payload, self.env)
-                self.assertEqual((code, err), (0, ""))
+                self.assertEqual(run(["pre-write", "--record", self.record], payload, self.env), (0, "", ""))
+        code, out, err = run(["pre-write", "--record", self.record], '{"tool_input": 5}', self.env)
+        self.assertEqual((code, err), (0, ""))
 
     def test_pre_write_without_a_session_always_shows(self):
         self.workshop()
