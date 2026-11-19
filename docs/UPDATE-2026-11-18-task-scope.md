@@ -5,13 +5,14 @@ This source candidate builds on main `84658a255425e643ed12f0ea6163916a960ed070`.
 ## What changed
 
 - **Decision requests** under task scope carry the task's fingerprint like artifacts, evidence and decisions do. The board marks a request historical only when its own task's agreement changed. Before, rewording one task marked every task's requests as "Historical request · prior contract revision".
-- **The stale-artifact error** under task scope says the artifact was registered before that task's definition, goal or constraints changed. Before, it named contract revisions, which do not decide staleness under task scope.
-- **The owner portal's revision form** states the rule the contract uses. Under task scope it says a revision makes a task's work stale only when that task's definition, or the shared goal or constraints, change.
+- **The stale-artifact error** and the task's stale reason under task scope say the artifact was not registered under the task's current agreed definition, goal and constraints. That covers both a changed task and work recorded without a fingerprint. Before, the error named contract revisions, which do not decide staleness under task scope.
+- **The owner portal's revision form** states the rule the contract uses. Under task scope it says a revision makes a task's work stale only when that task's definition, or the shared goal or constraints, change, and that work depending on a stale task waits for it again.
 
 ## Behaviour to know
 
 - The fingerprint compares what was agreed, not the revision history. Rewording a task and then restoring the earlier wording brings the records made under that wording back into force, including an earlier acceptance.
 - Code from before `revision_scope` reads a scoped ledger under the contract-wide rule. Work recorded while on that older code has no fingerprint, so after returning to current code it reads as stale under task scope, and records from before the rollback can apply again.
+- A decision request recorded without a fingerprint, by that older code or by 0.3.9 code before this change, shows as historical under task scope, like any other record without one.
 
 ## Verification and rollback
 

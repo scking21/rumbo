@@ -116,7 +116,7 @@ class PerTaskStalenessTests(Base):
         self.reword_b(data)
         with self.assertRaises(RumboError) as caught:
             self.worker.execute('run_checks', dict(task_id='b', contract_revision=2, artifact_revision=1))
-        self.assertIn("before task b's agreed definition, goal or constraints changed", str(caught.exception))
+        self.assertIn("not registered under task b's current agreed definition", str(caught.exception))
 
 
 class FingerprintCostTests(Base):
