@@ -9,7 +9,7 @@ Set `"revision_scope": "task"` in the contract. Each artifact, evidence item and
 - Rewording one task no longer un-accepts the others.
 - Changing the goal or a constraint still stales every task.
 - If the field is omitted, or removed in a later revision, the old rule applies and every revision stales every task.
-- The owner portal's revision form keeps the field, and the board compares records against the task's current fingerprint. Each task's fingerprint is computed once per projection.
+- The owner portal's revision form keeps the field, and the board compares records against the task's current fingerprint. A snapshot hashes each task's fingerprint three times, however long its history, rather than once per record.
 
 The hosted Sites runtime (`openai-sites/`) does not have this feature. Its parity tests still pass because the default behaviour is unchanged.
 
@@ -20,11 +20,11 @@ The hosted Sites runtime (`openai-sites/`) does not have this feature. Its parit
 
 In 3 of the 6 scenario F runs, the agent had already edited `export.py` for an earlier request (adding `to_tsv`). That stales the code tasks on both arms, so in a realistic conversation the saving shows up less often than in scenario A.
 
-## 2. The decision-record Stop gate passes a block the agent already answered (plugin)
+## 2. The decision-record Stop gate no longer blocks the same problems twice in a row (plugin)
 
 Before this change, an unchanged problem blocked again right after the agent replied, up to the session's three blocks. In the long planning conversation (scenario G), that happened over an assumption the agent had already disclosed in its first reply. The agent repeated itself up to three times in one turn, and the session had no blocks left for anything later.
 
-Now an unchanged repeat in the same stop passes. In a later stop, an open problem still gets the one-line status block, and the three-per-session limit is unchanged.
+Now, when the agent tries to stop again right after a block and the problems are unchanged, the stop passes. The gate does not check what the agent said in reply. In a later turn, an open problem still gets the one-line status block, and the three-per-session limit is unchanged.
 
 | Scenario G (10 turns, written in the owner's own prompting style) | main | branch |
 |---|---|---|
