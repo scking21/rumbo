@@ -591,6 +591,8 @@ class Engine:
         if not artifact:
             fail('STALE_ARTIFACT', 'Task ' + task['id'] + ' has no registered artifact; claim the task and register one first')
         if not binder(task, state)(artifact):
+            if state.get('revision_scope') == 'task':
+                fail('STALE_ARTIFACT', 'Artifact revision ' + str(artifact['revision']) + ' was registered before this task\'s agreed definition, goal or constraints changed; register it again under revision ' + str(state['contract_revision']))
             fail('STALE_ARTIFACT', 'Artifact revision ' + str(artifact['revision']) + ' was registered under contract revision ' + str(artifact['contract_revision']) + '; register it again under revision ' + str(state['contract_revision']))
         if revision != artifact['revision']:
             fail('STALE_ARTIFACT', 'Artifact is at revision ' + str(artifact['revision']) + ', not ' + str(revision) + '; read the current state and retry with its revisions')
@@ -656,7 +658,8 @@ class Engine:
         task = self._task(args['task_id'], state)
         if action == 'request_decision':
             string(args['question'], 'question')
-            return dict(id=eventid, task_id=task['id'], question=args['question'], actor=self.actor, contract_revision=rev, at=now)
+            scoped = dict(task_fingerprint=task_fingerprint(state, task)) if state.get('revision_scope') == 'task' else {}
+            return dict(id=eventid, task_id=task['id'], question=args['question'], actor=self.actor, contract_revision=rev, at=now, **scoped)
         integer(args['contract_revision'], 'contract_revision')
         self._current_contract(args['contract_revision'], state)
         if action == 'claim_task':

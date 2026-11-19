@@ -55,6 +55,32 @@ class PerTaskStalenessTests(Base):
         changed['tasks'][1]['title'] = 'Task b, reworded'
         return self.owner.execute('revise_contract', dict(contract=changed, expected_revision=1, reason='Reword b only'))
 
+    def test_task_scope_messages_and_requests_follow_the_task(self):
+        from rumbo.core import RumboError
+        data = contract(self.tasks(), revision_scope='task')
+        self.start(data)
+        self.accept_file('a', 'a.txt'); self.accept_file('b', 'b.txt')
+        self.worker.execute('request_decision', dict(task_id='a', question='Keep a as is?'))
+        self.worker.execute('request_decision', dict(task_id='b', question='Keep b as is?'))
+        state = self.reword_b(data)
+        tasks = {t['id']: t for t in state['tasks']}
+        requests = {r['task_id']: r for r in state['requests']}
+        # The untouched task's request still applies; the reworded task's does not.
+        self.assertEqual(requests['a']['task_fingerprint'], tasks['a']['task_fingerprint'])
+        self.assertNotEqual(requests['b']['task_fingerprint'], tasks['b']['task_fingerprint'])
+        with self.assertRaises(RumboError) as raised:
+            self.worker.execute('run_checks', dict(task_id='b', contract_revision=2, artifact_revision=1))
+        self.assertIn("before this task's agreed definition, goal or constraints changed", raised.exception.message)
+
+    def test_reverting_a_task_wording_restores_its_earlier_acceptance(self):
+        # Staleness follows the task's content, not its history: an exact revert matches the old fingerprint.
+        data = contract(self.tasks(), revision_scope='task')
+        self.start(data)
+        self.accept_file('a', 'a.txt'); self.accept_file('b', 'b.txt')
+        self.assertEqual(status(self.reword_b(data))['b'], 'stale')
+        state = self.owner.execute('revise_contract', dict(contract=data, expected_revision=2, reason='Undo the rewording'))
+        self.assertEqual(status(state), {'a': 'accepted', 'b': 'accepted'})
+
     def test_default_scope_keeps_whole_contract_staleness(self):
         data = contract(self.tasks())
         self.start(data)

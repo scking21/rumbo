@@ -470,5 +470,5 @@ class OwnerPortal:
         if 'revision_scope' in state:
             # Keep the owner's staleness rule; deleting this line from the form returns to contract-wide staleness.
             contract['revision_scope'] = state['revision_scope']
-        content += self._action_form('revise_contract', dict(contract=contract, expected_revision=state['contract_revision'], reason=''), csrf, 'Revise the contract', 'Edit the full contract and give an explicit nonempty reason. The project ID remains fixed. A new revision makes existing work stale until refreshed; it does not delete earlier evidence.')
+        content += self._action_form('revise_contract', dict(contract=contract, expected_revision=state['contract_revision'], reason=''), csrf, 'Revise the contract', 'Edit the full contract and give an explicit nonempty reason. The project ID remains fixed. A new revision makes existing work stale until refreshed (with revision_scope "task", only tasks whose definition changed, or every task if the goal or constraints changed); it does not delete earlier evidence.')
         return self._page(state['project_id'] + ' · Owner review', content)

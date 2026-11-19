@@ -357,7 +357,8 @@ function renderDetail() {
     group.append(element('p','Questions recorded for the owner. A request is not a decision; resolution is not tracked separately.','explanation'));
     for (const record of requests) {
       const card = element('div',null,'surface');
-      if (record.contract_revision !== state.contract_revision) card.append(element('p','Historical request · prior contract revision','historical-note'));
+      const oldRequest = state.revision_scope === 'task' ? record.task_fingerprint !== task.task_fingerprint : record.contract_revision !== state.contract_revision;
+      if (oldRequest) card.append(element('p',state.revision_scope === 'task' ? 'Historical request · the task\'s agreed definition has changed' : 'Historical request · prior contract revision','historical-note'));
       card.append(element('p',record.question,'evidence-note'),element('p',text(record.actor) + ' · contract r' + text(record.contract_revision) + ' · ' + date(record.at),'metadata'));
       group.append(card);
     }
