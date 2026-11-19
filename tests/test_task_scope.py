@@ -4,7 +4,7 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from rumbo.core import Engine, task_fingerprint
+from rumbo.core import Engine, RumboError, task_fingerprint
 
 REQUEST = 'Export the report as CSV. Keep the column order exactly as it is today. Do not add new dependencies.'
 
@@ -98,6 +98,25 @@ class PerTaskStalenessTests(Base):
         before = task_fingerprint(state, state['tasks'][0])
         state['tasks'][0]['lease'] = dict(actor='x', expires_at=1, contract_revision=1)
         self.assertEqual(task_fingerprint(state, state['tasks'][0]), before)
+
+    def test_requests_follow_their_task_under_task_scope(self):
+        data = contract(self.tasks(), revision_scope='task')
+        self.start(data)
+        self.worker.execute('request_decision', dict(task_id='a', question='Is a ready?'))
+        self.worker.execute('request_decision', dict(task_id='b', question='Is b ready?'))
+        state = self.reword_b(data)
+        current = {t['id']: t['task_fingerprint'] for t in state['tasks']}
+        same = {r['task_id']: r['task_fingerprint'] == current[r['task_id']] for r in state['requests']}
+        self.assertEqual(same, {'a': True, 'b': False})
+
+    def test_stale_artifact_error_names_the_task_change(self):
+        data = contract(self.tasks(), revision_scope='task')
+        self.start(data)
+        self.accept_file('b', 'b.txt')
+        self.reword_b(data)
+        with self.assertRaises(RumboError) as caught:
+            self.worker.execute('run_checks', dict(task_id='b', contract_revision=2, artifact_revision=1))
+        self.assertIn("not registered under task b's current agreed definition", str(caught.exception))
 
 
 class FingerprintCostTests(Base):

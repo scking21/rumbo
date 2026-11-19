@@ -513,7 +513,7 @@ class Engine:
                 reason = ''
                 belongs = binder(task, state)
                 if not belongs(artifact):
-                    reason = 'This task\'s agreed definition, goal or constraints changed' if state.get('revision_scope') == 'task' else 'Contract revision changed'
+                    reason = 'Not registered under this task\'s current agreed definition, goal and constraints' if state.get('revision_scope') == 'task' else 'Contract revision changed'
                 elif artifact.get('dependencies', {}) != self._dependency_stamp(task, tasks):
                     reason = 'Dependency acceptance changed'
                 else:
@@ -591,6 +591,8 @@ class Engine:
         if not artifact:
             fail('STALE_ARTIFACT', 'Task ' + task['id'] + ' has no registered artifact; claim the task and register one first')
         if not binder(task, state)(artifact):
+            if state.get('revision_scope') == 'task':
+                fail('STALE_ARTIFACT', 'Artifact revision ' + str(artifact['revision']) + ' was not registered under task ' + task['id'] + '\'s current agreed definition, goal and constraints; register it again under revision ' + str(state['contract_revision']))
             fail('STALE_ARTIFACT', 'Artifact revision ' + str(artifact['revision']) + ' was registered under contract revision ' + str(artifact['contract_revision']) + '; register it again under revision ' + str(state['contract_revision']))
         if revision != artifact['revision']:
             fail('STALE_ARTIFACT', 'Artifact is at revision ' + str(artifact['revision']) + ', not ' + str(revision) + '; read the current state and retry with its revisions')
@@ -654,9 +656,11 @@ class Engine:
             return dict(copy.deepcopy(args['contract']), demo=args['contract'].get('demo', False), contract_revision=rev+1, contract_change_reason=args['reason'])
         identifier(args['task_id'], 'task_id')
         task = self._task(args['task_id'], state)
+        scoped = state.get('revision_scope') == 'task'
+        fingerprint = dict(task_fingerprint=task_fingerprint(state, task)) if scoped else {}
         if action == 'request_decision':
             string(args['question'], 'question')
-            return dict(id=eventid, task_id=task['id'], question=args['question'], actor=self.actor, contract_revision=rev, at=now)
+            return dict(id=eventid, task_id=task['id'], question=args['question'], actor=self.actor, contract_revision=rev, at=now, **fingerprint)
         integer(args['contract_revision'], 'contract_revision')
         self._current_contract(args['contract_revision'], state)
         if action == 'claim_task':
@@ -667,8 +671,6 @@ class Engine:
                 fail('LEASE_CONFLICT', 'Another actor holds an unexpired lease')
             return dict(task_id=task['id'], lease=dict(actor=self.actor, expires_at=now+ttl, contract_revision=rev))
         tasks = {t['id']: t for t in state['tasks']}
-        scoped = state.get('revision_scope') == 'task'
-        fingerprint = dict(task_fingerprint=task_fingerprint(state, task)) if scoped else {}
         if action in ('submit_artifact','ingest_artifact'):
             if not task['lease']:
                 fail('LEASE_REQUIRED', 'No unexpired lease on ' + task['id'] + '; claim the task first. Leases expire and do not carry over to a new connection')
