@@ -309,6 +309,12 @@ class OwnerPortalTests(unittest.TestCase):
         form = page[2].split('name="action" value="revise_contract"', 1)[1]
         self.assertIn('&quot;revision_scope&quot;: &quot;task&quot;', form)
 
+    def test_revision_form_states_the_contracts_staleness_rule(self):
+        Engine(self.root, 'owner', 'human').execute('create_contract', dict(contract(), revision_scope='task'))
+        _, _, page = self.login()
+        self.assertIn('stale only when that task', page[2])
+        self.assertNotIn('makes existing work stale', page[2])
+
     def test_malformed_large_forms_and_duplicate_cookies_are_rejected(self):
         cookie, csrf, _ = self.login()
         self.assertEqual(self.request('GET', '/owner', cookie=cookie + '; ' + cookie)[0], 400)
