@@ -18,6 +18,9 @@ class _UnboundEngine:
     def snapshot(self):
         fail('PROJECT_UNBOUND', 'Choose an owner-registered alias with rumbo_list_projects and rumbo_connect_project first')
 
+    def observe_question(self, task_id, *, related_task_ids=None):
+        return self.snapshot()
+
     def artifact_view(self, arguments):
         return self.snapshot()
 
@@ -36,7 +39,7 @@ def installed_tool_definitions():
     return [
         _tool('rumbo_list_projects', 'List Registered Projects', 'List only owner-provisioned project aliases available to this installed connection. Does not search the filesystem or expose project paths.', {}, True),
         _tool('rumbo_connect_project', 'Connect Registered Project', 'Bind this process once to one owner-provisioned alias as a fresh worker. Arbitrary paths, actor identities, roles, rebinding, and lease resumption are unavailable.', {'alias': prop('string', 'Owner-registered alias from rumbo_list_projects', minLength=1, maxLength=64)}, False),
-    ] + [tool for tool in tool_definitions() if tool['name'] != 'rumbo_submit_review']
+    ] + [tool for tool in tool_definitions(question_observations=True) if tool['name'] != 'rumbo_submit_review']
 
 
 def _success(data, text):
@@ -53,7 +56,7 @@ class InstalledProtocol(Protocol):
         self.actor = 'worker-' + uuid.uuid4().hex
         self.alias = None
         self.clock = clock
-        super().__init__(_UnboundEngine())
+        super().__init__(_UnboundEngine(), question_observations=True)
 
     def dispatch(self, request):
         # Keep the shared protocol's validation and notification behavior. In

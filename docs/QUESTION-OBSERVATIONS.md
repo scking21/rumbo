@@ -1,0 +1,29 @@
+# Local question observation (v2 candidate)
+
+A worker can now attach the observation it used to compose a question. This is an **optional cooperative precondition** for the Python Engine, local CLI, and local stdio MCP. It is not authentication, proof of who saw or understood the text, proof of the question's meaning, or human approval. It does not authorize any other operation. Existing clients that omit the observation still record questions against the state at submission. Hosted Sites and remote Python HTTP catalogs are unchanged by this local candidate. For local stdio, call `rumbo_state` with `question_task_id` and optional `related_task_ids`; carry the returned `question_observation` as the optional `observation` input to `rumbo_request_decision`. A valid stale precondition produces an MCP tool error with a structured `STALE_QUESTION` code and conservative reread arguments.
+
+## Ask from the observation, not just the latest revision number
+
+1. In the same project, run `python -m rumbo --root PATH state --question-task outline`. Read the returned snapshot, compose the question, and retain the exact `question_observation` object **from this read**.
+2. With `python -m rumbo --root PATH call request_decision --json '…'`, pass that object unchanged as an additional `observation` field alongside the ordinary `task_id` and `question`. In Python:
+
+   ```python
+   snapshot = worker.observe_question('outline')
+   title = next(t['title'] for t in snapshot['tasks'] if t['id'] == 'outline')
+   worker.execute('request_decision', {
+       'task_id': 'outline', 'question': f'Keep the title “{title}”?',
+       'observation': snapshot['question_observation'],
+   })
+   ```
+
+3. `STALE_QUESTION` appends nothing. Reread and reconsider or recompose the question. Never fetch a fresh token simply to retry stale text; never drop the guard to force a retry. A successful append is **one question**, not a decision. Lost response? Inspect the ledger before considering any retry; this operation is not idempotent.
+
+## Choose context explicitly
+
+- **Default: whole observed project.** Use the default if you cannot justify a complete dependency list from the question you intend to ask. Any ledger event after the read invalidates this observation, including an unrelated request or a sibling-only contract revision. The comparison also covers the entire fresh Engine projection, so a lease expiring or registered artifact drift that changes the projected status/reason can invalidate it even with the same ledger head.
+- **Declared task context (opt in).** If the question depends *only* on the named task(s)' agreed definitions and projected work/acceptance state plus the shared contract terms, Python accepts `worker.observe_question('outline', related_task_ids=[])`. The CLI equivalent is `state --question-task outline --declare-question-context`. The empty list explicitly declares no additional roots. Use `related_task_ids=['index']` or append `--related-task index` for every extra task the question refers to, even one not joined to the target in the contract graph. Each declared root includes its full transitive prerequisite closure. The projection binds task titles, dependencies, acceptance criteria, recorded artifact identity, lease, status and stale reason, latest check/evidence and human-decision event identities, and the shared request, goal, constraints, decision owner, demo flag and revision scope. Intervening edits to these scoped contract definitions or their removal/recreation invalidate the observation even if subsequently reverted. Unrelated project appends and disjoint edits are tolerated only if this actual bound context stays unchanged. A sibling edit that clears the target's active lease is not such an edit.
+- **Do not silently narrow.** If a question mentions another task's heading, declare that task too. If its context includes earlier discussion/requests, a project-wide claim, or you are unsure of task reach, use the default. A worker that falsely declares “target only” can still record an old sibling heading. The Engine does not parse prose or discover undeclared cross-references. Changing a retained observation's declared scope without a corresponding new read will not preserve its digest.
+
+Both modes check inside the SQLite write transaction after lock acquisition and verified replay. The checked client observation and live submission revision are both retained on a successful guarded question. Standard snapshots, legacy unguarded questions, other actions, roles and existing ledger contents are unchanged. No secret, signature or unforgeable read receipt is involved. Content-equal cloned ledger history is not a verified unique installation.
+
+**Filesystem and other boundaries:** The write lock serializes cooperating SQLite ledger writers, not filesystem edits, clocks, other projects or remote services. The whole-project check compares the ledger and its Engine projection, **not the entire project directory**. A changed unregistered file, a local source that was uploaded earlier, facts changed outside Rumbo, or bytes that change while their projected status and recorded identity stay the same are not reliably detected. Do a fresh exact-byte/source check where the question relies on those facts. Neither mode certifies external permissions, continuous filesystem integrity or anything the person actually authorized.

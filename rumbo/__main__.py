@@ -20,6 +20,7 @@ class _ProjectAtCallTime:
         self.root=root;self.actor=actor;self.role=role
     def _engine(self):return Engine(self.root,self.actor,self.role,create=False)
     def snapshot(self):return self._engine().snapshot()
+    def observe_question(self,task_id,*,related_task_ids=None):return self._engine().observe_question(task_id,related_task_ids=related_task_ids)
     def artifact_view(self,arguments):return self._engine().artifact_view(arguments)
     def execute(self,action,arguments):return self._engine().execute(action,arguments)
 
@@ -31,7 +32,11 @@ def main(argv=None):
     parser.add_argument('--actor',default='local-worker',help='Local host principal identity')
     parser.add_argument('--role',choices=['worker','reviewer','viewer'],default='worker')
     sub=parser.add_subparsers(dest='command',required=True)
-    sub.add_parser('state',help='Read project state and hash-chain integrity')
+    state=sub.add_parser('state',help='Read project state and hash-chain integrity')
+    state.add_argument('--question-task',help='Also return a scoped observation to retain while composing a decision question')
+    state.add_argument('--declare-question-context', action='store_true',
+                       help='Assert that the question uses only the target, listed --related-task IDs, their prerequisites and shared contract terms. Otherwise the entire observed project is checked.')
+    state.add_argument('--related-task', action='append', default=[], help='Additional task used by the question; requires --declare-question-context (repeatable)')
     sub.add_parser('verify',help='Read-only verification of an existing event chain and its current checkpoint')
     call=sub.add_parser('call',help='Invoke an agent-safe action with a JSON object')
     call.add_argument('action',choices=['claim_task','submit_artifact','ingest_artifact','run_checks','submit_review','request_decision']);call.add_argument('--json',required=True)
@@ -42,6 +47,9 @@ def main(argv=None):
     serve.add_argument('--config',required=True);serve.add_argument('--host',default='127.0.0.1');serve.add_argument('--port',type=int,default=8765)
     sub.add_parser('demo',help='Create an isolated synthetic sample project; refuses existing contract')
     args=parser.parse_args(argv)
+    if args.command=='state' and ((args.declare_question_context and args.question_task is None)
+                                   or (args.related_task and not args.declare_question_context)):
+        parser.error('--related-task requires --declare-question-context, which requires --question-task')
     try:
         if args.command=='serve':
             config=safe_json(Path(args.config).read_text())
@@ -72,6 +80,8 @@ def main(argv=None):
             engine=Engine(args.root,args.actor,'viewer' if args.command=='verify' else args.role,read_only=args.command=='verify',create=False)
             if args.command=='call':
                 result=engine.execute(args.action,_json(args.json,'--json'))
+            elif args.command=='state' and args.question_task is not None:
+                result=engine.observe_question(args.question_task, related_task_ids=args.related_task if args.declare_question_context else None)
             else:
                 result=engine.checkpoint() if args.command=='verify' else engine.snapshot()
         print(json.dumps(result,indent=2,ensure_ascii=False,allow_nan=False))
