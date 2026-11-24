@@ -1614,8 +1614,9 @@ def _dropped_value_faults(record, pending):
         if named is not None:
             faults.append("%s: RECORD_BAD_REF: %s's words name a value (%s), so the decision may update the check "
                           "rather than drop it: if the user gave a new value, write a check with it that lists %s "
-                          "in replaces; if they only dropped the option, quote just their words that drop it"
-                          % (path, decision["id"], json.dumps(named, ensure_ascii=False), check["id"]))
+                          "in replaces; if they only dropped the option, change %s's quote to just their words "
+                          "that drop it" % (path, decision["id"], json.dumps(named, ensure_ascii=False), check["id"],
+                                            decision["id"]))
             continue
         source = _source_text(record, check)
         old = "\n".join(by_id[ref]["quote"] for ref in dropped_refs)

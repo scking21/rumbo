@@ -14,7 +14,7 @@ miss a scheduling conflict. The record is a memory aid, nothing more.
 - All subcommands: `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/record.py" <sub> --record "<record path>"`.
 - `init --objective TEXT --quote - <<'QUOTE'` — create the record with the goal and the user's own words, then a line with the user's exact words, then a line `QUOTE`; refuses to overwrite. Always pass the user's words through `--quote -` with a quoted heredoc (`<<'QUOTE'`); inside double quotes the shell rewrites `$` amounts and backticks.
 - `validate` — print `RECORD_OK`, or one fault line per problem.
-- `check` — validate, then print `PASS`/`FAIL` per check, `REPLACED` for a check a newer one replaces, and `DROPPED` for one a decision dropped; exit 1 if any check fails.
+- `check` — validate, then print `PASS`/`FAIL` per check, `REPLACED` for a check a newer one replaces, and `DROPPED` for one a decision dropped; exit 1 if any check fails or is unsourced.
 - `show [--max-chars N]` — compact summary; silent when no record exists.
 - `stop-gate` — read the Stop hook input on stdin; block up to three times per session while checks or provenance remain unresolved. A failing or unsourced check that your reply already states (see Stopping) does not block. If the problems are unchanged when you stop again right after a block, the stop passes; at a later turn's stop, unchanged problems get a one-line status block.
 - Exit codes: 0 clean, 1 content problem, 2 tool or I/O problem.
@@ -57,7 +57,7 @@ ask them to decide it again.
 
 ## Sourced values
 
-A check's values must come from the user's quoted words. If you must assume a value (a year, a shortened break), leave it visible (`check` shows it as UNSOURCED) and tell the user plainly that it is your assumption. Never change a value to make a check pass.
+A check's values must come from the user's quoted words. If you must assume a value (a start time, a shortened break), leave it visible (`check` shows it as UNSOURCED) and tell the user plainly that it is your assumption. Never change a value to make a check pass.
 
 When the user later gives a value you assumed, or their own plan replaces the
 one a check was about, add an item with their words and a check with their
@@ -119,8 +119,9 @@ half" is 90, "half an hour" 30); "twenty-minute" for 20;
 exactly; do not convert them yourself. A bare "at 9" does not say morning or
 evening: ask.
 
-Write dates as MM-DD unless the user stated the year; never add a year the user
-did not say; if the dates cross a year boundary, you need the user's years. A
+Write dates as MM-DD unless the user stated the year. Never add a year the
+user did not say, in the record or in what you write: "March 12", not "March
+12, 2027". If the dates cross a year boundary, you need the user's years. A
 `before` failure that says "in the same year" is that case: ask the user.
 
 ## Tell the user
