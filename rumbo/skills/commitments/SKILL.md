@@ -14,7 +14,7 @@ miss a scheduling conflict. The record is a memory aid, nothing more.
 - All subcommands: `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/record.py" <sub> --record "<record path>"`.
 - `init --objective TEXT --quote - <<'QUOTE'` — create the record with the goal and the user's own words, then a line with the user's exact words, then a line `QUOTE`; refuses to overwrite. Always pass the user's words through `--quote -` with a quoted heredoc (`<<'QUOTE'`); inside double quotes the shell rewrites `$` amounts and backticks.
 - `validate` — print `RECORD_OK`, or one fault line per problem.
-- `check` — validate, then print `PASS`/`FAIL` per check, and `REPLACED` for a check a newer one replaces; exit 1 if any check fails.
+- `check` — validate, then print `PASS`/`FAIL` per check, `REPLACED` for a check a newer one replaces, and `DROPPED` for one a decision dropped; exit 1 if any check fails.
 - `show [--max-chars N]` — compact summary; silent when no record exists.
 - `stop-gate` — read the Stop hook input on stdin; block up to three times per session while checks or provenance remain unresolved. A failing or unsourced check that your reply already states (see Stopping) does not block. If the problems are unchanged when you stop again right after a block, the stop passes; at a later turn's stop, unchanged problems get a one-line status block.
 - Exit codes: 0 clean, 1 content problem, 2 tool or I/O problem.
@@ -64,7 +64,12 @@ one a check was about, add an item with their words and a check with their
 values that lists the old check's id in `replaces`. That records the user's
 correction; it is not changing a value to pass. When a decision drops the
 option a check was about, replace that check with the same kind of check for
-what the user chose. A replaced check stays as history and is no longer
+what the user chose. If their choice leaves nothing of that kind to check (a
+speaker's payment deadline once they go without that speaker), record the
+decision as an item that replaces the option's items, quoting just the words
+that drop the option, and set the check's `dropped_by` to that item's id. A
+decision that names a date, time or amount may change the check instead; then
+replace it. A replaced or dropped check stays as history and is no longer
 reported; never delete a check. Do not keep reporting an assumption the user
 has already settled.
 
@@ -78,10 +83,12 @@ Add items and checks by editing the JSON directly, then run `validate`:
 
 ```json
 {"id": "I3", "text": "Maker-space team only", "quote": "I think we should go with just the maker-space team for this workshop.",
- "ref": "E12", "status": "commitment", "scope": "this workshop only", "replaces": []}
+ "ref": "E12", "status": "commitment", "scope": "this workshop only", "replaces": ["I6"]}
 {"id": "C1", "kind": "fits_window", "label": "session schedule", "start": "09:45", "segments_min": [75, 20, 75], "end": "12:30", "refs": ["I1"]}
 {"id": "C4", "kind": "within_budget", "label": "budget with the maker-space team", "amounts": [0, 200], "total_cap": 600,
  "refs": ["I3", "I5"], "replaces": ["C2"]}
+{"id": "C5", "kind": "before", "label": "Dr. Okafor's payment deadline", "first": "03-12", "second": "04-01",
+ "refs": ["I1", "I6"], "dropped_by": "I3"}
 ```
 
 Every item carries the user's verbatim words in `quote`. A newer item or
@@ -144,7 +151,8 @@ session and has said something this session that may take it back (it names
 the item or an earlier decision and uses a word like cancel or instead). Check with
 them. If it changed, add the new item with `replaces`, or set the old one to
 `rejected`. If it still stands, record their confirmation from this session as
-a new item that replaces the old one.
+a new item that replaces the old one. A decision that drops a check counts too:
+if the user takes it back, replace it, and the check comes back.
 
 The gate reads the reply you are about to send. A conflict is stated when one
 line of it names the values that conflict: the time the plan reaches and the

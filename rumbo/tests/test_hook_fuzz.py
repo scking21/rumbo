@@ -4,7 +4,8 @@ A hook that raises shows the user a traceback and, for the Stop gate, lets the
 turn end unchecked. These records and inputs are random but seeded, so a
 failure reproduces: each is malformed in a different way (wrong types, missing
 fields, unknown kinds, bad ids, NaN and huge numbers, replaces cycles, odd
-replies), and every command must still return through its own diagnostics.
+dropped_by decisions, odd replies), and every command must still return
+through its own diagnostics.
 """
 import contextlib
 import io
@@ -59,8 +60,8 @@ class Generator:
             "start": ["09:45", "12:30", "00:00", "23:59", "9:45", "25:00"], "end": ["12:30", "01:00", "9:45"],
             "first": ["03-20", "2026-03-20", "2027-01-01", "02-29", "13-01"], "second": ["03-12", "2026-03-12"],
             "total_cap": [600, 0, -5, 1e308], "item_cap": [300, 0, -1], "replaces": [["C0"], ["C1"], ["C%d" % i], []],
-            "refs": [["I0"], ["I1", "I2"], [], None]}
-        for field in fields + r.sample(["refs", "label", "replaces"], r.randint(0, 3)):
+            "refs": [["I0"], ["I1", "I2"], [], None], "dropped_by": ["I0", "I1", "I2", "", 5, ["I1"]]}
+        for field in fields + r.sample(["refs", "label", "replaces", "dropped_by"], r.randint(0, 4)):
             if r.random() < 0.85:
                 check[field] = r.choice(choices.get(field, []) + [self.value()])
         return check

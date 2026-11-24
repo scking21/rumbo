@@ -14,12 +14,15 @@ import unittest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'scripts'))
 import record
 
+# By path, so the suite runs from any directory, not only the adapter's.
+SCRIPT = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'scripts', 'record.py')
+
 # ---------------------------------------------------------------------- helpers
 
 
 def run_record(args, input_text="", cwd=None, env=None):
     """Run scripts/record.py with given args; return (exitcode, stdout, stderr)."""
-    cmd = [sys.executable, "scripts/record.py"] + args
+    cmd = [sys.executable, SCRIPT] + args
     proc = subprocess.run(
         cmd,
         input=input_text,
@@ -1597,7 +1600,7 @@ class RecordTest(unittest.TestCase):
             kept = self._ledger_bytes()
             current = self._transcript_file(folder, "session-2.jsonl",
                                             "Pick a gem. Approve the sapphire option. Engrave the band")
-            proc = subprocess.run([sys.executable, "scripts/record.py", "stop-gate", "--record", self.record_path],
+            proc = subprocess.run([sys.executable, SCRIPT, "stop-gate", "--record", self.record_path],
                                   input=json.dumps({"session_id": "s2", "transcript_path": current}), text=True,
                                   capture_output=True, env=env, preexec_fn=small_files)
             self.assertIn("LEDGER_UNWRITABLE", json.loads(proc.stdout)["reason"])

@@ -832,10 +832,12 @@ def unsourced_values(record, check):
     return [label for label, _reading, _value in _unsourced(record, check)]
 
 
-def _unsourced(record, check):
+def _unsourced(record, check, source=None):
     """(label, reading, value) for each unsourced value in check; reading names
-    the matcher that reads the value in text (see _says)."""
-    source = _source_text(record, check)
+    the matcher that reads the value in text (see _says). source replaces the
+    check's own source text."""
+    if source is None:
+        source = _source_text(record, check)
     kind = check["kind"]
     unsourced = []
 
@@ -1419,6 +1421,10 @@ def validate_record(record):
             faults.extend(_validate_check_values(base, kind, check))
 
     faults.extend(_validate_check_replaces(checks, check_ids))
+    dropped_faults, pending = _validate_check_dropped(record, checks)
+    faults.extend(dropped_faults)
+    if not faults:
+        faults.extend(_dropped_value_faults(record, pending))
     return faults
 
 
@@ -1504,6 +1510,133 @@ def _on_a_cycle(edges):
 def replaced_checks(record):
     """Ids of checks that a newer check replaces; assumes a valid record."""
     return {ref for check in record.get("checks") or [] for ref in check.get("replaces") or []}
+
+
+def dropped_checks(record):
+    """Ids of checks that a user's decision dropped (dropped_by); assumes a valid record."""
+    return {check["id"] for check in record.get("checks") or [] if check.get("dropped_by") is not None}
+
+
+def retired_checks(record):
+    """Ids of checks no longer in force: replaced by a newer check or dropped by a decision."""
+    return replaced_checks(record) | dropped_checks(record)
+
+
+# A decision that drops an option can leave a check about it nothing to check,
+# such as a speaker's payment deadline once the user goes without that speaker.
+# The check then names the decision in dropped_by. Only a decision in force
+# drops an option, so the check comes back when the user changes the decision.
+DROPPED_STATUSES = ("commitment", "rejected")
+# A decision that names a value of the check's kind may change the check
+# rather than drop it ("Dr. Okafor's slides are now due March 25"), so the
+# words that drop a check name none: no digit, no number word, and no month or
+# weekday for a date, hour or minute for a schedule, or money for a budget.
+# Telling a value the check already has from a new one would need every form
+# the source check reads ("two hundred fifty dollars", "March 20-25",
+# "three-quarter hour"), so any value counts. "one" and "may" alone do not,
+# being as often a pronoun and a verb; beside a number, the number counts.
+VALUE_NUMBER_WORDS = ("zero two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen "
+                      "sixteen seventeen eighteen nineteen twenty thirty forty fifty sixty seventy eighty ninety "
+                      "hundred thousand million billion dozen")
+VALUE_WORDS = {
+    "before": r"jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|june?|july?|aug(?:ust)?|sep(?:t(?:ember)?)?"
+              r"|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?|monday|tuesday|wednesday|thursday|friday|saturday|sunday",
+    "fits_window": r"noon|midnight|hours?|hrs?|minutes?|mins?|quarters?|half|o'?clock",
+    "within_budget": r"free|dollars?|bucks|euros?|pounds?|cents?|grand",
+}
+NAMES_VALUE = {kind: re.compile(r"\d|[$€£¥]|\b(?:%s|%s)\b" % ("|".join(VALUE_NUMBER_WORDS.split()), words)
+                                if kind == "within_budget" else
+                                r"\d|\b(?:%s|%s)\b" % ("|".join(VALUE_NUMBER_WORDS.split()), words),
+                                re.IGNORECASE)
+               for kind, words in VALUE_WORDS.items()}
+
+
+def _validate_check_dropped(record, checks):
+    """Faults in checks' dropped_by, and the drops whose values remain to be read.
+
+    dropped_by names an item with the user's decision: a commitment or a
+    rejection, not replaced, whose replaces lists one of the check's refs. The
+    values are read by _dropped_value_faults once the rest of the record is
+    valid.
+    """
+    faults, pending = [], []
+    items = record.get("items") if isinstance(record.get("items"), list) else []
+    by_id = {item["id"]: item for item in items if isinstance(item, dict) and isinstance(item.get("id"), str)}
+    # Built once, rather than scanning every item again for each dropped check.
+    newer_of = {}
+    for item in by_id.values():
+        for ref in item.get("replaces") if isinstance(item.get("replaces"), list) else ():
+            if isinstance(ref, str) and item["id"] not in newer_of.get(ref, ()):
+                newer_of.setdefault(ref, []).append(item["id"])
+    for index, check in enumerate(checks):
+        if not isinstance(check, dict) or check.get("dropped_by") is None:
+            continue
+        path = "checks[%d].dropped_by" % index
+        decision_id = check["dropped_by"]
+        decision = by_id.get(decision_id) if isinstance(decision_id, str) else None
+        refs = check.get("refs") if isinstance(check.get("refs"), list) else []
+        if decision is None:
+            faults.append("%s: RECORD_BAD_REF: name the id of the item that records the user's decision" % path)
+            continue
+        if not refs:
+            faults.append("%s: RECORD_BAD_REF: list this check's items in refs; the decision must replace one "
+                          "of them" % path)
+            continue
+        replaced = decision.get("replaces") if isinstance(decision.get("replaces"), list) else []
+        dropped_refs = [ref for ref in refs if isinstance(ref, str) and ref in replaced]
+        newer = newer_of.get(decision_id, [])
+        if not dropped_refs:
+            faults.append("%s: RECORD_BAD_REF: %s does not replace any of this check's refs; record the "
+                          "decision as an item that replaces the dropped option's items" % (path, decision_id))
+        elif decision.get("status") not in DROPPED_STATUSES:
+            faults.append("%s: RECORD_BAD_REF: %s has status %s; only a commitment or a rejection drops an "
+                          "option" % (path, decision_id, decision.get("status")))
+        elif newer:
+            faults.append("%s: RECORD_BAD_REF: %s is replaced by %s, so it may no longer drop this option; "
+                          "name the decision in force, or remove dropped_by" % (path, decision_id, ", ".join(newer)))
+        else:
+            pending.append((path, check, decision, dropped_refs))
+    return faults, pending
+
+
+def _dropped_value_faults(record, pending):
+    """Faults for drops that would retire a check still in force; needs a valid record.
+
+    A decision whose words name a value of the check's kind may update the
+    check, and a check none of whose values came only from the items the
+    decision replaced is about the current plan. Either way, dropping it could
+    hide a conflict or an assumption that still holds.
+    """
+    faults = []
+    by_id = {item["id"]: item for item in record.get("items") or []}
+    for path, check, decision, dropped_refs in pending:
+        named = _named_value(check["kind"], decision["quote"])
+        if named is not None:
+            faults.append("%s: RECORD_BAD_REF: %s's words name a value (%s), so the decision may update the check "
+                          "rather than drop it: if the user gave a new value, write a check with it that lists %s "
+                          "in replaces; if they only dropped the option, quote just their words that drop it"
+                          % (path, decision["id"], json.dumps(named, ensure_ascii=False), check["id"]))
+            continue
+        source = _source_text(record, check)
+        old = "\n".join(by_id[ref]["quote"] for ref in dropped_refs)
+        current = [label for label, _reading, _value in _unsourced(record, check, source=source)]
+        with_old = {label for label, _reading, _value in _unsourced(record, check, source=source + "\n" + old)}
+        if not [label for label in current if label not in with_old]:
+            faults.append("%s: RECORD_BAD_REF: no value of this check comes only from the items %s replaced, so "
+                          "it is still about the current plan: resolve it or tell the user, and remove dropped_by"
+                          % (path, decision["id"]))
+    return faults
+
+
+def _named_value(kind, text):
+    """The words around the first value of this kind that text names, or None."""
+    match = NAMES_VALUE[kind].search(text)
+    if match is None:
+        return None
+    # Show the value with the words beside it: "March 20-25", "two hundred fifty".
+    start = text.rfind(" ", 0, match.start()) + 1
+    words = text[start:].split()[:3]
+    return " ".join(words).rstrip(".,;:!?") or match.group(0)
 
 
 def _validate_check_values(base, kind, check):
@@ -1733,7 +1866,7 @@ def status_line(check):
 def failing_checks(record):
     """List of (check, detail) for every failing check, in record order."""
     results = []
-    replaced = replaced_checks(record)
+    replaced = retired_checks(record)
     for check in record.get("checks") or []:
         if check.get("id") in replaced:
             continue
@@ -1767,7 +1900,7 @@ def open_problem_lines(record):
     lines = []
     for check, detail in failing_checks(record):
         lines.append("CONFLICT %s: %s -> %s" % (check["id"], detail, CONFLICT_ACTIONS[check["kind"]]))
-    replaced = replaced_checks(record)
+    replaced = retired_checks(record)
     for check in record.get("checks") or []:
         if check["id"] in replaced:
             continue
@@ -1813,12 +1946,15 @@ def cmd_check(args):
     unsourced_found = False
     replaced = replaced_checks(record)
     for check in record.get("checks") or []:
+        label = (" " + check["label"]) if check.get("label") else ""
         if check["id"] in replaced:
             # History: a newer check of the same kind is in force instead.
             newer = [c["id"] for c in record["checks"] if check["id"] in (c.get("replaces") or [])]
-            print("%s: REPLACED %s%s by %s" % (check["id"], check["kind"],
-                                                (" " + check["label"]) if check.get("label") else "",
-                                                ", ".join(newer)))
+            print("%s: REPLACED %s%s by %s" % (check["id"], check["kind"], label, ", ".join(newer)))
+            continue
+        if check.get("dropped_by") is not None:
+            # History: the user's decision dropped the option this check was about.
+            print("%s: DROPPED %s%s by %s" % (check["id"], check["kind"], label, check["dropped_by"]))
             continue
         passed, detail = evaluate_check(check)
         unsourced = unsourced_values(record, check)
@@ -2253,6 +2389,9 @@ def _stop_gate(args, hook_input):
         changed = False
         items = record.get("items") or []
         replaced = {ref for item in items for ref in item.get("replaces") or []}
+        # A rejection that drops a check is a decision in force, as an approval is:
+        # it needs words recorded for that status, and a later retraction reopens it.
+        dropping = {check["dropped_by"] for check in record.get("checks") or [] if check.get("dropped_by") is not None}
         for path, quote in _quote_paths(record):
             full, core = _fingerprints(record, path)
             match = re.fullmatch(r"items\[(\d+)\]\.quote", path)
@@ -2263,15 +2402,20 @@ def _stop_gate(args, hook_input):
                         ledger[key] = {"session": session_id or "", "seen": datetime.date.today().isoformat()}
                         changed = True
                 continue
-            approval = item is not None and item.get("status") in ("commitment", "authorized")
-            if (full if approval else core) not in ledger:
+            drops = item is not None and item.get("status") == "rejected" and item.get("id") in dropping
+            in_force = item is not None and (item.get("status") in ("commitment", "authorized") or drops)
+            if (full if in_force else core) not in ledger:
                 parts.append(_unverified_line(record, path, messages, folded))
                 continue
             # Verified in an earlier session. That shows the words were said, not
-            # that an approval still stands after this session's messages.
-            if item and item.get("status") in ("commitment", "authorized") and item.get("id") not in replaced:
+            # that an approval or a decision still stands after this session's messages.
+            if in_force and item.get("id") not in replaced:
                 said = _retraction_for(item, messages)
-                if said:
+                if said and drops:
+                    parts.append('%s: EARLIER_APPROVAL: decided in an earlier session, and it drops a check, '
+                                 'but this session the user said "%s"; check it still stands, and replace it '
+                                 'in the record if it changed, so the check comes back' % (path, said))
+                elif said:
                     parts.append('%s: EARLIER_APPROVAL: approved in an earlier session, but this '
                                  'session the user said "%s"; check it still stands, and replace '
                                  'or reject it in the record if it changed' % (path, said))
@@ -2336,7 +2480,7 @@ MAX_BLOCKS = 3
 def record_problems(record):
     """FAIL and UNSOURCED lines, as `check` prints them, and the ids involved."""
     parts, ids = [], []
-    replaced = replaced_checks(record)
+    replaced = retired_checks(record)
     for check in record.get("checks") or []:
         if check["id"] in replaced:
             continue
@@ -2502,7 +2646,7 @@ def stated_checks(record, reply):
         return memo[key]
 
     stated = set()
-    replaced = replaced_checks(record)
+    replaced = retired_checks(record)
     for check in record.get("checks") or []:
         if check["id"] in replaced:
             continue
