@@ -8,6 +8,7 @@ Exit codes: 0 clean, 1 content problem, 2 tool or I/O problem.
 import argparse
 import decimal
 import datetime
+import functools
 import hashlib
 import json
 import math
@@ -1072,31 +1073,49 @@ def _fold(text):
 NEGATION = re.compile(r"\b(?:not|no|never|\w+n't|dont|cannot|without|avoid|neither|nor|nobody|none|nothing)\b", re.IGNORECASE)
 
 
+@functools.lru_cache(maxsize=4096)
+def _quote_pattern(quote):
+    return re.compile(r"(?<!\w)(?<!\d[.,])" + re.escape(quote) + r"(?!\w|[.,]\d)")
+
+
 def _quote_in(quote, message, ignore_negation=False):
     """True when quote occurs in message as whole tokens and is not negated in its clause.
 
     Lexical, not semantic: "$900" does not match inside "$9000" or "$900.50", and
     "spend $900" does not match "Do not spend $900".
+    The Stop gate tries every quote against every message of a session, so a
+    message that does not contain the quote's text is rejected by a substring
+    test before any pattern runs, and each match looks only at the characters
+    before it that can change the answer.
     """
-    if not quote:
+    if not quote or quote not in message:
         return False
-    pattern = r"(?<!\w)(?<!\d[.,])" + re.escape(quote) + r"(?!\w|[.,]\d)"
-    for match in re.finditer(pattern, message):
+    for match in _quote_pattern(quote).finditer(message):
+        start = match.start()
         # A sign in front of a quoted number changes its value: "-$900" is not "$900".
-        if re.search(r"(?:^|[^\d])[-\u2212]\$?$", message[:match.start()]):
+        # Four characters hold what precedes the sign, the sign, an optional "$" and
+        # a newline, before which "$" also matches.
+        if re.search(r"(?:^|[^\d])[-\u2212]\$?$", message[max(0, start - 4):start]):
             continue
-        clause = re.split(r"[.!?;:\n]", message[:match.start()])[-1]
-        if ignore_negation or not NEGATION.search(clause[-40:]):
+        # The clause's last 40 characters: what follows the last clause break among them.
+        clause = re.split(r"[.!?;:\n]", message[max(0, start - 40):start])[-1]
+        if ignore_negation or not NEGATION.search(clause):
             return True
     return False
 
 
-def _unverified_line(record, path, messages):
-    """The UNVERIFIED diagnostic for path, saying whether a negation or absence caused it."""
+def _unverified_line(record, path, messages, folded=None):
+    """The UNVERIFIED diagnostic for path, saying whether a negation or absence caused it.
+
+    folded, when given, is messages already passed through _fold, so a caller
+    reporting many quotes folds each message once.
+    """
     match = re.fullmatch(r"items\[(\d+)\]\.quote", path)
     source = record["items"][int(match.group(1))] if match else record["objective"]
     quote = _fold(source.get("quote") or "")
-    if any(_quote_in(quote, _fold(message), ignore_negation=True) for message in messages):
+    if folded is None:
+        folded = [_fold(message) for message in messages]
+    if any(_quote_in(quote, message, ignore_negation=True) for message in folded):
         return ("%s: UNVERIFIED: these words follow a negation in the same clause of the user's "
                 "message; if the user did say this, quote the whole sentence" % path)
     return "%s: UNVERIFIED: quote not found in the user's messages" % path
@@ -1833,8 +1852,9 @@ def cmd_check(args):
             return 2
         unverified = unverified_quotes(record, messages)
         if unverified:
+            folded = [_fold(message) for message in messages]
             for path in unverified:
-                print(_unverified_line(record, path, messages))
+                print(_unverified_line(record, path, messages, folded))
             return 1
 
     return 1 if (failed or unsourced_found) else 0
@@ -2225,6 +2245,7 @@ def _stop_gate(args, hook_input):
                      "the harness or disclose that provenance is unverified")
     else:
         unverified = set(unverified_quotes(record, messages))
+        folded = [_fold(message) for message in messages] if unverified else []
         saved = _read_ledger(args.record)
         if saved is None:
             ledger_parts.append(LEDGER_UNREADABLE)
@@ -2244,7 +2265,7 @@ def _stop_gate(args, hook_input):
                 continue
             approval = item is not None and item.get("status") in ("commitment", "authorized")
             if (full if approval else core) not in ledger:
-                parts.append(_unverified_line(record, path, messages))
+                parts.append(_unverified_line(record, path, messages, folded))
                 continue
             # Verified in an earlier session. That shows the words were said, not
             # that an approval still stands after this session's messages.
