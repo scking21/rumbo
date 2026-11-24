@@ -15,7 +15,16 @@ This builds on [Claude adapter 0.3.14](UPDATE-2026-11-24-dropped-checks.md). It 
 
 ## Evidence
 
-Pending: two `08-dropped-option` sessions on this version, counted for replies that name a year.
+Two `08-dropped-option` sessions on this version (sonnet, run one at a time with `scripts/claude_multiturn_eval.py --grade`) are compared with the six earlier sessions of that case, counting any year from 2026 to 2029 in the replies and in `plan.md`:
+
+| | 0.3.13 and 0.3.14 | 0.3.15 |
+| --- | --- | --- |
+| Sessions whose replies and `plan.md` name a year the user did not give | 5 of 6 | 0 of 2 |
+| All 4 graders passed | 2 of 6 | 2 of 2 |
+| Check retired with `dropped_by` | 3 of 3 on 0.3.14 | 2 of 2 |
+| Stop blocks | 1, on 0.3.13 | 0 |
+
+Two sessions are a small sample: this shows the new wording is followed, not a measured rate. Neither session hit the `dropped_by` refusal, since the user's decision named no value, so the new refusal wording was not exercised live; `test_a_decision_that_names_a_value_may_update_the_check` covers it.
 
 ## Verification and rollback
 
