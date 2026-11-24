@@ -2389,6 +2389,9 @@ def _stop_gate(args, hook_input):
         changed = False
         items = record.get("items") or []
         replaced = {ref for item in items for ref in item.get("replaces") or []}
+        # A rejection that drops a check is a decision in force, as an approval is:
+        # it needs words recorded for that status, and a later retraction reopens it.
+        dropping = {check["dropped_by"] for check in record.get("checks") or [] if check.get("dropped_by") is not None}
         for path, quote in _quote_paths(record):
             full, core = _fingerprints(record, path)
             match = re.fullmatch(r"items\[(\d+)\]\.quote", path)
@@ -2399,15 +2402,20 @@ def _stop_gate(args, hook_input):
                         ledger[key] = {"session": session_id or "", "seen": datetime.date.today().isoformat()}
                         changed = True
                 continue
-            approval = item is not None and item.get("status") in ("commitment", "authorized")
-            if (full if approval else core) not in ledger:
+            drops = item is not None and item.get("status") == "rejected" and item.get("id") in dropping
+            in_force = item is not None and (item.get("status") in ("commitment", "authorized") or drops)
+            if (full if in_force else core) not in ledger:
                 parts.append(_unverified_line(record, path, messages, folded))
                 continue
             # Verified in an earlier session. That shows the words were said, not
-            # that an approval still stands after this session's messages.
-            if item and item.get("status") in ("commitment", "authorized") and item.get("id") not in replaced:
+            # that an approval or a decision still stands after this session's messages.
+            if in_force and item.get("id") not in replaced:
                 said = _retraction_for(item, messages)
-                if said:
+                if said and drops:
+                    parts.append('%s: EARLIER_APPROVAL: decided in an earlier session, and it drops a check, '
+                                 'but this session the user said "%s"; check it still stands, and replace it '
+                                 'in the record if it changed, so the check comes back' % (path, said))
+                elif said:
                     parts.append('%s: EARLIER_APPROVAL: approved in an earlier session, but this '
                                  'session the user said "%s"; check it still stands, and replace '
                                  'or reject it in the record if it changed' % (path, said))

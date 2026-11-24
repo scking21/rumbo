@@ -151,7 +151,8 @@ session and has said something this session that may take it back (it names
 the item or an earlier decision and uses a word like cancel or instead). Check with
 them. If it changed, add the new item with `replaces`, or set the old one to
 `rejected`. If it still stands, record their confirmation from this session as
-a new item that replaces the old one.
+a new item that replaces the old one. A decision that drops a check counts too:
+if the user takes it back, replace it, and the check comes back.
 
 The gate reads the reply you are about to send. A conflict is stated when one
 line of it names the values that conflict: the time the plan reaches and the

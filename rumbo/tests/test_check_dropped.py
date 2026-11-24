@@ -264,6 +264,45 @@ class DroppedCheckTests(unittest.TestCase):
         self.write([])
         self.assertIn("C1: check was failing and has been removed from the record", self.stop())
 
+    def session(self, session_id, *texts):
+        """Run the Stop gate for a session whose transcript holds texts."""
+        transcript = os.path.join(self.tmp.name, "%s.jsonl" % session_id)
+        with open(transcript, "w", encoding="utf-8") as handle:
+            for text in texts:
+                handle.write(json.dumps({"type": "user", "origin": {"kind": "human"},
+                                         "message": {"role": "user", "content": text}}) + "\n")
+        code, out, err = self.run_record(["stop-gate"], json.dumps(
+            {"session_id": session_id, "transcript_path": transcript, "last_assistant_message": "Done."}))
+        self.assertEqual((code, err), (0, ""))
+        return json.loads(out)["reason"] if out.strip() else None
+
+    def test_a_rejection_that_drops_a_check_is_reopened_when_a_later_session_takes_it_back(self):
+        # Review of this change: an earlier session's rejection kept the check
+        # dropped after the user took it back, because only approvals were
+        # checked for a retraction.
+        rejection = "No, let's not use Dr. Okafor."
+        items = document([])["items"]
+        items[2] = item("I3", rejection, "rejected", replaces=["I2"])
+        self.write([DROPPED], items)
+        self.assertIsNone(self.session("s1", *(SAID[:3] + [rejection])))
+        self.assertIsNone(self.session("s2", "Now draft the invitation."))
+        reason = self.session("s3", "I've changed my mind: use Dr. Okafor instead.")
+        self.assertIn("items[2].quote: EARLIER_APPROVAL: decided in an earlier session, and it drops a check", reason)
+        self.assertIn("I've changed my mind: use Dr. Okafor instead.", reason)
+
+    def test_an_earlier_approval_turned_into_a_rejection_cannot_drop_a_check_by_itself(self):
+        # The words were recorded for a commitment; dropping a check as a
+        # rejection needs words recorded for that, in this session or earlier.
+        items = document([])["items"]
+        self.write([SLIDES], [items[0], items[1], item("I3", CHOICE), items[3]])
+        self.assertIsNotNone(self.session("s1", *SAID))
+        items[2] = item("I3", CHOICE, "rejected", replaces=["I2"])
+        self.write([DROPPED], items)
+        reason = self.session("s2", "Now draft the invitation.")
+        self.assertIn("items[2].quote: UNVERIFIED", reason)
+        # Said again in this session, the words verify the rejection.
+        self.assertIsNone(self.session("s3", CHOICE))
+
     def test_the_live_session_record_drops_its_payment_deadline(self):
         # The record from the live session, reduced to the dropped deadline.
         items = [item("I1", "It's the morning of March 12."),
