@@ -126,6 +126,52 @@ class DroppedValidationTests(unittest.TestCase):
         items[2] = item("I3", "Let's go with the maker-space team for the March 12 workshop.", replaces=["I2"])
         self.assertEqual(self.faults([DROPPED], items), [])
 
+    def test_a_new_year_or_a_date_in_another_form_is_a_new_value(self):
+        # Review of this change: only the month and day were compared, so a
+        # decision that moved a deadline to another year dropped the check, and
+        # "03-25" was not read as a date at all.
+        dated = dict(DROPPED, first="2026-03-20", second="2026-03-12")
+        okafor = "Dr. Okafor says the foundation must approve his slides by March 20, 2026."
+        cases = [
+            (dated, "Dr. Okafor now needs slide approval by March 20, 2027.", '"March 20, 2027"'),
+            (dated, "Go with the maker-space team for the March 12, 2026 workshop.", None),
+            # A year the check does not have is new, even on a year-less date.
+            (DROPPED, "Go with the maker-space team for the March 12, 2026 workshop.", '"March 12, 2026"'),
+            (DROPPED, "Dr. Okafor's slides are now due 03-25.", '"03-25"'),
+            (DROPPED, "Go with the maker-space team; forget the 03-20 approval.", None),
+            (DROPPED, "Dr. Okafor's slides are now due 3/25/2027.", '"3/25/2027"'),
+        ]
+        for check, decision, given in cases:
+            with self.subTest(decision=decision):
+                items = [item("I1", "It's the morning of March 12, 2026"), item("I2", okafor, "uncertain"),
+                         item("I3", decision, replaces=["I2"])]
+                faults = self.faults([check], items)
+                if given is None:
+                    self.assertEqual(faults, [])
+                else:
+                    self.assertEqual(len(faults), 1, faults)
+                    self.assertIn("I3 gives %s, which this check does not have" % given, faults[0])
+
+    def test_a_duration_is_read_whole(self):
+        okafor = item("I2", "Dr. Okafor arrives at 10:15 and can do 1 hour 15 minutes.", "uncertain")
+        schedule = {"id": "C1", "kind": "fits_window", "start": "10:15", "end": "12:30", "segments_min": [75],
+                    "refs": ["I1", "I2"], "dropped_by": "I3"}
+        cases = [
+            ("Go with the maker-space team for 1 hour 15 minutes.", None),
+            ("Go with the maker-space team; keep it to 75 minutes.", None),
+            ("Go with the maker-space team for a 2h30 session.", '"2h30"'),
+            ("Go with the maker-space team for an hour and a half.", '"an hour and a half"'),
+            ("Go with the maker-space team from the 2 houses nearby.", None),
+        ]
+        for decision, given in cases:
+            with self.subTest(decision=decision):
+                faults = self.faults([schedule], [item("I1", OBJECTIVE), okafor, item("I3", decision, replaces=["I2"])])
+                if given is None:
+                    self.assertEqual(faults, [])
+                else:
+                    self.assertEqual(len(faults), 1, faults)
+                    self.assertIn("I3 gives %s, which this check does not have" % given, faults[0])
+
     def test_a_check_whose_values_all_stay_in_force_is_still_about_the_plan(self):
         # The printer deadline also names I2, but none of its values came from it.
         printer = {"id": "C2", "kind": "before", "label": "handouts before the workshop", "first": "03-01",

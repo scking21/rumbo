@@ -1532,14 +1532,22 @@ MONTH_WORD = (r"(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|ju
 # Values of each kind of check, as a decision's words give them. A decision that
 # gives one the check does not have is an update, which a newer check records.
 GIVEN_VALUES = {
+    # A date keeps the year written after it ("March 20, 2027"), and "03-20" and
+    # "3/20/2027" are dates as the source check reads them.
     "before": re.compile(
-        rf"\b{MONTH_WORD}\s*\d{{1,2}}(?:st|nd|rd|th)?\b"
-        rf"|(?<![\d/.:-])\d{{1,2}}(?:st|nd|rd|th)?\s+(?:of\s+)?{MONTH_WORD}"
-        r"|(?<![\d/.:-])\d{1,2}/\d{1,2}(?![\d/])|\b\d{4}-\d{2}-\d{2}\b", re.IGNORECASE),
+        rf"\b{MONTH_WORD}\s*\d{{1,2}}(?:st|nd|rd|th)?\b(?:,?\s+\d{{4}}\b)?"
+        rf"|(?<![\d/.:-])\d{{1,2}}(?:st|nd|rd|th)?\s+(?:of\s+)?{MONTH_WORD}(?:,?\s+\d{{4}}\b)?"
+        r"|(?<![\d/.:-])\d{1,2}/\d{1,2}(?:/\d{4}|/\d{2})?(?![\d/])|\b\d{4}-\d{2}-\d{2}\b"
+        r"|\b(?:0[1-9]|1[0-2])-(?:0[1-9]|[12]\d|3[01])\b", re.IGNORECASE),
+    # A duration is read whole ("1 hour 15 minutes", "an hour and a half", "2h30").
     "fits_window": re.compile(
         r"(?<![\d:])\d{1,2}:\d{2}(?![\d:])(?:\s*[ap]\.?\s*m\b\.?)?|(?<![\d:.$])\d{1,2}\s*[ap]\.?\s*m\b\.?"
-        r"|\b(?:noon|midnight)\b|(?<![\d.])\d+(?:\.\d+)?[\s-]*(?:hours?|hrs?|minutes?|mins?|h|m)\b"
-        rf"|\b(?:{NUMBER_WORD}|an?|half(?:\s+an?)?)[\s-]+(?:hours?|hrs?|minutes?|mins?)\b", re.IGNORECASE),
+        r"|\b(?:noon|midnight)\b|(?<![\d.])\d+(?:\.\d+)?\s?h(?:\d{1,2}m?)?\b|(?<![\d.])\d+\s?m\b"
+        r"|(?<![\d.])\d+(?:\.\d+)?[\s-]*(?:hours?|hrs?)\b"
+        r"(?:\s*(?:and\s+)?\d{1,2}[\s-]*(?:minutes?|mins?)\b|\s+and\s+a\s+(?:half|quarter)\b)?"
+        r"|(?<![\d.])\d+(?:\.\d+)?[\s-]*(?:minutes?|mins?)\b"
+        rf"|\b(?:{NUMBER_WORD}|an?|half(?:\s+an?)?)[\s-]+(?:hours?|hrs?|minutes?|mins?)\b"
+        r"(?:\s+and\s+a\s+(?:half|quarter)\b)?", re.IGNORECASE),
     "within_budget": re.compile(
         r"[$€£]\s*\d[\d,]*(?:\.\d+)?(?:\s*(?:k|m|bn|thousand|million|billion)\b)?"
         r"|(?<![\d.,])\d[\d,]*(?:\.\d+)?\s*(?:k|thousand|million|billion|dollars?|usd|euros?|pounds?|bucks)\b"
@@ -1637,7 +1645,14 @@ def _has_check_value(check, token):
     """True when token, a value read on its own, is one of the check's values."""
     kind = check["kind"]
     if kind == "before":
-        return any(_is_date_sourced(check[field], token)[0] for field in ("first", "second"))
+        # A year the decision states must be the check's own: "March 20, 2027"
+        # is neither the check's 2026-03-20 nor its year-less 03-20.
+        states_year = re.search(r"(?<!\d)\d{4}(?!\d)|/\d{2}$", token) is not None
+        for field in ("first", "second"):
+            month_day, year = _is_date_sourced(check[field], token)
+            if month_day and (year or not states_year):
+                return True
+        return False
     if kind == "fits_window":
         return (any(_is_time_sourced(check[field], token) for field in ("start", "end"))
                 or any(_is_minutes_sourced(minutes, token) for minutes in check["segments_min"]))
