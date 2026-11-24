@@ -23,7 +23,7 @@ run without --allow-shell; run it in a container or VM you can discard.
 The summary counts the Stop hook's blocks, the replies that named a record id
 such as C5 to the user, and each session's cost. --grade also runs the case's
 graders on the file they focus on (plan.md) with a judge model, majority of
-three votes. Results are small samples; compare arms over several runs.
+three votes; an incomplete session is not graded. Results are small samples; compare arms over several runs.
 """
 import argparse
 import concurrent.futures
@@ -152,7 +152,9 @@ def main(argv=None):
         row = dict(case=case, run=n, **run_session(case, plugin, args.model, out))
         blocks, naming = read_session(os.path.join(out, "transcript.jsonl"))
         row.update(blocks=[{"turn": turn, "reason": reason} for turn, reason in blocks], naming_ids=naming)
-        if args.grade:
+        # An incomplete session has no final artifact to judge, and judging a
+        # partial one would mix unfinished cases into the comparison.
+        if args.grade and not row["failure"]:
             row["graders"] = grade(case, os.path.join(out, "project"), args.judge_model)
         return row
 

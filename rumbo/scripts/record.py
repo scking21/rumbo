@@ -1410,7 +1410,9 @@ def _validate_check_replaces(checks, check_ids):
     checked; refusing it keeps the newest check of every chain in force.
     """
     faults = []
-    kinds = {check.get("id"): check.get("kind") for check in checks if isinstance(check, dict)}
+    # Only string ids can be replaced; validate_record reports any other id.
+    kinds = {check["id"]: check.get("kind") for check in checks
+             if isinstance(check, dict) and isinstance(check.get("id"), str)}
     edges = {}
     for index, check in enumerate(checks):
         if not isinstance(check, dict) or check.get("replaces") is None:
@@ -1431,7 +1433,7 @@ def _validate_check_replaces(checks, check_ids):
                 edges.setdefault(check["id"], []).append(ref_id)
     cyclic = _on_a_cycle(edges)
     for index, check in enumerate(checks):
-        if isinstance(check, dict) and check.get("id") in cyclic:
+        if isinstance(check, dict) and isinstance(check.get("id"), str) and check["id"] in cyclic:
             faults.append("checks[%d].replaces: RECORD_BAD_REF: replaces must not form a cycle" % index)
     return faults
 
@@ -2343,12 +2345,16 @@ ORDER_WORDS = re.compile(r"\b(?:after|later|past|but|conflicts?|conflicting|too 
 OVER_WORDS = re.compile(r"\b(?:over|overruns?|exceeds?|exceeded|exceeding|past|after|late|later|longer|"
                         r"too long|too much|more than|above|beyond|short|conflicts?|conflicting)\b", re.IGNORECASE)
 # Words that call a value the agent's own. A section (see _sections) that has
-# one covers the values in it; a question mark covers only its own line. After
-# "you" or "your" they give the value to the user ("the $15 you suggested"),
-# which is the claim an unsourced value contradicts, so they do not count there.
-ASSUMPTION_WORDS = re.compile(r"(?<!\byou )(?<!\byour )\b(?:assum\w*|estimat\w*|est\.|guess\w*|propos\w*|"
-                              r"suggest\w*|placeholders?|unconfirmed|not (?:yet )?confirmed|please confirm|"
-                              r"not yours)", re.IGNORECASE)
+# one covers the values in it; a question mark covers only its own line.
+ASSUMPTION_WORDS = re.compile(r"\b(?:assum\w*|estimat\w*|est\.|guess\w*|propos\w*|suggest\w*|placeholders?|"
+                              r"unconfirmed|not (?:yet )?confirmed|please confirm|not yours)", re.IGNORECASE)
+# After "you" or "your" and at most two more words, those words give the value
+# to the user ("the $15 you suggested", "your earlier estimate"), which is the
+# claim an unsourced value contradicts, so they do not count there.
+USERS_WORDS = re.compile(r"\b(?:you|your|you've|you'd|you're|yours)\b(?:\W+\w+){0,2}\W*$", re.IGNORECASE)
+# 0 written as a number or a word; the source check counts 0 as always sourced,
+# but a reply that never says it has not stated a cap of 0.
+EXPLICIT_ZERO = re.compile(r"(?<![\d.,:])0+(?:\.0+)?(?![\d.,:]?\d)|\bzero\b", re.IGNORECASE)
 # Bounds that keep a long reply inside the hook timeout. Text past them is not
 # read, so it can only leave a problem unstated: the gate then blocks as before.
 STATED_MAX_CHARS = 20000
@@ -2385,12 +2391,18 @@ def _says(reading, value, line):
     if reading == "minutes phrase":
         return _minutes_phrase(value, line)
     if reading == "number":
-        return _is_number_sourced(value, line)
+        return EXPLICIT_ZERO.search(line) is not None if value == 0 else _is_number_sourced(value, line)
     if reading == "order":
         return ORDER_WORDS.search(line) is not None
     if reading == "over":
         return OVER_WORDS.search(line) is not None
     return False
+
+
+def _calls_own(line):
+    """True when line calls a value the agent's own, not one it gives to the user."""
+    return any(not USERS_WORDS.search(line[max(0, match.start() - 60):match.start()])
+               for match in ASSUMPTION_WORDS.finditer(line))
 
 
 def _conflict_ways(check):
@@ -2456,7 +2468,7 @@ def stated_checks(record, reply):
     sections = _sections(lines)
     cued = set()
     for index, (first, last) in enumerate(sections):
-        if any(ASSUMPTION_WORDS.search(line) for line in lines[first:last]):
+        if any(_calls_own(line) for line in lines[first:last]):
             cued.update(range(first, last))
             if index == 0 and not lines[0].lstrip().startswith("#"):
                 cued.update(range(len(lines)))

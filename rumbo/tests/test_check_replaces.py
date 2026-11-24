@@ -67,6 +67,17 @@ class ReplacesValidationTests(unittest.TestCase):
         # A check that replaces a cycle member is not itself on the cycle.
         self.assertEqual(len(self.faults(*loop, budget("D", [1], replaces=["A"]))), 3)
 
+    def test_an_id_that_is_not_a_string_is_reported_not_a_crash(self):
+        # Review of this change: an unhashable id raised TypeError while the
+        # kinds were collected, instead of the fault validate already reports.
+        for bad_id in (["C1"], {"id": "C1"}, 7, None):
+            with self.subTest(bad_id=bad_id):
+                faults = self.faults(dict(OKAFOR, id=bad_id), MAKER)
+                self.assertIn("checks[1].replaces[0]: RECORD_BAD_REF: replace the id of another check in checks", faults)
+                self.assertTrue(any(fault.startswith("checks[0].id: RECORD_MISSING_FIELD") for fault in faults), faults)
+        self.assertEqual(self.faults(dict(OKAFOR, id=["C1"]), dict(MAKER, replaces=[["C1"]]))[-1],
+                         "checks[1].replaces[0]: RECORD_BAD_REF: replace the id of another check in checks")
+
     def test_a_long_chain_is_checked_in_linear_time(self):
         # Every hook validates the record. A search from each check took
         # seconds for a few thousand chained checks, against a 10 s timeout.
