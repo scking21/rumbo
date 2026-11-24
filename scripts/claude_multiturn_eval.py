@@ -26,6 +26,12 @@ graders: an llm grader judges the file it focuses on (plan.md), or for
 `focus: trace` the assistant's replies, with a judge model and the majority
 of three votes; a file_exists grader globs its path in the project. An
 incomplete session is not graded. Results are small samples; compare arms over several runs.
+
+--regrade DIR grades the complete sessions of an earlier run again with each
+case's current graders, as a run with --grade would, without running any
+session, and rewrites DIR/summary.json; use it after adding or changing a
+grader. Run it from the directory the run started in, since the summary keeps
+case paths as given.
 """
 import argparse
 import concurrent.futures
@@ -182,10 +188,45 @@ def grade(case, project, transcript, judge):
     return verdicts
 
 
+def regrade(folder, judge):
+    """Grade an earlier run's complete sessions again with each case's current graders."""
+    path = os.path.join(folder, "summary.json")
+    with open(path, encoding="utf-8") as handle:
+        summary = json.load(handle)
+    for row in summary["sessions"]:
+        # As in a run: an incomplete session is not graded, while a complete one
+        # without a transcript still is (its trace graders report MISSING).
+        if row.get("failure"):
+            continue
+        if not os.path.isdir(os.path.join(row["case"], "graders")):
+            print("%s run %d: no graders at %s; run --regrade from where the run started" % (
+                os.path.basename(os.path.normpath(row["case"])), row["run"], row["case"]), file=sys.stderr)
+            continue
+        out = os.path.join(folder, "%s-%d" % (os.path.basename(os.path.normpath(row["case"])), row["run"]))
+        row["graders"] = grade(row["case"], os.path.join(out, "project"), row.get("transcript"), judge)
+    with open(path, "w", encoding="utf-8") as handle:
+        json.dump(summary, handle, indent=1)
+    report(summary["sessions"])
+    return 0
+
+
+def report(rows):
+    for row in rows:
+        graded = row.get("graders")
+        print("%s run %d: %d turns, $%.3f, %d Stop blocks at turns %s, record ids named at turns %s%s%s" % (
+            os.path.basename(os.path.normpath(row["case"])), row["run"], row["turns"], row["cost"] or 0,
+            len(row["blocks"]), [b["turn"] for b in row["blocks"]], row["naming_ids"],
+            "" if graded is None else ", graders %d/%d" % (
+                list(graded.values()).count("PASS"), len([v for v in graded.values() if v != "SKIPPED"])),
+            "" if not row["failure"] else ", INCOMPLETE (%s)" % row["failure"]))
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    parser.add_argument("cases", nargs="+", help="eval case directories holding prompt.md")
-    parser.add_argument("--out", required=True, help="new or empty directory for sessions and summary.json")
+    parser.add_argument("cases", nargs="*", help="eval case directories holding prompt.md")
+    parser.add_argument("--out", help="new or empty directory for sessions and summary.json")
+    parser.add_argument("--regrade", metavar="DIR",
+                        help="grade an earlier run's sessions in DIR again instead of running sessions")
     parser.add_argument("--plugin-dir", default=os.path.join(os.path.dirname(__file__), os.pardir, "rumbo"))
     parser.add_argument("--model", default="sonnet")
     parser.add_argument("--runs", type=int, default=1)
@@ -196,6 +237,14 @@ def main(argv=None):
     parser.add_argument("--allow-shell", action="store_true",
                         help="required: the agent under test runs shell commands without asking")
     args = parser.parse_args(argv)
+    if args.regrade:
+        if args.cases or args.out:
+            parser.error("--regrade takes the run's directory only, no cases or --out")
+        if shutil.which("claude") is None:
+            parser.error("the claude CLI is not on PATH")
+        return regrade(args.regrade, args.judge_model)
+    if not args.cases or not args.out:
+        parser.error("give the case directories and --out, or --regrade DIR")
     if not args.allow_shell:
         parser.error("--allow-shell is required; the agent under test runs shell commands without asking")
     if shutil.which("claude") is None:
@@ -230,14 +279,7 @@ def main(argv=None):
         rows = list(pool.map(one, jobs))
     with open(os.path.join(args.out, "summary.json"), "w", encoding="utf-8") as handle:
         json.dump({"plugin": plugin, "model": args.model, "sessions": rows}, handle, indent=1)
-    for row in rows:
-        graded = row.get("graders")
-        print("%s run %d: %d turns, $%.3f, %d Stop blocks at turns %s, record ids named at turns %s%s%s" % (
-            os.path.basename(os.path.normpath(row["case"])), row["run"], row["turns"], row["cost"] or 0,
-            len(row["blocks"]), [b["turn"] for b in row["blocks"]], row["naming_ids"],
-            "" if graded is None else ", graders %d/%d" % (
-                list(graded.values()).count("PASS"), len([v for v in graded.values() if v != "SKIPPED"])),
-            "" if not row["failure"] else ", INCOMPLETE (%s)" % row["failure"]))
+    report(rows)
     return 0
 
 

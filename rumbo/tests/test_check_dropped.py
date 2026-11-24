@@ -320,6 +320,52 @@ class DroppedCheckTests(unittest.TestCase):
 
 
 class DroppedFuzzTests(unittest.TestCase):
+    def test_random_decisions_on_valid_records_follow_the_rule(self):
+        # The hook fuzz test rarely writes a valid record, so it never reaches
+        # the value rule. Seeded, so a failure reproduces.
+        import random
+        import time
+        rng = random.Random(20261124)
+        plain = ["I think we should go with just the maker-space team", "No, let's not use Dr. Okafor",
+                 "Let's go with the other option instead", "We may go with the maker-space one",
+                 "Drop Dr. Okafor from the plan", "Go with the team that one of them leads"]
+        every = {"before", "fits_window", "within_budget"}
+        # Each phrase with the kinds of check for which it names a value.
+        valued = [("by March 25", every), ("at 9:45", every), ("for $200", every), ("on 03-25", every),
+                  ("2 tables", every), ("two hundred dollars", every), ("for three-quarter hour", every),
+                  ("March 20\u201325", every), ("1e3", every), ("until noon", {"fits_window"}),
+                  ("on Friday", {"before"}), ("it's free", {"within_budget"})]
+        noise = [", ", " and ", "; ", " \u2014 ", "\u00a0", " (really) ", "\u2019s", "\U0001F600"]
+        checks = {
+            "before": dict(SLIDES, dropped_by="I3"),
+            "fits_window": {"id": "C1", "kind": "fits_window", "start": "10:15", "end": "12:30",
+                            "segments_min": [60], "refs": ["I1", "I2"], "dropped_by": "I3"},
+            "within_budget": {"id": "C1", "kind": "within_budget", "amounts": [350], "total_cap": 600,
+                              "refs": ["I1", "I2"], "dropped_by": "I3"},
+        }
+        options = {"before": OKAFOR, "fits_window": "Dr. Okafor arrives at 10:15 and can do 60 minutes.",
+                   "within_budget": "Dr. Okafor needs $350 for travel."}
+        started = time.monotonic()
+        for case in range(600):
+            kind = rng.choice(sorted(checks))
+            parts, names_value = [rng.choice(plain)], False
+            for _ in range(rng.randint(0, 3)):
+                parts.append(rng.choice(noise))
+                phrase, kinds = rng.choice(valued + [(text, set()) for text in plain])
+                parts.append(phrase)
+                names_value = names_value or kind in kinds
+            decision = "".join(parts) + rng.choice([".", "!", "", "..."])
+            items = [item("I1", OBJECTIVE), item("I2", options[kind], "uncertain"),
+                     item("I3", decision, rng.choice(["commitment", "rejected"]), replaces=["I2"])]
+            with self.subTest(case=case, kind=kind, decision=decision):
+                faults = record.validate_record(document([dict(checks[kind])], items))
+                if names_value:
+                    self.assertEqual(len(faults), 1, faults)
+                    self.assertIn("words name a value", faults[0])
+                else:
+                    self.assertEqual(faults, [])
+        self.assertLess(time.monotonic() - started, 5)
+
     def test_validation_never_crashes_on_odd_dropped_by_records(self):
         base = document([DROPPED])
         oddities = [None, 0, "I3", "I2", "I1", "", [], {}, ["I3"], float("nan")]
