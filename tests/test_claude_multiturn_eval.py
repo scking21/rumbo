@@ -93,7 +93,8 @@ class RunnerTests(unittest.TestCase):
         summary = self.summary()
         good = summary["sessions"][0]
         summary["sessions"] = [dict(good, run=2, failure="turn 2: You've hit your limit"),
-                               dict(good, run=3, case=os.path.join(self.tmp.name, "gone")), good]
+                               dict(good, run=3, case=os.path.join(self.tmp.name, "gone")), good,
+                               dict(good, transcript=None)]
         with open(os.path.join(self.out, "summary.json"), "w", encoding="utf-8") as handle:
             json.dump(summary, handle)
         done = self.runner("--regrade", self.out)
@@ -103,6 +104,9 @@ class RunnerTests(unittest.TestCase):
         self.assertNotIn("graders", rows[0])
         self.assertNotIn("graders", rows[1])
         self.assertEqual(rows[2]["graders"], {"says-the-end": "PASS"})
+        # Review of this change: a complete session whose transcript was not saved
+        # is graded in a run, so regrading grades it too; its trace grader has no evidence.
+        self.assertEqual(rows[3]["graders"], {"says-the-end": "MISSING"})
 
     def test_regrade_takes_only_the_run_directory(self):
         for args in (["--regrade", self.out, self.case], ["--regrade", self.out, "--out", self.out]):

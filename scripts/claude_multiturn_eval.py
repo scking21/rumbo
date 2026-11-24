@@ -28,9 +28,10 @@ of three votes; a file_exists grader globs its path in the project. An
 incomplete session is not graded. Results are small samples; compare arms over several runs.
 
 --regrade DIR grades the complete sessions of an earlier run again with each
-case's current graders, without running any session, and rewrites
-DIR/summary.json; use it after adding or changing a grader. Run it from the
-directory the run started in, since the summary keeps case paths as given.
+case's current graders, as a run with --grade would, without running any
+session, and rewrites DIR/summary.json; use it after adding or changing a
+grader. Run it from the directory the run started in, since the summary keeps
+case paths as given.
 """
 import argparse
 import concurrent.futures
@@ -193,14 +194,16 @@ def regrade(folder, judge):
     with open(path, encoding="utf-8") as handle:
         summary = json.load(handle)
     for row in summary["sessions"]:
-        if row.get("failure") or not row.get("transcript"):
+        # As in a run: an incomplete session is not graded, while a complete one
+        # without a transcript still is (its trace graders report MISSING).
+        if row.get("failure"):
             continue
         if not os.path.isdir(os.path.join(row["case"], "graders")):
             print("%s run %d: no graders at %s; run --regrade from where the run started" % (
                 os.path.basename(os.path.normpath(row["case"])), row["run"], row["case"]), file=sys.stderr)
             continue
         out = os.path.join(folder, "%s-%d" % (os.path.basename(os.path.normpath(row["case"])), row["run"]))
-        row["graders"] = grade(row["case"], os.path.join(out, "project"), row["transcript"], judge)
+        row["graders"] = grade(row["case"], os.path.join(out, "project"), row.get("transcript"), judge)
     with open(path, "w", encoding="utf-8") as handle:
         json.dump(summary, handle, indent=1)
     report(summary["sessions"])
