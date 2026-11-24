@@ -147,7 +147,7 @@ minutes past the close"), both dates with a word that orders them ("the March
 20 deadline is after the March 12 workshop"), or the total and its cap ("$550,
 over the $500 budget", or "$50 over the budget"). An assumed value is stated
 when its line, its section or the opening of the reply calls it your
-assumption or estimate, or its line asks the user about it. Stated problems do
+assumption, estimate or proposal, or its line asks the user about it. Stated problems do
 not block.
 
 If a repeat block lists problems you already told the user about, add

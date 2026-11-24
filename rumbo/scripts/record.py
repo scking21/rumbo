@@ -2243,9 +2243,12 @@ ORDER_WORDS = re.compile(r"\b(?:after|later|past|but|conflicts?|conflicting|too 
 OVER_WORDS = re.compile(r"\b(?:over|overruns?|exceeds?|exceeded|exceeding|past|after|late|later|longer|"
                         r"too long|too much|more than|above|beyond|short|conflicts?|conflicting)\b", re.IGNORECASE)
 # Words that call a value the agent's own. A section (see _sections) that has
-# one covers the values in it; a question mark covers only its own line.
-ASSUMPTION_WORDS = re.compile(r"\b(?:assum\w*|estimat\w*|est\.|guess\w*|placeholders?|unconfirmed|"
-                              r"not (?:yet )?confirmed|please confirm|not yours)", re.IGNORECASE)
+# one covers the values in it; a question mark covers only its own line. After
+# "you" or "your" they give the value to the user ("the $15 you suggested"),
+# which is the claim an unsourced value contradicts, so they do not count there.
+ASSUMPTION_WORDS = re.compile(r"(?<!\byou )(?<!\byour )\b(?:assum\w*|estimat\w*|est\.|guess\w*|propos\w*|"
+                              r"suggest\w*|placeholders?|unconfirmed|not (?:yet )?confirmed|please confirm|"
+                              r"not yours)", re.IGNORECASE)
 # Bounds that keep a long reply inside the hook timeout. Text past them is not
 # read, so it can only leave a problem unstated: the gate then blocks as before.
 STATED_MAX_CHARS = 20000

@@ -136,6 +136,12 @@ class StatementReadingTests(unittest.TestCase):
                          {"C1"})
         self.assertEqual(stated("## Budget\n" + table + "\nThe check flags these as unsourced: they're my est.",
                                 assumed, said), {"C1"})
+        self.assertEqual(stated("## Budget (my proposal)\n" + table, assumed, said), {"C1"})
+        self.assertEqual(stated("## Budget\n" + table + "\nThese amounts are my suggestions.", assumed, said), {"C1"})
+        # Words that give the value to the user are the claim an unsourced value contradicts.
+        for heading in ("## Budget (the figures you suggested)", "## Budget (your estimate)",
+                        "## Budget (as you proposed)"):
+            self.assertEqual(stated(heading + "\n" + table, assumed, said), set(), heading)
         # A cue in another section does not cover a table it does not head.
         self.assertEqual(stated("## Venue\nI assumed the room is free.\n## Budget\n" + table, assumed, said), set())
         self.assertEqual(stated("## Budget\n" + table, assumed, said), set())
