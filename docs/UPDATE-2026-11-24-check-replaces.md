@@ -23,6 +23,8 @@ In the live sessions behind 0.3.11, 3 of 10 sessions had a check that the user's
 
 Four 15-turn sessions on this adapter (two of `01-workshop-full`, two of `02-launch-full`, sonnet) were cut off after turns 10 to 12 by the account's usage limit, before the final plans, so they were not graded. Up to that point the agents retired obsolete checks with `replaces` without being asked: 24 of the 37 checks they wrote ended as replaced history, for example a budget with Dr. Okafor replaced by one with the maker-space team. Every check id the agents used was still in the final records, and no reply named a record id. There were 3 Stop blocks in the 44 completed turns, all on a draft schedule the agent had assumed before the user gave one. This shows the field is used as intended; it is not a measured improvement in outcomes.
 
+A later complete 15-turn `01-workshop-full` session on 0.3.13, run with `scripts/claude_multiturn_eval.py --grade`, passed all 6 graders with no Stop block and no record id in any reply, for $0.88. After the user chose the maker-space team, the agent replaced its budget check for Dr. Okafor with one for the maker-space team instead of keeping or deleting it. Of its 12 checks, 7 ended as replaced history; the 2 still failing were the real conflicts, the 9:45 start running past the 12:30 close and the printer deadline after the workshop, and every reply stated both, so the gate had nothing to block. One session is an example, not a measurement.
+
 ## Compatibility, verification and rollback
 
 Version 0.3.11 and earlier ignore `replaces` on a check, even a malformed one: they read the record and check the replaced check again, so after a rollback it is reported as before. Records without the field read the same in every version.

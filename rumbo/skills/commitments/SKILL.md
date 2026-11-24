@@ -150,11 +150,11 @@ The gate reads the reply you are about to send. A conflict is stated when one
 line of it names the values that conflict: the time the plan reaches and the
 end it misses ("the sessions end at 12:35, after the 12:30 close", or "five
 minutes past the close"), both dates with a word that orders them ("the March
-20 deadline is after the March 12 workshop", with the years when they differ), or the total and its cap ("$550,
-over the $500 budget", or "$50 over the budget"). An assumed value is stated
-when its line, its section or the opening of the reply calls it your
-assumption, estimate or proposal, or its line asks the user about it. Stated
-problems do not block.
+20 deadline is after the March 12 workshop", with the years when they differ),
+or the total and its cap ("$550, over the $500 budget", or "$50 over the
+budget"). An assumed value is stated when its line, its section or the opening
+of the reply calls it your assumption, estimate or proposal, or its line asks
+the user about it. Stated problems do not block.
 
 If a repeat block lists problems you already told the user about, add
 one line saying what is still open, in the user's terms rather than the
