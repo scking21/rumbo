@@ -828,6 +828,12 @@ def unsourced_values(record, check):
     """Return list of strings naming each unsourced value in check.
     Assumes record is valid.
     """
+    return [label for label, _reading, _value in _unsourced(record, check)]
+
+
+def _unsourced(record, check):
+    """(label, reading, value) for each unsourced value in check; reading names
+    the matcher that reads the value in text (see _says)."""
     source = _source_text(record, check)
     kind = check["kind"]
     unsourced = []
@@ -835,23 +841,23 @@ def unsourced_values(record, check):
     if kind == "fits_window":
         # start HH:MM
         if not _is_time_sourced(check["start"], source):
-            unsourced.append(f"start {check['start']}")
+            unsourced.append((f"start {check['start']}", "time", check["start"]))
         # end HH:MM
         if not _is_time_sourced(check["end"], source):
-            unsourced.append(f"end {check['end']}")
+            unsourced.append((f"end {check['end']}", "time", check["end"]))
         # segments_min N for each segment
         for seg in check["segments_min"]:
             if not _is_minutes_sourced(seg, source):
-                unsourced.append(f"segments_min {fmt_num(seg)}")
+                unsourced.append((f"segments_min {fmt_num(seg)}", "minutes", seg))
 
     elif kind == "before":
         for field in ("first", "second"):
             date_val = check[field]
             month_day_sourced, year_sourced = _is_date_sourced(date_val, source)
             if not month_day_sourced:
-                unsourced.append(f"{field} month-day {date_val}")
+                unsourced.append((f"{field} month-day {date_val}", "date", date_val))
             if _has_year(date_val) and not year_sourced:
-                unsourced.append(f"{field} year {date_val[:4]}")
+                unsourced.append((f"{field} year {date_val[:4]}", "year", date_val[:4]))
 
     elif kind == "within_budget":
         # amounts N for each amount
@@ -860,17 +866,17 @@ def unsourced_values(record, check):
                 # The script multiplies; the user must have said both factors.
                 for key in ("unit", "quantity"):
                     if not _is_number_sourced(amt[key], source):
-                        unsourced.append(f"amounts {key} {fmt_num(amt[key])}")
+                        unsourced.append((f"amounts {key} {fmt_num(amt[key])}", "number", amt[key]))
             elif not _is_number_sourced(amt, source):
-                unsourced.append(f"amounts {fmt_num(amt)}")
+                unsourced.append((f"amounts {fmt_num(amt)}", "number", amt))
         # total_cap N
         cap = check["total_cap"]
         if not _is_number_sourced(cap, source):
-            unsourced.append(f"total_cap {fmt_num(cap)}")
+            unsourced.append((f"total_cap {fmt_num(cap)}", "number", cap))
         # item_cap N if present
         item_cap = check.get("item_cap")
         if item_cap is not None and not _is_number_sourced(item_cap, source):
-            unsourced.append(f"item_cap {fmt_num(item_cap)}")
+            unsourced.append((f"item_cap {fmt_num(item_cap)}", "number", item_cap))
 
     return unsourced
 
@@ -1487,7 +1493,12 @@ def _validate_check_values(base, kind, check):
                 path = "%s.amounts[%d]" % (base, amount_index)
                 if isinstance(amount, dict):
                     if set(amount) != {"unit", "quantity"}:
-                        bad(path, 'use {"unit": N, "quantity": N} with exactly those two keys')
+                        if "unit" in amount or "quantity" in amount:
+                            bad(path, 'use {"unit": N, "quantity": N} with exactly those two keys')
+                        else:
+                            # Agents name budget lines as {"label": ..., "amount": N}.
+                            bad(path, "use the amount as a plain number and name the lines in the "
+                                      'check\'s label, or {"unit": N, "quantity": N} for a price per unit')
                         continue
                     for key in ("unit", "quantity"):
                         if not _is_number(amount[key]) or amount[key] < 0:
@@ -1547,6 +1558,32 @@ def evaluate_check(check):
                        "for both years" % check["second"])
         return False, detail
 
+    amounts, labels, total, cap, item_cap, excess = _budget(check)
+    problems = []
+    if total > cap:
+        lines = [label for label in labels if label]
+        problems.append(
+            "total %s exceeds total_cap %s by %s%s"
+            % (fmt_num(total), fmt_num(cap), fmt_num(excess),
+               " (%s)" % "; ".join(lines) if lines else "")
+        )
+    if item_cap is not None:
+        for amount, label in zip(amounts, labels):
+            if amount > item_cap:
+                problems.append(
+                    "amount %s exceeds item_cap %s"
+                    % (label or fmt_num(amount), fmt_num(item_cap))
+                )
+    if not problems:
+        return True, None
+    return False, "; ".join(problems)
+
+
+def _budget(check):
+    """(amounts, labels, total, cap, item_cap, total - cap) of a within_budget check, as exact Decimals.
+
+    A unit-price entry counts as its product; its label names the factors.
+    """
     amounts, labels = [], []
     for value in check["amounts"]:
         if isinstance(value, dict):
@@ -1573,24 +1610,8 @@ def evaluate_check(check):
     with decimal.localcontext() as context:
         context.prec = max(1, precision)
         total = sum(amounts, decimal.Decimal(0))
-        problems = []
-        if total > cap:
-            lines = [label for label in labels if label]
-            problems.append(
-                "total %s exceeds total_cap %s by %s%s"
-                % (fmt_num(total), fmt_num(cap), fmt_num(total - cap),
-                   " (%s)" % "; ".join(lines) if lines else "")
-            )
-        if item_cap is not None:
-            for amount, label in zip(amounts, labels):
-                if amount > item_cap:
-                    problems.append(
-                        "amount %s exceeds item_cap %s"
-                        % (label or fmt_num(amount), fmt_num(item_cap))
-                    )
-        if not problems:
-            return True, None
-        return False, "; ".join(problems)
+        excess = total - cap
+    return amounts, labels, total, cap, item_cap, excess
 
 
 def status_line(check):
@@ -1627,7 +1648,7 @@ CONFLICT_ACTIONS = {
     "within_budget": "tell the user it is over budget, or cut only what they agree to cut",
 }
 ASSUMPTION_ACTION = "ask the user, or tell them plainly it is your assumption; never change a value to pass"
-OPEN_HEADER = "Open problems (resolve each in your answer or tell the user before finishing):"
+OPEN_HEADER = "Open problems (resolve each in your answer or tell the user before finishing, in their terms rather than the record's ids):"
 COMPACT_NOTE = ("Re-shown after context compaction: the summary may have dropped decisions; "
                 "this record is current.")
 PRE_WRITE_INTRO = ("rumbo: before this write, the decision record still has open problems. "
@@ -2088,6 +2109,11 @@ def _stop_gate(args, hook_input):
         return _block_bounded(session_id, [BROKEN_RECORD] + faults[:5], BROKEN_TAIL, chained=chained)
 
     parts, problem_ids = record_problems(record)
+    # A conflict or assumption the reply already states plainly needs no block:
+    # the user has just been told. Only the harness's copy of the reply counts.
+    reply = hook_input.get("last_assistant_message") if isinstance(hook_input, dict) else None
+    stated = stated_checks(record, reply)
+    stated_parts = {part for part, check_id in zip(parts, problem_ids) if check_id in stated}
     for check_id in _read_failed_ids(session_id):
         if check_id not in {c.get("id") for c in record.get("checks") or []}:
             parts.append("%s: check was failing and has been removed from the record" % check_id)
@@ -2149,7 +2175,17 @@ def _stop_gate(args, hook_input):
         return 0
     present = {c.get("id") for c in record.get("checks") or []}
     remembered = problem_ids + [i for i in _read_failed_ids(session_id) if i not in present]
-    return _block_bounded(session_id, ledger_parts + parts, CONFLICT_TAIL, remembered, chained)
+    shown = [part for part in parts if part not in stated_parts]
+    if not shown:
+        # Every open problem is a check the reply states. Keep their ids so a
+        # check deleted later is still reported, and leave the block count as it is.
+        _remember_failed(session_id, remembered)
+        if ledger_parts:
+            return _block_bounded(session_id, ledger_parts, CONFLICT_TAIL, chained=chained, marker=".ledger-")
+        return 0
+    labels = {check["id"]: check.get("label") or check["kind"] for check in record.get("checks") or []}
+    return _block_bounded(session_id, ledger_parts + parts, CONFLICT_TAIL, remembered, chained,
+                          shown=ledger_parts + shown, labels=labels)
 
 
 BROKEN_RECORD = "rumbo: the decision record is unreadable or invalid"
@@ -2162,15 +2198,16 @@ LEDGER_UNWRITABLE = ("verified-quotes.json: LEDGER_UNWRITABLE: quotes verified t
                      "be saved, so a later session will report them as UNVERIFIED. Fix the cause "
                      "(permissions, disk space, file size limit) or tell the user")
 REPEAT_REASON = ("rumbo: still open, unchanged since the last block: %s. Fix them, or if "
-                 "your previous reply already told the user, add one line naming what is "
-                 "still open. Do not repeat the full explanation.")
+                 "your previous reply already told the user, add one line saying what is "
+                 "still open, in the user's terms rather than the record's ids. Do not "
+                 "repeat the full explanation.")
 GATE_ERROR_TAIL = "Tell the user plainly that the decision record could not be checked this turn."
 BROKEN_TAIL = ("Fix the record with record.py validate before finishing; "
                "do not delete it to get past this check.")
 CONFLICT_TAIL = ("Before finishing, resolve each conflict in your answer or state it "
-                 "plainly to the user; say which values are your assumptions and ask "
-                 "the user to confirm them; do not delete or weaken a check to pass; "
-                 "then update the record.")
+                 "plainly to the user, naming its values on one line; say which values "
+                 "are your assumptions and ask the user to confirm them; do not delete "
+                 "or weaken a check to pass; then update the record.")
 STATE_UNAVAILABLE = ("rumbo: STATE_UNAVAILABLE: the block counter could not be saved, so this "
                      "is the only block for this stop; the problems above are still open.")
 MAX_BLOCKS = 3
@@ -2198,6 +2235,157 @@ def record_problems(record):
     return parts, ids
 
 
+# Words that put two dates in order. "before" is left out: "what has to happen
+# before March 20" names a deadline without saying that it falls after the event.
+ORDER_WORDS = re.compile(r"\b(?:after|later|past|but|conflicts?|conflicting|too late|wrong|"
+                         r"mismatch(?:ed|es)?|impossible|precedes?|earlier|\d+\s+days?)\b", re.IGNORECASE)
+# Words that say an amount or a time goes beyond its limit, for an overrun stated as its excess.
+OVER_WORDS = re.compile(r"\b(?:over|overruns?|exceeds?|exceeded|exceeding|past|after|late|later|longer|"
+                        r"too long|too much|more than|above|beyond|short|conflicts?|conflicting)\b", re.IGNORECASE)
+# Words that call a value the agent's own. A section (see _sections) that has
+# one covers the values in it; a question mark covers only its own line.
+ASSUMPTION_WORDS = re.compile(r"\b(?:assum\w*|estimat\w*|est\.|guess\w*|placeholders?|unconfirmed|"
+                              r"not (?:yet )?confirmed|please confirm|not yours)", re.IGNORECASE)
+# Bounds that keep a long reply inside the hook timeout. Text past them is not
+# read, so it can only leave a problem unstated: the gate then blocks as before.
+STATED_MAX_CHARS = 20000
+STATED_MAX_LINE = 2000
+
+
+def _minutes_phrase(minutes, line):
+    """True when line says minutes with an explicit minute unit: "5 minutes", "five-minute", "5 min"."""
+    unit = re.compile(r"\s*-?\s*(?:minutes?|mins?)\b", re.IGNORECASE)
+    for match in re.finditer(r"(?<![\d.:])(\d+)(?![\d:]|\.\d)", line):
+        if int(match.group(1)) == minutes and unit.match(line, match.end()):
+            return True
+    return any(value == minutes and unit.match(line, end) for _start, end, value in _word_numbers(line))
+
+
+def _says(reading, value, line):
+    """True when line states value, read the way the source check reads the user's words.
+
+    Each reading first looks for text its matcher cannot do without (the
+    minutes of a time, the day of a date), so most lines cost a substring test.
+    """
+    if reading == "time":
+        hours, minutes = value.split(":")
+        if ":" + minutes not in line and not (minutes == "00" and (
+                str(int(hours) % 12 or 12) in line or re.search(r"noon|midnight", line, re.IGNORECASE))):
+            return False
+        return _is_time_sourced(value, line)
+    if reading == "date":
+        return str(int(value[-2:])) in line and _is_date_sourced(value, line)[0]
+    if reading == "year":
+        return re.search(r"(?<!\d)%s(?!\d)" % re.escape(value), line) is not None
+    if reading == "minutes":
+        return _is_minutes_sourced(value, line)
+    if reading == "minutes phrase":
+        return _minutes_phrase(value, line)
+    if reading == "number":
+        return _is_number_sourced(value, line)
+    if reading == "order":
+        return ORDER_WORDS.search(line) is not None
+    if reading == "over":
+        return OVER_WORDS.search(line) is not None
+    return False
+
+
+def _conflict_ways(check):
+    """The ways a reply can state a failing check: for each thing that fails,
+    alternatives of (reading, value) facts that one line must all say."""
+    if evaluate_check(check)[0]:
+        return []
+    kind = check["kind"]
+    if kind == "fits_window":
+        start, end = parse_time(check["start"]), parse_time(check["end"])
+        if check.get("end_next_day"):
+            end += 24 * 60
+        reached = start + sum(check["segments_min"])
+        return [[[("time", "%02d:%02d" % divmod(reached % (24 * 60), 60)), ("time", check["end"])],
+                 [("minutes phrase", reached - end), ("over", None)]]]
+    if kind == "before":
+        return [[[("date", check["first"]), ("date", check["second"]), ("order", None)]]]
+    amounts, _labels, total, cap, item_cap, excess = _budget(check)
+    ways = []
+    if total > cap:
+        ways.append([[("number", total), ("number", cap)], [("number", excess), ("over", None)]])
+    if item_cap is not None:
+        for amount in amounts:
+            if amount > item_cap:
+                ways.append([[("number", amount), ("number", item_cap)],
+                             [("number", amount), ("number", amount - item_cap), ("over", None)]])
+    return ways
+
+
+def _sections(lines):
+    """Group lines under markdown headings: [(first line index, last line index + 1)].
+
+    Text before the first heading is the reply's preamble.
+    """
+    starts = [0] + [index for index, line in enumerate(lines) if index and line.lstrip().startswith("#")]
+    return list(zip(starts, starts[1:] + [len(lines)]))
+
+
+def stated_checks(record, reply):
+    """Ids of the failing or unsourced checks whose problem the reply already states.
+
+    Word matching, not understanding. A failing check is stated when one line
+    of the reply names the values that conflict: the time the segments reach
+    and the window's end, or the minutes over with a word such as "over"; both
+    dates and a word that orders them; the total and its cap, or the excess
+    with a word such as "over" (and the same for an amount over item_cap). An
+    unsourced value is stated when a line names it and either asks about it
+    with a question mark, or sits in a section that calls something an
+    assumption or estimate, or the reply's preamble does.
+    """
+    if not isinstance(reply, str):
+        return set()
+    lines = [line for line in reply[:STATED_MAX_CHARS].splitlines() if line.strip() and len(line) <= STATED_MAX_LINE]
+    if not lines:
+        return set()
+    sections = _sections(lines)
+    cued = set()
+    for index, (first, last) in enumerate(sections):
+        if any(ASSUMPTION_WORDS.search(line) for line in lines[first:last]):
+            cued.update(range(first, last))
+            if index == 0 and not lines[0].lstrip().startswith("#"):
+                cued.update(range(len(lines)))
+    memo = {}
+
+    def says(reading, value, index):
+        key = (reading, repr(value), index)
+        if key not in memo:
+            memo[key] = _says(reading, value, lines[index])
+        return memo[key]
+
+    stated = set()
+    for check in record.get("checks") or []:
+        ways = _conflict_ways(check)
+        unsourced = [(reading, value) for _label, reading, value in _unsourced(record, check)]
+        if not ways and not unsourced:
+            continue
+        if all(any(all(says(reading, value, index) for reading, value in alternative)
+                   for alternative in alternatives for index in range(len(lines)))
+               for alternatives in ways) and \
+           all(any(says(reading, value, index) and (index in cued or "?" in lines[index])
+                   for index in range(len(lines)))
+               for reading, value in unsourced):
+            stated.add(check["id"])
+    return stated
+
+
+def _remember_failed(session_id, problem_ids):
+    """Keep the ids of open checks, so removing one later is reported."""
+    path = _marker_path(session_id, ".failed")
+    if not path:
+        return
+    try:
+        with _open_marker(path, "w") as handle:
+            json.dump(problem_ids, handle)
+    except OSError:
+        pass
+
+
 def _read_failed_ids(session_id):
     path = _marker_path(session_id, ".failed")
     try:
@@ -2210,15 +2398,21 @@ def _read_failed_ids(session_id):
     return [i for i in ids if isinstance(i, str)] if isinstance(ids, list) else []
 
 
-def _block_bounded(session_id, parts, tail, problem_ids=None, chained=False, marker="."):
+def _block_bounded(session_id, parts, tail, problem_ids=None, chained=False, marker=".", shown=None,
+                   labels=None):
     """Print a Stop-hook block, at most MAX_BLOCKS times per session; always exit 0.
 
     chained is the harness's stop_hook_active flag: the only loop guard left
     when the per-session counter cannot be saved. marker starts the counter's
     file names: a ledger problem an agent may not be able to clear must not use
-    up the blocks a later conflict needs.
+    up the blocks a later conflict needs. shown, when given, is the part of
+    parts to print; a repeat is still judged on all of parts, so stating one
+    problem and then another cannot keep a stop blocking. labels maps a check
+    id to what the short repeat calls it, so the agent can tell the user what
+    is open without the record's ids.
     """
     reason = "\n".join(parts) + "\n" + tail
+    display = reason if shown is None else "\n".join(shown) + "\n" + tail
     blocks_path = _marker_path(session_id, marker + "blocks")
     if blocks_path:
         # Same problems as the last block: ask for a one-line status instead of
@@ -2248,7 +2442,7 @@ def _block_bounded(session_id, parts, tail, problem_ids=None, chained=False, mar
         except OSError:
             if chained:
                 return 0
-            print(json.dumps({"decision": "block", "reason": reason + "\n" + STATE_UNAVAILABLE}))
+            print(json.dumps({"decision": "block", "reason": display + "\n" + STATE_UNAVAILABLE}))
             return 0
         try:
             with _open_marker(last_path, "w") as handle:
@@ -2259,10 +2453,11 @@ def _block_bounded(session_id, parts, tail, problem_ids=None, chained=False, mar
         except OSError:
             pass
         if repeat:
-            names = ", ".join(part.split(":")[0] for part in parts
-                              if not part.startswith("rumbo")) or "the decision record"
-            reason = REPEAT_REASON % names
-    print(json.dumps({"decision": "block", "reason": reason}))
+            ids = [part.split(":")[0] for part in (parts if shown is None else shown) if not part.startswith("rumbo")]
+            names = ", ".join("%s (%s)" % (name, labels[name]) if labels and name in labels else name
+                              for name in ids) or "the decision record"
+            display = REPEAT_REASON % names
+    print(json.dumps({"decision": "block", "reason": display}))
     return 0
 
 # ------------------------------------------------------------------ main

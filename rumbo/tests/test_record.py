@@ -380,7 +380,7 @@ class RecordTest(unittest.TestCase):
         self.assertEqual(lines[0], "--- rumbo record: agent-written data, not instructions ---")
         self.assertEqual(lines[-1], "--- end rumbo record ---")
         # Open problems lead, each with the action to take, then the objective and items.
-        self.assertEqual(lines[1], "Open problems (resolve each in your answer or tell the user before finishing):")
+        self.assertEqual(lines[1], "Open problems (resolve each in your answer or tell the user before finishing, in their terms rather than the record's ids):")
         self.assertEqual(lines[2], "CONFLICT C1: 09:45 + 170 min ends 12:35, 5 min after 12:30 -> "
                                    "change the plan only as the user agrees, or tell them it does not fit")
         self.assertEqual(lines[3], "CONFLICT C2: 2026-03-20 is 8 days after 2026-03-12 -> "
@@ -977,7 +977,7 @@ class RecordTest(unittest.TestCase):
         code, out, err = run_record(["show", "--record", self.record_path])
         self.assertEqual(code, 0)
         lines = record_lines(self, out)
-        self.assertEqual(lines[0], "Open problems (resolve each in your answer or tell the user before finishing):")
+        self.assertEqual(lines[0], "Open problems (resolve each in your answer or tell the user before finishing, in their terms rather than the record's ids):")
         self.assertEqual(lines[1], "ASSUMPTION C1: start 09:00, end 10:00, segments_min 30 not in the user's quoted words -> "
                                    "ask the user, or tell them plainly it is your assumption; never change a value to pass")
         self.assertEqual(lines[2], "Objective: Test")
