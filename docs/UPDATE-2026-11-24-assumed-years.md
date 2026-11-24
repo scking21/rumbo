@@ -26,6 +26,8 @@ Two `08-dropped-option` sessions on this version (sonnet, run one at a time with
 
 Two sessions are a small sample: this shows the new wording is followed, not a measured rate. Neither session hit the `dropped_by` refusal, since the user's decision named no value, so the new refusal wording was not exercised live; `test_a_decision_that_names_a_value_may_update_the_check` covers it.
 
+Every other bundled case also passed all its graders, once each: `03-agenda-overrun`, `04-deadline-after-event` (including `no-invented-year`), `05-draft-is-not-a-decision`, and the two cases where no record should be started, `06-neg-python-question` and `07-neg-weekday`, which started none. None hit a Stop block; together they cost $0.52. The two 15-turn cases passed all 6 graders on 0.3.14, whose hooks are the same; see [its notes](UPDATE-2026-11-24-dropped-checks.md).
+
 ## Verification and rollback
 
 ```sh
