@@ -1527,33 +1527,28 @@ def retired_checks(record):
 # The check then names the decision in dropped_by. Only a decision in force
 # drops an option, so the check comes back when the user changes the decision.
 DROPPED_STATUSES = ("commitment", "rejected")
-MONTH_WORD = (r"(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?"
-              r"|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\.?(?![a-z])")
-# Values of each kind of check, as a decision's words give them. A decision that
-# gives one the check does not have is an update, which a newer check records.
-GIVEN_VALUES = {
-    # A date keeps the year written after it ("March 20, 2027"), and "03-20" and
-    # "3/20/2027" are dates as the source check reads them.
-    "before": re.compile(
-        rf"\b{MONTH_WORD}\s*\d{{1,2}}(?:st|nd|rd|th)?\b(?:,?\s+\d{{4}}\b)?"
-        rf"|(?<![\d/.:-])\d{{1,2}}(?:st|nd|rd|th)?\s+(?:of\s+)?{MONTH_WORD}(?:,?\s+\d{{4}}\b)?"
-        r"|(?<![\d/.:-])\d{1,2}/\d{1,2}(?:/\d{4}|/\d{2})?(?![\d/])|\b\d{4}-\d{2}-\d{2}\b"
-        r"|\b(?:0[1-9]|1[0-2])-(?:0[1-9]|[12]\d|3[01])\b", re.IGNORECASE),
-    # A duration is read whole ("1 hour 15 minutes", "an hour and a half", "2h30").
-    "fits_window": re.compile(
-        r"(?<![\d:])\d{1,2}:\d{2}(?![\d:])(?:\s*[ap]\.?\s*m\b\.?)?|(?<![\d:.$])\d{1,2}\s*[ap]\.?\s*m\b\.?"
-        r"|\b(?:noon|midnight)\b|(?<![\d.])\d+(?:\.\d+)?\s?h(?:\d{1,2}m?)?\b|(?<![\d.])\d+\s?m\b"
-        r"|(?<![\d.])\d+(?:\.\d+)?[\s-]*(?:hours?|hrs?)\b"
-        r"(?:\s*(?:and\s+)?\d{1,2}[\s-]*(?:minutes?|mins?)\b|\s+and\s+a\s+(?:half|quarter)\b)?"
-        r"|(?<![\d.])\d+(?:\.\d+)?[\s-]*(?:minutes?|mins?)\b"
-        rf"|\b(?:{NUMBER_WORD}|an?|half(?:\s+an?)?)[\s-]+(?:hours?|hrs?|minutes?|mins?)\b"
-        r"(?:\s+and\s+a\s+(?:half|quarter)\b)?", re.IGNORECASE),
-    "within_budget": re.compile(
-        r"[$€£]\s*\d[\d,]*(?:\.\d+)?(?:\s*(?:k|m|bn|thousand|million|billion)\b)?"
-        r"|(?<![\d.,])\d[\d,]*(?:\.\d+)?\s*(?:k|thousand|million|billion|dollars?|usd|euros?|pounds?|bucks)\b"
-        rf"|\b{NUMBER_WORD}(?:\s+(?:hundred|thousand|million|billion))?\s+(?:dollars?|euros?|pounds?|bucks)\b"
-        r"|\bfree\b", re.IGNORECASE),
+# A decision that names a value of the check's kind may change the check
+# rather than drop it ("Dr. Okafor's slides are now due March 25"), so the
+# words that drop a check name none: no digit, no number word, and no month or
+# weekday for a date, hour or minute for a schedule, or money for a budget.
+# Telling a value the check already has from a new one would need every form
+# the source check reads ("two hundred fifty dollars", "March 20-25",
+# "three-quarter hour"), so any value counts. "one" and "may" alone do not,
+# being as often a pronoun and a verb; beside a number, the number counts.
+VALUE_NUMBER_WORDS = ("zero two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen "
+                      "sixteen seventeen eighteen nineteen twenty thirty forty fifty sixty seventy eighty ninety "
+                      "hundred thousand million billion dozen")
+VALUE_WORDS = {
+    "before": r"jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|june?|july?|aug(?:ust)?|sep(?:t(?:ember)?)?"
+              r"|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?|monday|tuesday|wednesday|thursday|friday|saturday|sunday",
+    "fits_window": r"noon|midnight|hours?|hrs?|minutes?|mins?|quarters?|half|o'?clock",
+    "within_budget": r"free|dollars?|bucks|euros?|pounds?|cents?|grand",
 }
+NAMES_VALUE = {kind: re.compile(r"\d|[$€£¥]|\b(?:%s|%s)\b" % ("|".join(VALUE_NUMBER_WORDS.split()), words)
+                                if kind == "within_budget" else
+                                r"\d|\b(?:%s|%s)\b" % ("|".join(VALUE_NUMBER_WORDS.split()), words),
+                                re.IGNORECASE)
+               for kind, words in VALUE_WORDS.items()}
 
 
 def _validate_check_dropped(record, checks):
@@ -1607,19 +1602,20 @@ def _validate_check_dropped(record, checks):
 def _dropped_value_faults(record, pending):
     """Faults for drops that would retire a check still in force; needs a valid record.
 
-    A decision that gives a value the check does not have updates the check,
-    and a check none of whose values came only from the items the decision
-    replaced is about the current plan. Either way, dropping it would hide a
-    conflict or an assumption that still holds.
+    A decision whose words name a value of the check's kind may update the
+    check, and a check none of whose values came only from the items the
+    decision replaced is about the current plan. Either way, dropping it could
+    hide a conflict or an assumption that still holds.
     """
     faults = []
     by_id = {item["id"]: item for item in record.get("items") or []}
     for path, check, decision, dropped_refs in pending:
-        given = _new_value(check, decision["quote"])
-        if given is not None:
-            faults.append("%s: RECORD_BAD_REF: %s gives %s, which this check does not have; a decision with a new "
-                          "value updates the check: write a check with it that lists %s in replaces"
-                          % (path, decision["id"], json.dumps(given, ensure_ascii=False), check["id"]))
+        named = _named_value(check["kind"], decision["quote"])
+        if named is not None:
+            faults.append("%s: RECORD_BAD_REF: %s's words name a value (%s), so the decision may update the check "
+                          "rather than drop it: if the user gave a new value, write a check with it that lists %s "
+                          "in replaces; if they only dropped the option, quote just their words that drop it"
+                          % (path, decision["id"], json.dumps(named, ensure_ascii=False), check["id"]))
             continue
         source = _source_text(record, check)
         old = "\n".join(by_id[ref]["quote"] for ref in dropped_refs)
@@ -1632,36 +1628,15 @@ def _dropped_value_faults(record, pending):
     return faults
 
 
-def _new_value(check, text):
-    """A value of the check's kind that text gives and the check does not have, or None."""
-    for match in GIVEN_VALUES[check["kind"]].finditer(text):
-        token = match.group(0).strip()
-        if not _has_check_value(check, token):
-            return token
-    return None
-
-
-def _has_check_value(check, token):
-    """True when token, a value read on its own, is one of the check's values."""
-    kind = check["kind"]
-    if kind == "before":
-        # A year the decision states must be the check's own: "March 20, 2027"
-        # is neither the check's 2026-03-20 nor its year-less 03-20.
-        states_year = re.search(r"(?<!\d)\d{4}(?!\d)|/\d{2}$", token) is not None
-        for field in ("first", "second"):
-            month_day, year = _is_date_sourced(check[field], token)
-            if month_day and (year or not states_year):
-                return True
-        return False
-    if kind == "fits_window":
-        return (any(_is_time_sourced(check[field], token) for field in ("start", "end"))
-                or any(_is_minutes_sourced(minutes, token) for minutes in check["segments_min"]))
-    numbers = [check["total_cap"]] + ([check["item_cap"]] if check.get("item_cap") is not None else [])
-    for amount in check["amounts"]:
-        numbers.extend([amount["unit"], amount["quantity"]] if isinstance(amount, dict) else [amount])
-    # The source check counts 0 as always given; here only "free" or a written 0 gives it.
-    zero = token.lower() == "free" or EXPLICIT_ZERO.search(token) is not None
-    return any(_is_number_sourced(number, token) if number != 0 else zero for number in numbers)
+def _named_value(kind, text):
+    """The words around the first value of this kind that text names, or None."""
+    match = NAMES_VALUE[kind].search(text)
+    if match is None:
+        return None
+    # Show the value with the words beside it: "March 20-25", "two hundred fifty".
+    start = text.rfind(" ", 0, match.start()) + 1
+    words = text[start:].split()[:3]
+    return " ".join(words).rstrip(".,;:!?") or match.group(0)
 
 
 def _validate_check_values(base, kind, check):

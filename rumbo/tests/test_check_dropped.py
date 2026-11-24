@@ -116,61 +116,62 @@ class DroppedValidationTests(unittest.TestCase):
             "checks[0].dropped_by: RECORD_BAD_REF: I3 is replaced by I6, so it may no longer drop this option; "
             "name the decision in force, or remove dropped_by"])
 
-    def test_a_decision_with_a_new_value_updates_the_check_instead(self):
+    def test_a_decision_that_names_a_value_may_update_the_check(self):
         items = document([])["items"]
         items[2] = item("I3", "Dr. Okafor's slides are now due March 5.", replaces=["I2"])
         self.assertEqual(self.faults([DROPPED], items), [
-            'checks[0].dropped_by: RECORD_BAD_REF: I3 gives "March 5", which this check does not have; a '
-            "decision with a new value updates the check: write a check with it that lists C1 in replaces"])
-        # A value the check already has is not new.
+            'checks[0].dropped_by: RECORD_BAD_REF: I3\'s words name a value ("March 5"), so the decision may '
+            "update the check rather than drop it: if the user gave a new value, write a check with it that lists "
+            "C1 in replaces; if they only dropped the option, quote just their words that drop it"])
+        # A value the check already has counts too; the words that drop the option do not name it.
         items[2] = item("I3", "Let's go with the maker-space team for the March 12 workshop.", replaces=["I2"])
+        self.assertEqual(len(self.faults([DROPPED], items)), 1)
+        items[2] = item("I3", "Let's go with the maker-space team", replaces=["I2"])
         self.assertEqual(self.faults([DROPPED], items), [])
 
-    def test_a_new_year_or_a_date_in_another_form_is_a_new_value(self):
-        # Review of this change: only the month and day were compared, so a
-        # decision that moved a deadline to another year dropped the check, and
-        # "03-25" was not read as a date at all.
+    def test_any_value_of_the_checks_kind_counts(self):
+        # Review of this change: comparing a decision's values with the check's
+        # missed forms the source check reads, such as a year ("March 20, 2027"
+        # against 2026-03-20), "03-25", "two hundred fifty dollars" read as
+        # fifty, "three-quarter hour" and the end of "March 20-25".
         dated = dict(DROPPED, first="2026-03-20", second="2026-03-12")
-        okafor = "Dr. Okafor says the foundation must approve his slides by March 20, 2026."
+        schedule = {"id": "C1", "kind": "fits_window", "start": "10:15", "end": "12:30", "segments_min": [60],
+                    "refs": ["I1", "I2"], "dropped_by": "I3"}
+        budget = {"id": "C1", "kind": "within_budget", "amounts": [50], "total_cap": 600, "refs": ["I1", "I2"],
+                  "dropped_by": "I3"}
+        options = {"before": "Dr. Okafor says the foundation must approve his slides by March 20, 2026.",
+                   "fits_window": "Dr. Okafor arrives at 10:15 and can do 60 minutes.",
+                   "within_budget": "Dr. Okafor charges $50 for travel."}
         cases = [
-            (dated, "Dr. Okafor now needs slide approval by March 20, 2027.", '"March 20, 2027"'),
-            (dated, "Go with the maker-space team for the March 12, 2026 workshop.", None),
-            # A year the check does not have is new, even on a year-less date.
-            (DROPPED, "Go with the maker-space team for the March 12, 2026 workshop.", '"March 12, 2026"'),
-            (DROPPED, "Dr. Okafor's slides are now due 03-25.", '"03-25"'),
-            (DROPPED, "Go with the maker-space team; forget the 03-20 approval.", None),
-            (DROPPED, "Dr. Okafor's slides are now due 3/25/2027.", '"3/25/2027"'),
+            (dated, "Dr. Okafor now needs slide approval by March 20, 2027.", "March 20, 2027"),
+            (DROPPED, "Dr. Okafor's slides are now due 03-25.", "03-25"),
+            (DROPPED, "Dr. Okafor's slides are now due 3/25/2027.", "3/25/2027"),
+            (DROPPED, "Dr. Okafor's slide approval window is now March 20\u201325.", "March 20\u201325"),
+            (DROPPED, "Dr. Okafor can do it on Friday instead.", "Friday instead"),
+            (DROPPED, CHOICE, None),
+            (DROPPED, "We may go with the maker-space one instead.", None),
+            (DROPPED, "Go with the maker-space team; they're free.", None),
+            (schedule, "Dr. Okafor can now do three-quarter hour.", "three-quarter hour"),
+            (schedule, "Go with the maker-space team for a 2h30 session.", "2h30 session"),
+            (schedule, "Go with the maker-space team; it can stay till noon.", "noon"),
+            (schedule, "Go with the maker-space team at 9:45.", "9:45"),
+            (schedule, CHOICE, None),
+            (budget, "Dr. Okafor now charges two hundred fifty dollars.", "two hundred fifty"),
+            (budget, "Go with the maker-space team; they cost $200.", "$200"),
+            (budget, "Go with the maker-space team, they're free.", "free"),
+            (budget, "Go with the maker-space team, they need 2 tables.", "2 tables"),
+            (budget, "Go with the maker-space one.", None),
         ]
-        for check, decision, given in cases:
-            with self.subTest(decision=decision):
-                items = [item("I1", "It's the morning of March 12, 2026"), item("I2", okafor, "uncertain"),
+        for check, decision, named in cases:
+            with self.subTest(kind=check["kind"], decision=decision):
+                items = [item("I1", OBJECTIVE), item("I2", options[check["kind"]], "uncertain"),
                          item("I3", decision, replaces=["I2"])]
                 faults = self.faults([check], items)
-                if given is None:
+                if named is None:
                     self.assertEqual(faults, [])
                 else:
                     self.assertEqual(len(faults), 1, faults)
-                    self.assertIn("I3 gives %s, which this check does not have" % given, faults[0])
-
-    def test_a_duration_is_read_whole(self):
-        okafor = item("I2", "Dr. Okafor arrives at 10:15 and can do 1 hour 15 minutes.", "uncertain")
-        schedule = {"id": "C1", "kind": "fits_window", "start": "10:15", "end": "12:30", "segments_min": [75],
-                    "refs": ["I1", "I2"], "dropped_by": "I3"}
-        cases = [
-            ("Go with the maker-space team for 1 hour 15 minutes.", None),
-            ("Go with the maker-space team; keep it to 75 minutes.", None),
-            ("Go with the maker-space team for a 2h30 session.", '"2h30"'),
-            ("Go with the maker-space team for an hour and a half.", '"an hour and a half"'),
-            ("Go with the maker-space team from the 2 houses nearby.", None),
-        ]
-        for decision, given in cases:
-            with self.subTest(decision=decision):
-                faults = self.faults([schedule], [item("I1", OBJECTIVE), okafor, item("I3", decision, replaces=["I2"])])
-                if given is None:
-                    self.assertEqual(faults, [])
-                else:
-                    self.assertEqual(len(faults), 1, faults)
-                    self.assertIn("I3 gives %s, which this check does not have" % given, faults[0])
+                    self.assertIn("I3's words name a value (%s)" % json.dumps(named, ensure_ascii=False), faults[0])
 
     def test_a_check_whose_values_all_stay_in_force_is_still_about_the_plan(self):
         # The printer deadline also names I2, but none of its values came from it.
@@ -179,41 +180,6 @@ class DroppedValidationTests(unittest.TestCase):
         self.assertEqual(self.faults([printer]), [
             "checks[0].dropped_by: RECORD_BAD_REF: no value of this check comes only from the items I3 "
             "replaced, so it is still about the current plan: resolve it or tell the user, and remove dropped_by"])
-
-    def test_times_durations_and_amounts_are_new_values_for_their_kinds(self):
-        okafor = item("I2", "Dr. Okafor arrives at 10:15 and needs $350 for travel.", "uncertain")
-        schedule = {"id": "C1", "kind": "fits_window", "start": "10:15", "end": "12:30", "segments_min": [60],
-                    "refs": ["I1", "I2"], "dropped_by": "I3"}
-        budget = {"id": "C1", "kind": "within_budget", "amounts": [350], "total_cap": 600, "refs": ["I1", "I2"],
-                  "dropped_by": "I3"}
-        cases = [
-            (schedule, CHOICE, None),
-            (schedule, "Go with the maker-space team for a 75-minute session.", '"75-minute"'),
-            (schedule, "Go with the maker-space team at 9:45.", '"9:45"'),
-            (schedule, "Go with the maker-space team; it can stay till noon.", '"noon"'),
-            (schedule, "Go with the maker-space team from 10:15 for 60 minutes.", None),
-            (budget, CHOICE, None),
-            (budget, "Go with the maker-space team; they cost $200.", '"$200"'),
-            (budget, "Go with the maker-space team, they're free.", '"free"'),
-            (budget, "Go with the maker-space team, they need 2 tables.", None),
-        ]
-        for check, decision, given in cases:
-            with self.subTest(kind=check["kind"], decision=decision):
-                items = [item("I1", OBJECTIVE), okafor, item("I3", decision, replaces=["I2"])]
-                faults = self.faults([check], items)
-                if given is None:
-                    self.assertEqual(faults, [])
-                else:
-                    self.assertEqual(len(faults), 1, faults)
-                    self.assertIn("I3 gives %s, which this check does not have" % given, faults[0])
-
-    def test_free_is_not_new_for_a_check_that_already_has_a_zero(self):
-        okafor = item("I2", "Dr. Okafor needs $350 for travel.", "uncertain")
-        budget = {"id": "C1", "kind": "within_budget", "amounts": [350, 0], "total_cap": 600, "refs": ["I1", "I2"],
-                  "dropped_by": "I3"}
-        items = [item("I1", OBJECTIVE), okafor, item("I3", "Go with the maker-space team, they're free.",
-                                                     replaces=["I2"])]
-        self.assertEqual(self.faults([budget], items), [])
 
     def test_values_are_read_only_once_the_rest_of_the_record_is_valid(self):
         items = document([])["items"]

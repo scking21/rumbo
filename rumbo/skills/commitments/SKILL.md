@@ -66,10 +66,12 @@ correction; it is not changing a value to pass. When a decision drops the
 option a check was about, replace that check with the same kind of check for
 what the user chose. If their choice leaves nothing of that kind to check (a
 speaker's payment deadline once they go without that speaker), record the
-decision as an item that replaces the option's items, and set the check's
-`dropped_by` to that item's id. A replaced or dropped check stays as history
-and is no longer reported; never delete a check. Do not keep reporting an
-assumption the user has already settled.
+decision as an item that replaces the option's items, quoting just the words
+that drop the option, and set the check's `dropped_by` to that item's id. A
+decision that names a date, time or amount may change the check instead; then
+replace it. A replaced or dropped check stays as history and is no longer
+reported; never delete a check. Do not keep reporting an assumption the user
+has already settled.
 
 List the supporting item ids in each check's `refs`. Only those items' quotes
 and the objective quote source the check; `done`, `rejected`, and replaced items
