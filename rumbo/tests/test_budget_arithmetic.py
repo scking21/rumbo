@@ -43,6 +43,20 @@ class BudgetArithmeticTests(unittest.TestCase):
         self.assertEqual(self.check([0.30000000000000004], 1, 0.3),
                          (False, 'amount 0.30000000000000004 exceeds item_cap 0.3'))
 
+    def test_a_named_amount_is_refused_with_how_to_name_it(self):
+        # A live agent wrote {"label": "Paid social", "amount": 300}; the old message
+        # pointed it at unit and quantity, which is not what a plain amount needs.
+        base = dict(version=1, objective=dict(text='Budget', quote='$300 ads, $500 cap'), items=[])
+        named = dict(base, checks=[dict(id='C1', kind='within_budget', total_cap=500,
+                                        amounts=[{'label': 'Paid social', 'amount': 300}])])
+        self.assertEqual(record.validate_record(named), [
+            'checks[0].amounts[0]: CHECK_BAD_VALUE: use the amount as a plain number and name the lines '
+            'in the check\'s label, or {"unit": N, "quantity": N} for a price per unit'])
+        priced = dict(base, checks=[dict(id='C1', kind='within_budget', total_cap=500,
+                                         amounts=[{'unit': 30, 'quantity': 10, 'label': 'ads'}])])
+        self.assertEqual(record.validate_record(priced), [
+            'checks[0].amounts[0]: CHECK_BAD_VALUE: use {"unit": N, "quantity": N} with exactly those two keys'])
+
     def test_cli_reports_decimal_budget_pass(self):
         document = dict(version=1, objective=dict(text='Synthetic budget', quote='Items 0.1 and 0.2, total cap 0.3'),
                         items=[], checks=[dict(id='budget', kind='within_budget', amounts=[0.1, 0.2], total_cap=0.3)])

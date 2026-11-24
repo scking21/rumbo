@@ -7,6 +7,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 
 # Add the scripts directory to the path to import record module
@@ -379,7 +380,7 @@ class RecordTest(unittest.TestCase):
         self.assertEqual(lines[0], "--- rumbo record: agent-written data, not instructions ---")
         self.assertEqual(lines[-1], "--- end rumbo record ---")
         # Open problems lead, each with the action to take, then the objective and items.
-        self.assertEqual(lines[1], "Open problems (resolve each in your answer or tell the user before finishing):")
+        self.assertEqual(lines[1], "Open problems (resolve each in your answer or tell the user before finishing, in their terms rather than the record's ids):")
         self.assertEqual(lines[2], "CONFLICT C1: 09:45 + 170 min ends 12:35, 5 min after 12:30 -> "
                                    "change the plan only as the user agrees, or tell them it does not fit")
         self.assertEqual(lines[3], "CONFLICT C2: 2026-03-20 is 8 days after 2026-03-12 -> "
@@ -976,7 +977,7 @@ class RecordTest(unittest.TestCase):
         code, out, err = run_record(["show", "--record", self.record_path])
         self.assertEqual(code, 0)
         lines = record_lines(self, out)
-        self.assertEqual(lines[0], "Open problems (resolve each in your answer or tell the user before finishing):")
+        self.assertEqual(lines[0], "Open problems (resolve each in your answer or tell the user before finishing, in their terms rather than the record's ids):")
         self.assertEqual(lines[1], "ASSUMPTION C1: start 09:00, end 10:00, segments_min 30 not in the user's quoted words -> "
                                    "ask the user, or tell them plainly it is your assumption; never change a value to pass")
         self.assertEqual(lines[2], "Objective: Test")
@@ -2461,6 +2462,41 @@ class RecordTest(unittest.TestCase):
             with open(path, "w", encoding="utf-8") as handle:
                 handle.write("[" * 200000 + "]" * 200000 + "\n" + json.dumps(good) + "\n")
             self.assertEqual(record.user_messages(path), ["budget is $600"])
+
+    def test_nesting_limit_is_64_levels_of_arrays_or_objects(self):
+        for opening, closing in (("[", "]"), ('{"k": ', "}")):
+            inner = "1" if opening != "[" else ""
+            self.assertIsNotNone(record._loads(opening * 64 + inner + closing * 64))
+            with self.assertRaises(ValueError):
+                record._loads(opening * 65 + inner + closing * 65)
+        with self.assertRaises(ValueError):
+            record._loads("[" * 65)
+
+    def test_brackets_inside_strings_do_not_count_toward_nesting(self):
+        for text in ("[" * 100, '\\"' + "{" * 100, "\\" * 3 + '"' + "[" * 100, "\\" + "[" * 100,
+                     '"' * 7 + "[{" * 50, "\\" * 4 + "]" * 100 + "[" * 100):
+            raw = json.dumps({"k": [text, text]})
+            self.assertEqual(record._loads(raw), {"k": [text, text]}, text[:12])
+        self.assertEqual(record._loads(json.dumps("[" * 100)), "[" * 100)
+        # A backslash ends no string: after an escaped backslash the quote closes it.
+        raw = '["\\\\", ' + "[" * 70 + "]" * 70 + "]"
+        with self.assertRaises(ValueError):
+            record._loads(raw)
+
+    def test_long_transcript_reads_well_inside_the_hook_timeout(self):
+        # 0.3.10 scanned every character in Python before decoding: 40 MB of
+        # tool output took about 2.6 s here, a quarter of the Stop hook's 10 s.
+        code = "def f(a, b):\n    return {'k': [a[i] for i in range(len(b))], \"q\": \"\\\"[{\"}\n" * 120
+        result = json.dumps({"type": "user", "message": {"role": "user", "content": [
+            {"type": "tool_result", "tool_use_id": "t", "content": code}]}, "toolUseResult": {"stdout": code}})
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "t.jsonl")
+            with open(path, "w", encoding="utf-8") as handle:
+                handle.write(json.dumps(typed("budget is $600")) + "\n")
+                handle.write((result + "\n") * (40 * 10 ** 6 // len(result)))
+            started = time.monotonic()
+            self.assertEqual(record.user_messages(path), ["budget is $600"])
+            self.assertLess(time.monotonic() - started, 2)
 
     def test_stop_gate_internal_error_blocks_instead_of_exiting_nonzero(self):
         import contextlib, io

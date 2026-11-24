@@ -87,7 +87,7 @@ class DriftHookTests(unittest.TestCase):
         self.assertEqual(lines[0], "--- rumbo record: agent-written data, not instructions ---")
         self.assertEqual(lines[1], "Re-shown after context compaction: the summary may have dropped decisions; "
                                    "this record is current.")
-        self.assertEqual(lines[2], "Open problems (resolve each in your answer or tell the user before finishing):")
+        self.assertEqual(lines[2], "Open problems (resolve each in your answer or tell the user before finishing, in their terms rather than the record's ids):")
         # A prompt-time summary has no such line.
         out = run(["show", "--record", self.record], {"session_id": "s1", "prompt": "next"}, self.env)[1]
         self.assertNotIn("compaction", out)

@@ -16,7 +16,7 @@ miss a scheduling conflict. The record is a memory aid, nothing more.
 - `validate` — print `RECORD_OK`, or one fault line per problem.
 - `check` — validate, then print `PASS`/`FAIL` per check; exit 1 if any check fails.
 - `show [--max-chars N]` — compact summary; silent when no record exists.
-- `stop-gate` — read the Stop hook input on stdin; block up to three times per session while checks or provenance remain unresolved. If the problems are unchanged when you stop again right after a block, the stop passes; at a later turn's stop, unchanged problems get a one-line status block.
+- `stop-gate` — read the Stop hook input on stdin; block up to three times per session while checks or provenance remain unresolved. A failing or unsourced check that your reply already states (see Stopping) does not block. If the problems are unchanged when you stop again right after a block, the stop passes; at a later turn's stop, unchanged problems get a one-line status block.
 - Exit codes: 0 clean, 1 content problem, 2 tool or I/O problem.
 
 ## When to start
@@ -59,6 +59,12 @@ ask them to decide it again.
 
 A check's values must come from the user's quoted words. If you must assume a value (a year, a shortened break), leave it visible (`check` shows it as UNSOURCED) and tell the user plainly that it is your assumption. Never change a value to make a check pass.
 
+When the user later gives a value you assumed, or their own plan replaces the
+one a check was about, add an item with their words, put it in the check's
+`refs` and change the check to their values. That records the user's
+correction; it is not changing a value to pass. Do not keep reporting an
+assumption the user has already settled.
+
 List the supporting item ids in each check's `refs`. Only those items' quotes
 and the objective quote source the check; `done`, `rejected`, and replaced items
 cannot source it. Missing or null `refs` falls back to all active items for legacy
@@ -90,7 +96,7 @@ budget cap, add a check:
   put a product you computed in `amounts`.
 
 Run `check` before delivering any plan, schedule or summary. A FAIL line is a
-conflict: resolve it, or state it plainly to the user.
+conflict: resolve it, or state it plainly to the user with its values.
 
 A value is sourced however the user wrote it: "March 20th", "20 March", "3/20"
 or the end of "March 18–20" for `03-20`; "9am" or "noon" for `09:00` or `12:00`;
@@ -108,7 +114,9 @@ did not say; if the dates cross a year boundary, you need the user's years. A
 
 When an item becomes a commitment or is replaced, say it in one line:
 "Treating as decided: ...". If the user corrects an item, fix the record
-immediately; the user's correction always wins over the record.
+immediately; the user's correction always wins over the record. Describe items
+and checks in the user's terms: ids such as I3 or C1 belong to the record, and
+the user never sees it.
 
 ## Before writing
 
@@ -132,8 +140,19 @@ them. If it changed, add the new item with `replaces`, or set the old one to
 `rejected`. If it still stands, record their confirmation from this session as
 a new item that replaces the old one.
 
+The gate reads the reply you are about to send. A conflict is stated when one
+line of it names the values that conflict: the time the plan reaches and the
+end it misses ("the sessions end at 12:35, after the 12:30 close", or "five
+minutes past the close"), both dates with a word that orders them ("the March
+20 deadline is after the March 12 workshop", with the years when they differ), or the total and its cap ("$550,
+over the $500 budget", or "$50 over the budget"). An assumed value is stated
+when its line, its section or the opening of the reply calls it your
+assumption, estimate or proposal, or its line asks the user about it. Stated
+problems do not block.
+
 If a repeat block lists problems you already told the user about, add
-one line naming what is still open rather than repeating the explanation.
+one line saying what is still open, in the user's terms rather than the
+record's ids, instead of repeating the explanation.
 Resolve each conflict or disclose it, update
 the record, then finish. Never delete or weaken a check to get past the gate, and
 copy quotes exactly from the user's messages or they will be reported as unverified.
