@@ -121,6 +121,13 @@ The Claude adapter lives in `rumbo/` beside the engine modules (`.claude-plugin/
 /plugin install rumbo@rumbo
 ```
 
+To update an installed copy, refresh the marketplace and then the plugin from a shell:
+
+```text
+claude plugin marketplace update rumbo
+claude plugin update rumbo@rumbo
+```
+
 Those commands access the revision actually on the remote; verify its branch/version before relying on candidate behavior. New engine state lives in `.rumbo/state.sqlite3`; legacy planning records remain `.rumbo/record.json`. Nothing is silently converted or deleted.
 
 In 0.3, missing or unreadable transcripts now trigger the existing bounded Stop provenance warning/block behavior rather than silently skipping verification. Source checks respect `refs` and exclude done/rejected/replaced items. Missing/null refs use active items plus the objective; explicit `[]` uses only the objective. Historical records may need corrected refs. Read [migration details](docs/MIGRATION.md) and the [legacy specification](rumbo/SPEC.md).
