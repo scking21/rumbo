@@ -64,6 +64,19 @@ class ReplacesValidationTests(unittest.TestCase):
                                   "checks[1].replaces: RECORD_BAD_REF: replaces must not form a cycle"])
         loop = [budget("A", [1], replaces=["B"]), budget("B", [1], replaces=["C"]), budget("C", [1], replaces=["A"])]
         self.assertEqual(len(self.faults(*loop)), 3)
+        # A check that replaces a cycle member is not itself on the cycle.
+        self.assertEqual(len(self.faults(*loop, budget("D", [1], replaces=["A"]))), 3)
+
+    def test_a_long_chain_is_checked_in_linear_time(self):
+        # Every hook validates the record. A search from each check took
+        # seconds for a few thousand chained checks, against a 10 s timeout.
+        import time
+        chain = [budget("C%d" % i, [1], **({"replaces": ["C%d" % (i - 1)]} if i else {})) for i in range(20000)]
+        started = time.monotonic()
+        self.assertEqual(self.faults(*chain), [])
+        chain[0]["replaces"] = ["C19999"]
+        self.assertEqual(len(self.faults(*chain)), 20000)
+        self.assertLess(time.monotonic() - started, 3)
 
 
 class ReplacedCheckTests(unittest.TestCase):

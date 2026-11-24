@@ -1429,20 +1429,55 @@ def _validate_check_replaces(checks, check_ids):
                               % (path, check.get("kind")))
             elif isinstance(check.get("id"), str):
                 edges.setdefault(check["id"], []).append(ref_id)
+    cyclic = _on_a_cycle(edges)
     for index, check in enumerate(checks):
-        start = check.get("id") if isinstance(check, dict) else None
-        if start not in edges:
-            continue
-        seen, stack = set(), list(edges[start])
-        while stack:
-            node = stack.pop()
-            if node == start:
-                faults.append("checks[%d].replaces: RECORD_BAD_REF: replaces must not form a cycle" % index)
-                break
-            if node not in seen:
-                seen.add(node)
-                stack.extend(edges.get(node, []))
+        if isinstance(check, dict) and check.get("id") in cyclic:
+            faults.append("checks[%d].replaces: RECORD_BAD_REF: replaces must not form a cycle" % index)
     return faults
+
+
+def _on_a_cycle(edges):
+    """Ids on a cycle of edges, with no edge from an id to itself.
+
+    Tarjan's strongly connected components, without recursion, so it takes
+    time linear in the record however long its chains of replacements are:
+    an id is on a cycle when its component has another member.
+    """
+    order, low, on_stack, stack, cyclic = {}, {}, set(), [], set()
+    for root in edges:
+        if root in order:
+            continue
+        order[root] = low[root] = len(order)
+        stack.append(root)
+        on_stack.add(root)
+        work = [(root, iter(edges.get(root, ())))]
+        while work:
+            node, children = work[-1]
+            for child in children:
+                if child not in order:
+                    order[child] = low[child] = len(order)
+                    stack.append(child)
+                    on_stack.add(child)
+                    work.append((child, iter(edges.get(child, ()))))
+                    break
+                if child in on_stack:
+                    low[node] = min(low[node], order[child])
+            else:
+                work.pop()
+                if work:
+                    parent = work[-1][0]
+                    low[parent] = min(low[parent], low[node])
+                if low[node] == order[node]:
+                    component = []
+                    while True:
+                        member = stack.pop()
+                        on_stack.discard(member)
+                        component.append(member)
+                        if member == node:
+                            break
+                    if len(component) > 1:
+                        cyclic.update(component)
+    return cyclic
 
 
 def replaced_checks(record):
