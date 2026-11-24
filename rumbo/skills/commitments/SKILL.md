@@ -14,7 +14,7 @@ miss a scheduling conflict. The record is a memory aid, nothing more.
 - All subcommands: `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/record.py" <sub> --record "<record path>"`.
 - `init --objective TEXT --quote - <<'QUOTE'` — create the record with the goal and the user's own words, then a line with the user's exact words, then a line `QUOTE`; refuses to overwrite. Always pass the user's words through `--quote -` with a quoted heredoc (`<<'QUOTE'`); inside double quotes the shell rewrites `$` amounts and backticks.
 - `validate` — print `RECORD_OK`, or one fault line per problem.
-- `check` — validate, then print `PASS`/`FAIL` per check; exit 1 if any check fails.
+- `check` — validate, then print `PASS`/`FAIL` per check, and `REPLACED` for a check a newer one replaces; exit 1 if any check fails.
 - `show [--max-chars N]` — compact summary; silent when no record exists.
 - `stop-gate` — read the Stop hook input on stdin; block up to three times per session while checks or provenance remain unresolved. A failing or unsourced check that your reply already states (see Stopping) does not block. If the problems are unchanged when you stop again right after a block, the stop passes; at a later turn's stop, unchanged problems get a one-line status block.
 - Exit codes: 0 clean, 1 content problem, 2 tool or I/O problem.
