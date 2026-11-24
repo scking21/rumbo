@@ -19,27 +19,29 @@ The field is refused (`RECORD_BAD_REF`) whenever it could hide a problem still i
 
 - The decision must be an item, a `commitment` or `rejected`, whose own `replaces` lists one of the check's `refs`. Flipping the check's own item to `rejected` is not enough: the user's decision is recorded as its own item with their words.
 - A decision that has itself been replaced no longer drops anything, so when the user brings the option back the record is invalid until the agent names the decision now in force or removes `dropped_by`.
-- A decision whose words give a value of the check's kind that the check does not have is an update, not a drop ("Dr. Okafor's slides are now due March 5" gives a new date), and the refusal tells the agent to write a newer check with it that lists the old one in `replaces`. The values read are dates for `before`, clock times and durations for `fits_window`, and money amounts or "free" for `within_budget`; a value the check already has, such as the workshop's own date, does not count.
+- A decision whose words give a value of the check's kind that the check does not have is an update, not a drop ("Dr. Okafor's slides are now due March 5" gives a new date), and the refusal tells the agent to write a newer check with it that lists the old one in `replaces`. The values read are dates for `before`, with any year written with them, so "March 20, 2027" is new for a check of `2026-03-20` and for one of `03-20`; clock times and whole durations ("1 hour 15 minutes", "2h30") for `fits_window`; and money amounts or "free" for `within_budget`. A value the check already has, such as the workshop's own date, does not count.
 - At least one of the check's values must come only from the quotes of the items the decision replaced. A check whose values all still come from items in force is about the current plan, so it cannot be dropped by a decision that happens to replace one of its items.
 
 The commitments skill says to replace a check with the same kind of check for what the user chose, and to use `dropped_by` only when that choice leaves nothing of that kind to check.
 
 ## Evidence
 
-The live session's own record validates with `C8.dropped_by: "I16"`, and `check` then prints C8 as `DROPPED` and exits 0 instead of reporting April 1 as unsourced. `rumbo/tests/test_check_dropped.py` covers each refusal and the hooks, and the crash fuzz test now writes random `dropped_by` values. A separate fuzz of 3,000 otherwise-valid records with random decision wording found no crash; validation took at most 8 ms, also on 20,000-character adversarial quotes.
+The live session's own record validates with `C8.dropped_by: "I16"`, and `check` then prints C8 as `DROPPED` and exits 0 instead of reporting April 1 as unsourced. `rumbo/tests/test_check_dropped.py` covers each refusal and the hooks, and the crash fuzz test now writes random `dropped_by` values. A separate fuzz of 3,000 otherwise-valid records with random decision wording found no crash; validation took at most 8 ms, and at most 0.1 s on 24,000-character quotes built to stress the date and duration patterns. Review of this change found that a decision moving a deadline to another year, or giving it as `03-25`, could drop the check; dates now keep their years and are read in every form the source check reads.
 
-`rumbo/evals/08-dropped-option` is a new four-turn case: a workshop on March 12, Dr. Okafor's slides due for approval on March 20, then the user goes with the maker-space team and asks for the final plan. One sonnet session on each version, run with `scripts/claude_multiturn_eval.py --grade` (haiku judge, majority of three):
+`rumbo/evals/08-dropped-option` is a new four-turn case: a workshop on March 12, Dr. Okafor's slides due for approval on March 20, then the user goes with the maker-space team and asks for the final plan. Three sonnet sessions on each version, run one at a time with `scripts/claude_multiturn_eval.py --grade` (haiku judge, majority of three), before the review fix above, which does not change this case:
 
 | | 0.3.13 | 0.3.14 |
 | --- | --- | --- |
-| The agent flagged the March 20 conflict when it came up | PASS | PASS |
-| The plan does not list the dropped conflict as open | PASS | PASS |
-| The plan treats the speaker as settled | PASS | PASS |
-| Replies after the choice do not explain the dropped conflict again | FAIL | PASS |
-| Stop blocks | 0 | 0 |
-| Cost | $0.38 | $0.19 |
+| The agent flagged the March 20 conflict when it came up | 3 of 3 | 3 of 3 |
+| The plan does not list the dropped conflict as open | 3 of 3 | 3 of 3 |
+| The plan treats the speaker as settled | 3 of 3 | 3 of 3 |
+| Replies after the choice do not explain the dropped conflict again | 0 of 3 | 2 of 3 |
+| The check was retired with `dropped_by` | (no such field) | 3 of 3 |
+| Replies after the choice that explain the record to the user | 1, 3 and 6 | 0, 0 and 0 |
+| Stop blocks | 1 | 0 |
+| Mean cost | $0.29 | $0.20 |
 
-On 0.3.13 the agent kept the failing check and restated the conflict after the choice ("The earlier date conflict is moot, but I'll state it for the record") and again in the final summary; a reply that states a conflict passes the Stop gate, so it never blocked. On 0.3.14 the agent recorded the decision as an item that replaced Dr. Okafor's terms and set `dropped_by` on the check without being asked: `check` printed `C1: DROPPED before slide approval deadline vs. workshop date by I2`, and its replies said only that the deadline no longer applied. This is one session per version; it shows the field is used as intended, not a measured rate.
+On 0.3.13 every agent kept the failing check, since nothing could retire it, and restated the conflict after the choice to get its replies past the Stop gate ("The earlier date conflict is moot, but I'll state it for the record"). Two explained the record itself to the user: "I couldn't clear the flag in my records, because the tool only lets me replace a check with another of the same type", and, after the one block, "The record marks it as unsourced only because I marked Dr. Okafor's item as dropped, so that item no longer counts as a source. It is not my assumption." On 0.3.14 every agent recorded the decision as an item that replaced Dr. Okafor's terms and set `dropped_by` without being asked (`check` printed `C1: DROPPED before slide approval deadline vs. workshop date by I2`), and its replies said only that the deadline no longer applied. The 0.3.14 failure said it once in passing: "The earlier worry about it falling after March 12 is moot." Three sessions per version are a small sample.
 
 ## Verification and rollback
 
