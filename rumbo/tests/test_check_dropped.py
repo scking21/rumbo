@@ -122,7 +122,7 @@ class DroppedValidationTests(unittest.TestCase):
         self.assertEqual(self.faults([DROPPED], items), [
             'checks[0].dropped_by: RECORD_BAD_REF: I3\'s words name a value ("March 5"), so the decision may '
             "update the check rather than drop it: if the user gave a new value, write a check with it that lists "
-            "C1 in replaces; if they only dropped the option, quote just their words that drop it"])
+            "C1 in replaces; if they only dropped the option, change I3's quote to just their words that drop it"])
         # A value the check already has counts too; the words that drop the option do not name it.
         items[2] = item("I3", "Let's go with the maker-space team for the March 12 workshop.", replaces=["I2"])
         self.assertEqual(len(self.faults([DROPPED], items)), 1)
