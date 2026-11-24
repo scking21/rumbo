@@ -2307,7 +2307,14 @@ def _conflict_ways(check):
         return [[[("time", "%02d:%02d" % divmod(reached % (24 * 60), 60)), ("time", check["end"])],
                  [("minutes phrase", reached - end), ("over", None)]]]
     if kind == "before":
-        return [[[("date", check["first"]), ("date", check["second"]), ("order", None)]]]
+        first, second = check["first"], check["second"]
+        facts = [("date", first), ("date", second), ("order", None)]
+        if _has_year(first) and first[:4] != second[:4]:
+            # The years decide this conflict, so the line must say them too:
+            # "March 1, 2026 is earlier than March 3, 2026" restates the dates
+            # with another year and does not tell the user about 2027.
+            facts += [("year", first[:4]), ("year", second[:4])]
+        return [[facts]]
     amounts, _labels, total, cap, item_cap, excess = _budget(check)
     ways = []
     if total > cap:

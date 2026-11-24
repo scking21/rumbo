@@ -86,6 +86,20 @@ class StatementReadingTests(unittest.TestCase):
         # "before March 20" names the deadline; it does not say the dates conflict.
         self.assertEqual(stated("By March 3, finish what must happen before March 20.", late, said), set())
 
+    def test_dates_in_different_years_need_their_years(self):
+        # Review of 0.3.11: a reply that moves the deadline into the other year
+        # and says the schedule works must not count as stating the conflict.
+        late = check(kind="before", first="2027-03-01", second="2026-03-03")
+        said = "The deadline is March 1, 2027 and the launch is March 3, 2026."
+        self.assertEqual(stated("March 1, 2026 is earlier than March 3, 2026, so the schedule works.", late, said),
+                         set())
+        self.assertEqual(stated("The March 1 deadline is after the March 3 launch.", late, said), set())
+        self.assertEqual(stated("March 1, 2027 is after March 3, 2026, a year late.", late, said), {"C1"})
+        # In one year the month and day decide it, as they do without a year.
+        same = check(kind="before", first="2026-03-20", second="2026-03-12")
+        said = "The workshop is March 12, 2026 and the printer needs details by March 20, 2026."
+        self.assertEqual(stated("The March 20 deadline is after the March 12 workshop.", same, said), {"C1"})
+
     def test_budget_needs_the_total_and_the_cap(self):
         over = check(kind="within_budget", amounts=[300, 250], total_cap=500)
         said = "Ads are $300 and the newsletter $250; the budget is $500."
