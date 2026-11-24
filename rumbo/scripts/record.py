@@ -1399,7 +1399,55 @@ def validate_record(record):
         else:
             faults.extend(_validate_check_values(base, kind, check))
 
+    faults.extend(_validate_check_replaces(checks, check_ids))
     return faults
+
+
+def _validate_check_replaces(checks, check_ids):
+    """Faults in checks' replaces: ids of other checks of the same kind, with no cycle.
+
+    A cycle would leave every check in it replaced, so none of them would be
+    checked; refusing it keeps the newest check of every chain in force.
+    """
+    faults = []
+    kinds = {check.get("id"): check.get("kind") for check in checks if isinstance(check, dict)}
+    edges = {}
+    for index, check in enumerate(checks):
+        if not isinstance(check, dict) or check.get("replaces") is None:
+            continue
+        base = "checks[%d].replaces" % index
+        replaces = check["replaces"]
+        if not isinstance(replaces, list):
+            faults.append("%s: RECORD_BAD_REF: replaces must be a list of check ids" % base)
+            continue
+        for ref_index, ref_id in enumerate(replaces):
+            path = "%s[%d]" % (base, ref_index)
+            if not isinstance(ref_id, str) or ref_id not in check_ids or ref_id == check.get("id"):
+                faults.append("%s: RECORD_BAD_REF: replace the id of another check in checks" % path)
+            elif kinds.get(ref_id) != check.get("kind"):
+                faults.append("%s: RECORD_BAD_REF: replace only a check of the same kind (%s)"
+                              % (path, check.get("kind")))
+            elif isinstance(check.get("id"), str):
+                edges.setdefault(check["id"], []).append(ref_id)
+    for index, check in enumerate(checks):
+        start = check.get("id") if isinstance(check, dict) else None
+        if start not in edges:
+            continue
+        seen, stack = set(), list(edges[start])
+        while stack:
+            node = stack.pop()
+            if node == start:
+                faults.append("checks[%d].replaces: RECORD_BAD_REF: replaces must not form a cycle" % index)
+                break
+            if node not in seen:
+                seen.add(node)
+                stack.extend(edges.get(node, []))
+    return faults
+
+
+def replaced_checks(record):
+    """Ids of checks that a newer check replaces; assumes a valid record."""
+    return {ref for check in record.get("checks") or [] for ref in check.get("replaces") or []}
 
 
 def _validate_check_values(base, kind, check):
@@ -1629,7 +1677,10 @@ def status_line(check):
 def failing_checks(record):
     """List of (check, detail) for every failing check, in record order."""
     results = []
+    replaced = replaced_checks(record)
     for check in record.get("checks") or []:
+        if check.get("id") in replaced:
+            continue
         try:
             passed, detail = evaluate_check(check)
         except (KeyError, TypeError):
@@ -1660,7 +1711,10 @@ def open_problem_lines(record):
     lines = []
     for check, detail in failing_checks(record):
         lines.append("CONFLICT %s: %s -> %s" % (check["id"], detail, CONFLICT_ACTIONS[check["kind"]]))
+    replaced = replaced_checks(record)
     for check in record.get("checks") or []:
+        if check["id"] in replaced:
+            continue
         passed, _ = evaluate_check(check)
         if passed:
             unsourced = unsourced_values(record, check)
@@ -1701,7 +1755,15 @@ def cmd_check(args):
         return 1
     failed = False
     unsourced_found = False
+    replaced = replaced_checks(record)
     for check in record.get("checks") or []:
+        if check["id"] in replaced:
+            # History: a newer check of the same kind is in force instead.
+            newer = [c["id"] for c in record["checks"] if check["id"] in (c.get("replaces") or [])]
+            print("%s: REPLACED %s%s by %s" % (check["id"], check["kind"],
+                                                (" " + check["label"]) if check.get("label") else "",
+                                                ", ".join(newer)))
+            continue
         passed, detail = evaluate_check(check)
         unsourced = unsourced_values(record, check)
 
@@ -2216,7 +2278,10 @@ MAX_BLOCKS = 3
 def record_problems(record):
     """FAIL and UNSOURCED lines, as `check` prints them, and the ids involved."""
     parts, ids = [], []
+    replaced = replaced_checks(record)
     for check in record.get("checks") or []:
+        if check["id"] in replaced:
+            continue
         passed, _detail = evaluate_check(check)
         unsourced = unsourced_values(record, check)
         if not passed:
@@ -2369,7 +2434,10 @@ def stated_checks(record, reply):
         return memo[key]
 
     stated = set()
+    replaced = replaced_checks(record)
     for check in record.get("checks") or []:
+        if check["id"] in replaced:
+            continue
         ways = _conflict_ways(check)
         unsourced = [(reading, value) for _label, reading, value in _unsourced(record, check)]
         if not ways and not unsourced:
