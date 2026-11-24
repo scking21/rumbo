@@ -73,6 +73,8 @@ class LoadError(Exception):
 
 
 MAX_JSON_DEPTH = 64
+JSON_STRING = re.compile(r'"[^"]*"')
+JSON_BRACKET = re.compile(r"[][{}]")
 
 
 def _loads(raw):
@@ -80,25 +82,22 @@ def _loads(raw):
 
     The decoder's own depth limit is a CPython detail (3.14 raises
     RecursionError, not ValueError), so depth is checked before decoding.
+    Brackets inside strings do not count. Removing escaped backslashes, then
+    escaped quotes, leaves each string as a plain "..." run; removing those
+    leaves only the brackets that nest. Every step but the final count runs
+    in C, because a Stop hook reads every line of a long session's
+    transcript inside its 10 second timeout.
     """
-    depth = 0
-    quoted = escaped = False
-    for char in raw:
-        if quoted:
-            if escaped:
-                escaped = False
-            elif char == "\\":
-                escaped = True
-            elif char == '"':
-                quoted = False
-        elif char == '"':
-            quoted = True
-        elif char in "[{":
-            depth += 1
-            if depth > MAX_JSON_DEPTH:
-                raise ValueError("JSON nesting exceeds limit")
-        elif char in "]}":
-            depth -= 1
+    structure = JSON_STRING.sub("", raw.replace("\\\\", "").replace('\\"', ""))
+    if structure.count("[") + structure.count("{") > MAX_JSON_DEPTH:
+        depth = 0
+        for char in JSON_BRACKET.findall(structure):
+            if char in "[{":
+                depth += 1
+                if depth > MAX_JSON_DEPTH:
+                    raise ValueError("JSON nesting exceeds limit")
+            else:
+                depth -= 1
     try:
         return json.loads(raw)
     except RecursionError:
