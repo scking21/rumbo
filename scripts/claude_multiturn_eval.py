@@ -63,6 +63,9 @@ def run_session(case, plugin, model, out, timeout=900):
         except subprocess.TimeoutExpired:
             failure = "turn %d: no result within %d s" % (number, timeout)
             break
+        except OSError as error:
+            failure = "turn %d: could not run claude: %s" % (number, error)
+            break
         try:
             result = json.loads(done.stdout)
         except ValueError:
@@ -164,10 +167,12 @@ def grade(case, project, transcript, judge):
         votes = []
         for _ in range(3):
             try:
-                done = subprocess.run(["claude", "-p", prompt, "--model", judge, "--tools", "", "--output-format",
-                                       "json"], capture_output=True, text=True, timeout=300, cwd=project)
+                # The prompt goes on stdin: a long session's replies would pass
+                # the 128 KB limit on one command-line argument.
+                done = subprocess.run(["claude", "-p", "--model", judge, "--tools", "", "--output-format", "json"],
+                                      input=prompt, capture_output=True, text=True, timeout=300, cwd=project)
                 answer = json.loads(done.stdout)
-            except (subprocess.TimeoutExpired, ValueError):
+            except (subprocess.TimeoutExpired, OSError, ValueError):
                 answer = {"is_error": True}
             # A judge that failed (a usage limit, say) has no verdict; never count it as FAIL.
             votes.append("ERROR" if answer.get("is_error") else
@@ -203,19 +208,22 @@ def main(argv=None):
     def one(job):
         case, n = job
         out = os.path.join(args.out, "%s-%d" % (os.path.basename(os.path.normpath(case)), n))
+        row = dict(case=case, run=n, session=None, turns=0, cost=None, transcript=None, failure=None,
+                   blocks=[], naming_ids=[])
+        # One broken session, transcript or judge must not lose the others' results.
         try:
-            row = dict(case=case, run=n, **run_session(case, plugin, args.model, out, args.turn_timeout))
-        except Exception as error:  # one broken session must not lose the others' results
-            row = dict(case=case, run=n, session=None, turns=0, cost=None, transcript=None,
-                       failure="%s: %s" % (type(error).__name__, error))
+            row.update(run_session(case, plugin, args.model, out, args.turn_timeout))
+            if row["transcript"]:
+                blocks, row["naming_ids"] = read_session(row["transcript"])
+                row["blocks"] = [{"turn": turn, "reason": reason} for turn, reason in blocks]
+            # An incomplete session has no final artifact to judge, and judging a
+            # partial one would mix unfinished cases into the comparison.
+            if args.grade and not row["failure"]:
+                row["graders"] = grade(case, os.path.join(out, "project"), row["transcript"], args.judge_model)
+        except Exception as error:
+            row["failure"] = row["failure"] or "%s: %s" % (type(error).__name__, error)
         if row["failure"]:
             row["failure"] = " ".join(row["failure"].split())
-        blocks, naming = read_session(row["transcript"]) if row["transcript"] else ([], [])
-        row.update(blocks=[{"turn": turn, "reason": reason} for turn, reason in blocks], naming_ids=naming)
-        # An incomplete session has no final artifact to judge, and judging a
-        # partial one would mix unfinished cases into the comparison.
-        if args.grade and not row["failure"]:
-            row["graders"] = grade(case, os.path.join(out, "project"), row["transcript"], args.judge_model)
         return row
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, args.jobs)) as pool:
