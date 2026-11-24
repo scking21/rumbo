@@ -44,7 +44,7 @@ def turns_of(case):
     return [part.strip() for part in FRONT_MATTER.sub("", text).split("\n\n") if part.strip()]
 
 
-def run_session(case, plugin, model, out):
+def run_session(case, plugin, model, out, timeout=900):
     project = os.path.join(out, "project")
     os.makedirs(project, exist_ok=True)
     env = dict(os.environ, RUMBO_STATE_DIR=os.path.join(out, "state"))
@@ -54,22 +54,31 @@ def run_session(case, plugin, model, out):
                    "--allowedTools", *TOOLS, "--disallowedTools", "WebFetch", "WebSearch", "Agent", "Task"]
         if session:
             command += ["--resume", session]
-        done = subprocess.run(command, cwd=project, env=env, capture_output=True, text=True, timeout=900)
+        number = len(costs) + 1
+        try:
+            done = subprocess.run(command, cwd=project, env=env, capture_output=True, text=True, timeout=timeout)
+        except subprocess.TimeoutExpired:
+            failure = "turn %d: no result within %d s" % (number, timeout)
+            break
         try:
             result = json.loads(done.stdout)
         except ValueError:
-            raise SystemExit("claude -p failed in %s: %s" % (out, (done.stderr or done.stdout)[-500:]))
+            failure = "turn %d: claude -p printed no result: %s" % (number, (done.stderr or done.stdout)[-300:])
+            break
         session = result.get("session_id") or session
         if result.get("is_error"):
-            failure = "turn %d: %s" % (len(costs) + 1, str(result.get("result"))[:200])
+            failure = "turn %d: %s" % (number, str(result.get("result"))[:200])
             break
         costs.append(result.get("total_cost_usd"))
-    if session is None:
-        raise SystemExit("no session was started in %s: %s" % (out, failure))
-    slug = re.sub(r"[^A-Za-z0-9]", "-", os.path.realpath(project))
-    transcript = os.path.expanduser("~/.claude/projects/%s/%s.jsonl" % (slug, session))
-    shutil.copy(transcript, os.path.join(out, "transcript.jsonl"))
-    return {"session": session, "turns": len(costs), "cost": costs[-1] if costs else None, "failure": failure}
+    copy = None
+    if session:
+        slug = re.sub(r"[^A-Za-z0-9]", "-", os.path.realpath(project))
+        transcript = os.path.expanduser("~/.claude/projects/%s/%s.jsonl" % (slug, session))
+        if os.path.isfile(transcript):
+            copy = os.path.join(out, "transcript.jsonl")
+            shutil.copy(transcript, copy)
+    return {"session": session, "turns": len(costs), "cost": costs[-1] if costs else None,
+            "failure": failure, "transcript": copy}
 
 
 def read_session(transcript):
@@ -110,11 +119,11 @@ def grade(case, project, judge):
             FRONT_MATTER.sub("", text).strip(), open(target, encoding="utf-8").read())
         votes = []
         for _ in range(3):
-            done = subprocess.run(["claude", "-p", prompt, "--model", judge, "--tools", "", "--output-format", "json"],
-                                  capture_output=True, text=True, timeout=300, cwd=project)
             try:
+                done = subprocess.run(["claude", "-p", prompt, "--model", judge, "--tools", "", "--output-format",
+                                       "json"], capture_output=True, text=True, timeout=300, cwd=project)
                 answer = json.loads(done.stdout)
-            except ValueError:
+            except (subprocess.TimeoutExpired, ValueError):
                 answer = {"is_error": True}
             # A judge that failed (a usage limit, say) has no verdict; never count it as FAIL.
             votes.append("ERROR" if answer.get("is_error") else
@@ -132,6 +141,7 @@ def main(argv=None):
     parser.add_argument("--model", default="sonnet")
     parser.add_argument("--runs", type=int, default=1)
     parser.add_argument("--jobs", type=int, default=1, help="sessions to run at once; they share one usage window")
+    parser.add_argument("--turn-timeout", type=int, default=900, help="seconds a turn may take")
     parser.add_argument("--grade", action="store_true")
     parser.add_argument("--judge-model", default="haiku")
     parser.add_argument("--allow-shell", action="store_true",
@@ -149,8 +159,14 @@ def main(argv=None):
     def one(job):
         case, n = job
         out = os.path.join(args.out, "%s-%d" % (os.path.basename(os.path.normpath(case)), n))
-        row = dict(case=case, run=n, **run_session(case, plugin, args.model, out))
-        blocks, naming = read_session(os.path.join(out, "transcript.jsonl"))
+        try:
+            row = dict(case=case, run=n, **run_session(case, plugin, args.model, out, args.turn_timeout))
+        except Exception as error:  # one broken session must not lose the others' results
+            row = dict(case=case, run=n, session=None, turns=0, cost=None, transcript=None,
+                       failure="%s: %s" % (type(error).__name__, error))
+        if row["failure"]:
+            row["failure"] = " ".join(row["failure"].split())
+        blocks, naming = read_session(row["transcript"]) if row["transcript"] else ([], [])
         row.update(blocks=[{"turn": turn, "reason": reason} for turn, reason in blocks], naming_ids=naming)
         # An incomplete session has no final artifact to judge, and judging a
         # partial one would mix unfinished cases into the comparison.
