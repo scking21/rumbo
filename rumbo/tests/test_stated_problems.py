@@ -116,6 +116,18 @@ class StatementReadingTests(unittest.TestCase):
         self.assertEqual(stated(table, over, said), {"C1"})
         self.assertEqual(stated("That leaves $50 for flyers.", over, said), set())
 
+    def test_a_cap_of_zero_must_be_said(self):
+        # Review of 0.3.11: the source check counts 0 as always sourced, so a
+        # zero cap read as stated whatever the reply said.
+        over = check(kind="within_budget", amounts=[350], total_cap=0)
+        said = "Catering costs $350, and there is no budget: 0."
+        self.assertEqual(stated("Catering costs $350. All set!", over, said), set())
+        self.assertEqual(stated("Catering costs $350 against a budget of $0.", over, said), {"C1"})
+        self.assertEqual(stated("Catering costs $350, but the budget is zero.", over, said), {"C1"})
+        # Zeros inside other numbers and times are not a zero.
+        for reply in ("Catering costs $350 by 10:00.", "Catering costs $350 of $1,000.", "Catering costs $350, 0.5 of it now."):
+            self.assertEqual(stated(reply, over, said), set(), reply)
+
     def test_item_cap_needs_each_amount_over_it_and_the_cap(self):
         over = check(kind="within_budget", amounts=[350, 320], total_cap=1000, item_cap=300)
         said = "Catering is $350 and the room $320; $1,000 total, at most $300 per item."
@@ -152,9 +164,12 @@ class StatementReadingTests(unittest.TestCase):
                                 assumed, said), {"C1"})
         self.assertEqual(stated("## Budget (my proposal)\n" + table, assumed, said), {"C1"})
         self.assertEqual(stated("## Budget\n" + table + "\nThese amounts are my suggestions.", assumed, said), {"C1"})
+        # Three or more words after "you" no longer give the cue to the user.
+        self.assertEqual(stated("## Budget\nAs you can see from my estimates:\n" + table, assumed, said), {"C1"})
         # Words that give the value to the user are the claim an unsourced value contradicts.
         for heading in ("## Budget (the figures you suggested)", "## Budget (your estimate)",
-                        "## Budget (as you proposed)"):
+                        "## Budget (as you proposed)", "## Budget (your earlier estimate)",
+                        "## Budget (as you originally suggested)", "## Budget (you've already estimated it)"):
             self.assertEqual(stated(heading + "\n" + table, assumed, said), set(), heading)
         # A cue in another section does not cover a table it does not head.
         self.assertEqual(stated("## Venue\nI assumed the room is free.\n## Budget\n" + table, assumed, said), set())

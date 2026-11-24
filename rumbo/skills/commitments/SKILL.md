@@ -14,7 +14,7 @@ miss a scheduling conflict. The record is a memory aid, nothing more.
 - All subcommands: `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/record.py" <sub> --record "<record path>"`.
 - `init --objective TEXT --quote - <<'QUOTE'` — create the record with the goal and the user's own words, then a line with the user's exact words, then a line `QUOTE`; refuses to overwrite. Always pass the user's words through `--quote -` with a quoted heredoc (`<<'QUOTE'`); inside double quotes the shell rewrites `$` amounts and backticks.
 - `validate` — print `RECORD_OK`, or one fault line per problem.
-- `check` — validate, then print `PASS`/`FAIL` per check; exit 1 if any check fails.
+- `check` — validate, then print `PASS`/`FAIL` per check, and `REPLACED` for a check a newer one replaces; exit 1 if any check fails.
 - `show [--max-chars N]` — compact summary; silent when no record exists.
 - `stop-gate` — read the Stop hook input on stdin; block up to three times per session while checks or provenance remain unresolved. A failing or unsourced check that your reply already states (see Stopping) does not block. If the problems are unchanged when you stop again right after a block, the stop passes; at a later turn's stop, unchanged problems get a one-line status block.
 - Exit codes: 0 clean, 1 content problem, 2 tool or I/O problem.
@@ -60,10 +60,13 @@ ask them to decide it again.
 A check's values must come from the user's quoted words. If you must assume a value (a year, a shortened break), leave it visible (`check` shows it as UNSOURCED) and tell the user plainly that it is your assumption. Never change a value to make a check pass.
 
 When the user later gives a value you assumed, or their own plan replaces the
-one a check was about, add an item with their words, put it in the check's
-`refs` and change the check to their values. That records the user's
-correction; it is not changing a value to pass. Do not keep reporting an
-assumption the user has already settled.
+one a check was about, add an item with their words and a check with their
+values that lists the old check's id in `replaces`. That records the user's
+correction; it is not changing a value to pass. When a decision drops the
+option a check was about, replace that check with the same kind of check for
+what the user chose. A replaced check stays as history and is no longer
+reported; never delete a check. Do not keep reporting an assumption the user
+has already settled.
 
 List the supporting item ids in each check's `refs`. Only those items' quotes
 and the objective quote source the check; `done`, `rejected`, and replaced items
@@ -77,10 +80,13 @@ Add items and checks by editing the JSON directly, then run `validate`:
 {"id": "I3", "text": "Maker-space team only", "quote": "I think we should go with just the maker-space team for this workshop.",
  "ref": "E12", "status": "commitment", "scope": "this workshop only", "replaces": []}
 {"id": "C1", "kind": "fits_window", "label": "session schedule", "start": "09:45", "segments_min": [75, 20, 75], "end": "12:30", "refs": ["I1"]}
+{"id": "C4", "kind": "within_budget", "label": "budget with the maker-space team", "amounts": [0, 200], "total_cap": 600,
+ "refs": ["I3", "I5"], "replaces": ["C2"]}
 ```
 
-Every item carries the user's verbatim words in `quote`. A newer item that
-supersedes an older one lists the older id in `replaces`; never delete history.
+Every item carries the user's verbatim words in `quote`. A newer item or
+check that supersedes an older one lists the older id in `replaces`; never
+delete history.
 
 ## Times, dates and money
 

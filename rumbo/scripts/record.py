@@ -1399,7 +1399,92 @@ def validate_record(record):
         else:
             faults.extend(_validate_check_values(base, kind, check))
 
+    faults.extend(_validate_check_replaces(checks, check_ids))
     return faults
+
+
+def _validate_check_replaces(checks, check_ids):
+    """Faults in checks' replaces: ids of other checks of the same kind, with no cycle.
+
+    A cycle would leave every check in it replaced, so none of them would be
+    checked; refusing it keeps the newest check of every chain in force.
+    """
+    faults = []
+    # Only string ids can be replaced; validate_record reports any other id.
+    kinds = {check["id"]: check.get("kind") for check in checks
+             if isinstance(check, dict) and isinstance(check.get("id"), str)}
+    edges = {}
+    for index, check in enumerate(checks):
+        if not isinstance(check, dict) or check.get("replaces") is None:
+            continue
+        base = "checks[%d].replaces" % index
+        replaces = check["replaces"]
+        if not isinstance(replaces, list):
+            faults.append("%s: RECORD_BAD_REF: replaces must be a list of check ids" % base)
+            continue
+        for ref_index, ref_id in enumerate(replaces):
+            path = "%s[%d]" % (base, ref_index)
+            if not isinstance(ref_id, str) or ref_id not in check_ids or ref_id == check.get("id"):
+                faults.append("%s: RECORD_BAD_REF: replace the id of another check in checks" % path)
+            elif kinds.get(ref_id) != check.get("kind"):
+                faults.append("%s: RECORD_BAD_REF: replace only a check of the same kind (%s)"
+                              % (path, check.get("kind")))
+            elif isinstance(check.get("id"), str):
+                edges.setdefault(check["id"], []).append(ref_id)
+    cyclic = _on_a_cycle(edges)
+    for index, check in enumerate(checks):
+        if isinstance(check, dict) and isinstance(check.get("id"), str) and check["id"] in cyclic:
+            faults.append("checks[%d].replaces: RECORD_BAD_REF: replaces must not form a cycle" % index)
+    return faults
+
+
+def _on_a_cycle(edges):
+    """Ids on a cycle of edges, with no edge from an id to itself.
+
+    Tarjan's strongly connected components, without recursion, so it takes
+    time linear in the record however long its chains of replacements are:
+    an id is on a cycle when its component has another member.
+    """
+    order, low, on_stack, stack, cyclic = {}, {}, set(), [], set()
+    for root in edges:
+        if root in order:
+            continue
+        order[root] = low[root] = len(order)
+        stack.append(root)
+        on_stack.add(root)
+        work = [(root, iter(edges.get(root, ())))]
+        while work:
+            node, children = work[-1]
+            for child in children:
+                if child not in order:
+                    order[child] = low[child] = len(order)
+                    stack.append(child)
+                    on_stack.add(child)
+                    work.append((child, iter(edges.get(child, ()))))
+                    break
+                if child in on_stack:
+                    low[node] = min(low[node], order[child])
+            else:
+                work.pop()
+                if work:
+                    parent = work[-1][0]
+                    low[parent] = min(low[parent], low[node])
+                if low[node] == order[node]:
+                    component = []
+                    while True:
+                        member = stack.pop()
+                        on_stack.discard(member)
+                        component.append(member)
+                        if member == node:
+                            break
+                    if len(component) > 1:
+                        cyclic.update(component)
+    return cyclic
+
+
+def replaced_checks(record):
+    """Ids of checks that a newer check replaces; assumes a valid record."""
+    return {ref for check in record.get("checks") or [] for ref in check.get("replaces") or []}
 
 
 def _validate_check_values(base, kind, check):
@@ -1629,7 +1714,10 @@ def status_line(check):
 def failing_checks(record):
     """List of (check, detail) for every failing check, in record order."""
     results = []
+    replaced = replaced_checks(record)
     for check in record.get("checks") or []:
+        if check.get("id") in replaced:
+            continue
         try:
             passed, detail = evaluate_check(check)
         except (KeyError, TypeError):
@@ -1660,7 +1748,10 @@ def open_problem_lines(record):
     lines = []
     for check, detail in failing_checks(record):
         lines.append("CONFLICT %s: %s -> %s" % (check["id"], detail, CONFLICT_ACTIONS[check["kind"]]))
+    replaced = replaced_checks(record)
     for check in record.get("checks") or []:
+        if check["id"] in replaced:
+            continue
         passed, _ = evaluate_check(check)
         if passed:
             unsourced = unsourced_values(record, check)
@@ -1701,7 +1792,15 @@ def cmd_check(args):
         return 1
     failed = False
     unsourced_found = False
+    replaced = replaced_checks(record)
     for check in record.get("checks") or []:
+        if check["id"] in replaced:
+            # History: a newer check of the same kind is in force instead.
+            newer = [c["id"] for c in record["checks"] if check["id"] in (c.get("replaces") or [])]
+            print("%s: REPLACED %s%s by %s" % (check["id"], check["kind"],
+                                                (" " + check["label"]) if check.get("label") else "",
+                                                ", ".join(newer)))
+            continue
         passed, detail = evaluate_check(check)
         unsourced = unsourced_values(record, check)
 
@@ -2216,7 +2315,10 @@ MAX_BLOCKS = 3
 def record_problems(record):
     """FAIL and UNSOURCED lines, as `check` prints them, and the ids involved."""
     parts, ids = [], []
+    replaced = replaced_checks(record)
     for check in record.get("checks") or []:
+        if check["id"] in replaced:
+            continue
         passed, _detail = evaluate_check(check)
         unsourced = unsourced_values(record, check)
         if not passed:
@@ -2243,12 +2345,16 @@ ORDER_WORDS = re.compile(r"\b(?:after|later|past|but|conflicts?|conflicting|too 
 OVER_WORDS = re.compile(r"\b(?:over|overruns?|exceeds?|exceeded|exceeding|past|after|late|later|longer|"
                         r"too long|too much|more than|above|beyond|short|conflicts?|conflicting)\b", re.IGNORECASE)
 # Words that call a value the agent's own. A section (see _sections) that has
-# one covers the values in it; a question mark covers only its own line. After
-# "you" or "your" they give the value to the user ("the $15 you suggested"),
-# which is the claim an unsourced value contradicts, so they do not count there.
-ASSUMPTION_WORDS = re.compile(r"(?<!\byou )(?<!\byour )\b(?:assum\w*|estimat\w*|est\.|guess\w*|propos\w*|"
-                              r"suggest\w*|placeholders?|unconfirmed|not (?:yet )?confirmed|please confirm|"
-                              r"not yours)", re.IGNORECASE)
+# one covers the values in it; a question mark covers only its own line.
+ASSUMPTION_WORDS = re.compile(r"\b(?:assum\w*|estimat\w*|est\.|guess\w*|propos\w*|suggest\w*|placeholders?|"
+                              r"unconfirmed|not (?:yet )?confirmed|please confirm|not yours)", re.IGNORECASE)
+# After "you" or "your" and at most two more words, those words give the value
+# to the user ("the $15 you suggested", "your earlier estimate"), which is the
+# claim an unsourced value contradicts, so they do not count there.
+USERS_WORDS = re.compile(r"\b(?:you|your|you've|you'd|you're|yours)\b(?:\W+\w+){0,2}\W*$", re.IGNORECASE)
+# 0 written as a number or a word; the source check counts 0 as always sourced,
+# but a reply that never says it has not stated a cap of 0.
+EXPLICIT_ZERO = re.compile(r"(?<![\d.,:])0+(?:\.0+)?(?![\d.,:]?\d)|\bzero\b", re.IGNORECASE)
 # Bounds that keep a long reply inside the hook timeout. Text past them is not
 # read, so it can only leave a problem unstated: the gate then blocks as before.
 STATED_MAX_CHARS = 20000
@@ -2285,12 +2391,18 @@ def _says(reading, value, line):
     if reading == "minutes phrase":
         return _minutes_phrase(value, line)
     if reading == "number":
-        return _is_number_sourced(value, line)
+        return EXPLICIT_ZERO.search(line) is not None if value == 0 else _is_number_sourced(value, line)
     if reading == "order":
         return ORDER_WORDS.search(line) is not None
     if reading == "over":
         return OVER_WORDS.search(line) is not None
     return False
+
+
+def _calls_own(line):
+    """True when line calls a value the agent's own, not one it gives to the user."""
+    return any(not USERS_WORDS.search(line[max(0, match.start() - 60):match.start()])
+               for match in ASSUMPTION_WORDS.finditer(line))
 
 
 def _conflict_ways(check):
@@ -2356,7 +2468,7 @@ def stated_checks(record, reply):
     sections = _sections(lines)
     cued = set()
     for index, (first, last) in enumerate(sections):
-        if any(ASSUMPTION_WORDS.search(line) for line in lines[first:last]):
+        if any(_calls_own(line) for line in lines[first:last]):
             cued.update(range(first, last))
             if index == 0 and not lines[0].lstrip().startswith("#"):
                 cued.update(range(len(lines)))
@@ -2369,7 +2481,10 @@ def stated_checks(record, reply):
         return memo[key]
 
     stated = set()
+    replaced = replaced_checks(record)
     for check in record.get("checks") or []:
+        if check["id"] in replaced:
+            continue
         ways = _conflict_ways(check)
         unsourced = [(reading, value) for _label, reading, value in _unsourced(record, check)]
         if not ways and not unsourced:
