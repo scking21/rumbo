@@ -27,7 +27,8 @@ since inside double quotes the shell rewrites `$` amounts and backticks. The obj
 achieve. Constraints, cautions and limits go in items, never in the objective.
 If a hook line says "no decision record yet", decide whether this is multi-step
 work with decisions; if it is, run init with the user's own words; if not,
-ignore it.
+ignore it. A record with only its objective checks nothing: once you start
+one, record the decisions the user has already made, and keep adding them.
 
 ## When to update
 
