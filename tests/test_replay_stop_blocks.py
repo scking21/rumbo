@@ -1,0 +1,75 @@
+"""scripts/replay_stop_blocks.py replays saved Stop blocks against a reader, without running sessions."""
+import json
+import os
+import subprocess
+import sys
+import tempfile
+import unittest
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+SCRIPT = os.path.join(ROOT, "scripts", "replay_stop_blocks.py")
+sys.path.insert(0, os.path.join(ROOT, "scripts"))
+import replay_stop_blocks as replay  # noqa: E402
+
+AGENDA = ("C1: UNSOURCED fits_window draft agenda: start 09:00, end 12:30, segments_min 75, segments_min 20, "
+          "segments_min 75 not in the user's quoted words")
+IN_FULL = ("Every time here is my assumption.\n| 9:00–10:15 | Session 1 |\n| 10:15–10:35 | Break |\n"
+           "| 10:35–11:50 | Session 2 |\nWe close at 12:30.")
+STATUS = "Here are the speakers.\n\nStill my assumption: the 9:00 to 12:30 times."
+
+
+def entry(kind, text=None):
+    if kind == "prompt":
+        return {"type": "user", "message": {"role": "user", "content": text}}
+    if kind == "reply":
+        return {"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": text}]}}
+    return {"type": "attachment", "attachment": {"type": "hook_blocking_error", "hookEvent": "Stop"}}
+
+
+class ReplayTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.run = os.path.join(self.tmp.name, "run")
+        os.makedirs(self.run)
+        transcript = os.path.join(self.run, "t.jsonl")
+        with open(transcript, "w", encoding="utf-8") as handle:
+            for item in (entry("prompt", "Plan a workshop morning."), entry("reply", IN_FULL),
+                         entry("prompt", "Which speaker?"), entry("reply", STATUS), entry("block"),
+                         entry("reply", "Still open: the agenda times.")):
+                handle.write(json.dumps(item) + "\n")
+        with open(os.path.join(self.run, "summary.json"), "w", encoding="utf-8") as handle:
+            json.dump({"sessions": [{"case": "rumbo/evals/01-workshop-full", "run": 1, "transcript": transcript,
+                                     "blocks": [{"turn": 2, "reason": AGENDA + "\nBefore finishing, ..."}]}]}, handle)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_a_status_line_passes_only_with_what_was_told(self):
+        reader = replay.load_reader(os.path.join(ROOT, "rumbo", "scripts"))
+        self.assertEqual(replay.replay(reader, [self.run]), (1, 1, 0, []))
+        self.assertEqual(replay.replay(reader, [self.run], told=True),
+                         (1, 1, 1, ["run 01-workshop-full run 1 turn 2"]))
+        done = subprocess.run([sys.executable, SCRIPT, "--told", self.run], capture_output=True, text=True, timeout=60)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertIn("with only assumed values: 1; read as stated: 1", done.stdout)
+
+    def test_each_stop_keeps_the_last_reply_and_blocks_stay_in_order(self):
+        stops = replay.stops(os.path.join(self.run, "t.jsonl"))
+        self.assertEqual(stops, [(False, IN_FULL), (True, STATUS), (False, "Still open: the agenda times.")])
+
+    def test_a_block_line_is_rebuilt_with_its_named_values_unsourced(self):
+        reader = replay.load_reader(os.path.join(ROOT, "rumbo", "scripts"))
+        for line in (AGENDA,
+                     "C2: UNSOURCED within_budget catering: amounts unit 7, amounts 50 not in the user's quoted words",
+                     "C3: UNSOURCED before launch: second month-day 10-03 not in the user's quoted words"):
+            with self.subTest(line=line):
+                check_id, record = replay.rebuild(line)
+                self.assertEqual(reader.validate_record(record), [])
+                named = sorted(label for label, _reading, _value in reader._unsourced(record, record["checks"][0]))
+                values = line.split(": ", 2)[2].rsplit(" not in", 1)[0]
+                self.assertEqual(named, sorted(v.strip() for v in values.split(",")))
+        self.assertIsNone(replay.rebuild("C4: FAIL fits_window agenda: 09:00 + 240 min ends 13:00, 30 min after 12:30"))
+
+
+if __name__ == "__main__":
+    unittest.main()
