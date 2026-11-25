@@ -28,6 +28,11 @@ import os
 import re
 import sys
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+# The eval runner's own test for a message the person typed, so skill text,
+# tool results and hook feedback do not count as prompts here either.
+from claude_multiturn_eval import _is_user_turn  # noqa: E402
+
 UNSOURCED = re.compile(r"^(C\d+): UNSOURCED (fits_window|within_budget|before)(?: .*?)?: "
                        r"((?:start|end|segments_min|amounts|total_cap|item_cap|first|second) .*) "
                        r"not in the user's quoted words$")
@@ -160,14 +165,6 @@ def _is_block(entry):
     return attachment.get("hookEvent") == "Stop" and attachment.get("type") == "hook_blocking_error"
 
 
-def _is_prompt(entry):
-    if entry.get("type") != "user":
-        return False
-    content = (entry.get("message") or {}).get("content")
-    return isinstance(content, str) or any(isinstance(block, dict) and block.get("type") == "text"
-                                           for block in content or [])
-
-
 def stops(transcript):
     """[(is a block, reply)] for each stop the gate read: before each prompt and block, and at the end.
 
@@ -183,7 +180,7 @@ def stops(transcript):
                 last = texts[-1]
             if _is_block(entry):
                 out.append((True, last or ""))
-            elif _is_prompt(entry) and last is not None:
+            elif _is_user_turn(entry) and last is not None:
                 out.append((False, last))
     if last is not None:
         out.append((False, last))

@@ -53,6 +53,24 @@ class ReplayTests(unittest.TestCase):
         self.assertEqual(done.returncode, 0, done.stderr)
         self.assertIn("with only assumed values: 1 rebuilt, 0 not; read as stated: 1", done.stdout)
 
+    def test_skill_text_and_hook_feedback_are_not_prompts(self):
+        # Review: an injected message after an intermediate reply was taken for
+        # a prompt, so that reply counted as told although no Stop read it.
+        transcript = os.path.join(self.run, "t.jsonl")
+        with open(transcript, "w", encoding="utf-8") as handle:
+            for item in (entry("prompt", "Plan a workshop morning."), entry("reply", IN_FULL),
+                         dict(entry("prompt", "Base directory for this skill: /x"), isMeta=True),
+                         entry("prompt", "Stop hook feedback: ..."),
+                         {"type": "user", "toolUseResult": {}, "message": {"role": "user", "content": [
+                             {"type": "tool_result", "content": "ok"}]}},
+                         entry("reply", "Working on it."), entry("prompt", "Which speaker?"),
+                         entry("reply", STATUS), entry("block")):
+                handle.write(json.dumps(item) + "\n")
+        # The last stop is the session's end, after the block.
+        self.assertEqual(replay.stops(transcript), [(False, "Working on it."), (True, STATUS), (False, STATUS)])
+        reader = replay.load_reader(os.path.join(ROOT, "rumbo", "scripts"))
+        self.assertEqual(replay.replay(reader, [self.run], told=True), (1, 1, 0, [], 0))
+
     def test_each_stop_keeps_the_last_reply_and_blocks_stay_in_order(self):
         stops = replay.stops(os.path.join(self.run, "t.jsonl"))
         self.assertEqual(stops, [(False, IN_FULL), (True, STATUS), (False, "Still open: the agenda times.")])
