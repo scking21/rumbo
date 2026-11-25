@@ -2536,6 +2536,41 @@ def _minutes_phrase(minutes, line):
     return any(value == minutes and unit.match(line, end) for _start, end, value in _word_numbers(line))
 
 
+# A clock-time range in a reply, "9:20-10:35" or "9:00am to 9:20am": a schedule
+# written as ranges states each block's length without naming its minutes.
+# Each end has its minutes or a meridiem, so "30-50" stays a number range.
+CLOCK_END = r"(\d{1,2})(?::(\d{2}))?\s*(?:([ap])\.?\s*m\b\.?)?"
+TIME_RANGE = re.compile(r"(?<![\d:.])" + CLOCK_END + r"\s*(?:-|\u2013|\u2014|to|until|till)\s*" + CLOCK_END + r"(?![\d:])",
+                        re.IGNORECASE)
+
+
+def _range_spans(line):
+    """Minutes spanned by each clock-time range in line ("9:20-10:35" is 75)."""
+    if ":" not in line and not re.search(r"\d\s*[ap]\.?\s*m", line, re.IGNORECASE):
+        return set()
+    spans = set()
+    for match in TIME_RANGE.finditer(line):
+        hour1, minute1, half1, hour2, minute2, half2 = match.groups()
+        if not (minute1 or half1) or not (minute2 or half2):
+            continue
+        ends = []
+        for hour, minute, half in ((hour1, minute1, half1), (hour2, minute2, half2)):
+            hour, minute = int(hour), int(minute or 0)
+            if hour > 23 or minute > 59 or (half and not 1 <= hour <= 12):
+                break
+            if half:
+                hour = hour % 12 + (12 if half.lower() == "p" else 0)
+            ends.append(hour * 60 + minute)
+        if len(ends) != 2:
+            continue
+        span = ends[1] - ends[0]
+        # On a 12-hour clock a range can cross noon or midnight: "11:50-12:05", "12:50-1:05".
+        while span <= 0:
+            span += 720
+        spans.add(span)
+    return spans
+
+
 def _says(reading, value, line):
     """True when line states value, read the way the source check reads the user's words.
 
@@ -2553,7 +2588,7 @@ def _says(reading, value, line):
     if reading == "year":
         return re.search(r"(?<!\d)%s(?!\d)" % re.escape(value), line) is not None
     if reading == "minutes":
-        return _is_minutes_sourced(value, line)
+        return _is_minutes_sourced(value, line) or value in _range_spans(line)
     if reading == "minutes phrase":
         return _minutes_phrase(value, line)
     if reading == "number":
