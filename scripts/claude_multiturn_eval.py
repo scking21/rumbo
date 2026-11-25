@@ -139,7 +139,7 @@ def grade(case, project, transcript, judge):
     (focus: trace) judges the assistant's replies. A file_exists grader globs
     its path in the project.
     """
-    verdicts = {}
+    verdicts, all_votes = {}, {}
     folder = os.path.join(case, "graders")
     for name in sorted(os.listdir(folder)):
         text = open(os.path.join(folder, name), encoding="utf-8").read()
@@ -168,8 +168,7 @@ def grade(case, project, transcript, judge):
         if not document.strip():
             verdicts[key] = "MISSING"
             continue
-        prompt = "%s\n\n<document>\n%s\n</document>\n\nAnswer with exactly one word on the first line: PASS or FAIL." % (
-            FRONT_MATTER.sub("", text).strip(), document)
+        prompt = "%s\n\n<document>\n%s\n</document>\n\n%s" % (FRONT_MATTER.sub("", text).strip(), document, VERDICT_ASK)
         votes = []
         for _ in range(3):
             try:
@@ -181,11 +180,45 @@ def grade(case, project, transcript, judge):
             except (subprocess.TimeoutExpired, OSError, ValueError):
                 answer = {"is_error": True}
             # A judge that failed (a usage limit, say) has no verdict; never count it as FAIL.
-            votes.append("ERROR" if answer.get("is_error") else
-                         ((str(answer.get("result", "")).strip().split() or ["?"])[0]).strip("*.:").upper())
-        verdicts[name[:-3]] = ("ERROR" if "ERROR" in votes else
-                               "PASS" if votes.count("PASS") >= 2 else "FAIL")
+            votes.append("ERROR" if answer.get("is_error") else vote_of(answer.get("result")))
+        verdicts[name[:-3]] = verdict_of(votes)
+        all_votes[name[:-3]] = votes
+    # Each judge's votes, beside the session, to see how often the judges disagree.
+    try:
+        with open(os.path.join(os.path.dirname(os.path.normpath(project)), "judge-votes.json"), "w",
+                  encoding="utf-8") as handle:
+            json.dump(all_votes, handle, indent=1)
+    except OSError:
+        pass
     return verdicts
+
+
+# Asked for a bare word, a small judge split its three votes on about a third of
+# the gradings of one 24-session run, including replies that plainly met the
+# grader. Reasoning first and a verdict line last makes each vote a judgment.
+VERDICT_ASK = ("Think it through in two or three sentences, quoting the reply where it matters, then end with a "
+               "line that is exactly VERDICT: PASS or VERDICT: FAIL.")
+VERDICT_LINE = re.compile(r"VERDICT:\s*\**\s*(PASS|FAIL)\b", re.IGNORECASE)
+
+
+def vote_of(result):
+    """PASS or FAIL from the judge's last verdict line, a bare PASS or FAIL, or ERROR without either."""
+    text = str(result or "").strip()
+    found = VERDICT_LINE.findall(text)
+    if found:
+        return found[-1].upper()
+    word = (text.split() or ["?"])[0].strip("*.:").upper()
+    return word if word in ("PASS", "FAIL") else "ERROR"
+
+
+def verdict_of(votes):
+    """The majority of the votes that gave a verdict; ERROR without a majority of at least two."""
+    passed, failed = votes.count("PASS"), votes.count("FAIL")
+    if passed >= 2 and passed > failed:
+        return "PASS"
+    if failed >= 2 and failed > passed:
+        return "FAIL"
+    return "ERROR"
 
 
 def regrade(folder, judge):

@@ -175,6 +175,44 @@ class StatementReadingTests(unittest.TestCase):
         self.assertEqual(stated("## Venue\nI assumed the room is free.\n## Budget\n" + table, assumed, said), set())
         self.assertEqual(stated("## Budget\n" + table, assumed, said), set())
 
+    def test_a_schedule_written_as_time_ranges_states_its_block_lengths(self):
+        # A 0.3.15 live session: the reply called its whole draft schedule an
+        # assumption and laid it out as ranges ("9:20-10:35"), so it named no
+        # block in minutes, and the gate blocked it three turns running.
+        draft = check(kind="fits_window", start="09:00", segments_min=[20, 75, 15, 75, 25], end="12:30")
+        said = "It's the morning of March 12. Can you help me plan it?"
+        reply = ("Here's a first draft. The start time, end time and every dollar figure in it are my assumptions.\n"
+                 "## Draft plan\n"
+                 "**Schedule (assumed 9:00 to 12:30):**\n"
+                 "| Time | Block |\n|---|---|\n"
+                 "| 9:00\u20139:20 | Welcome and a warm-up |\n"
+                 "| 9:20\u201310:35 | Session 1 |\n"
+                 "| 10:35\u201310:50 | Break |\n"
+                 "| 10:50\u201312:05 | Session 2 |\n"
+                 "| 12:05\u201312:30 | Show-and-tell |")
+        self.assertEqual(stated(reply, draft, said), {"C1"})
+        # A single time, or a range of another length, states no block length.
+        for line in ("| 9:20 | Session 1 |", "| 9:00\u20139:30 | Welcome |"):
+            with self.subTest(line=line):
+                one = check(kind="fits_window", start="09:00", segments_min=[20], end="12:30")
+                self.assertEqual(stated("These times are my assumptions.\n" + line + "\nStart 9:00, end 12:30.", one,
+                                        said), set())
+
+    def test_a_range_on_a_known_clock_rolls_over_a_whole_day(self):
+        # Review of this change: every range rolled over 12 hours, so "6pm-9am"
+        # read as 180 minutes and could clear an assumed three-hour block. A
+        # second review found the same for a 24-hour end beside a meridiem.
+        said = "We plan an overnight build."
+        for line, minutes, expected in (("6pm\u20139am", 180, set()), ("6pm\u20139am", 900, {"C1"}),
+                                        ("18:00\u201309:00", 180, set()), ("18:00\u201309:00", 900, {"C1"}),
+                                        ("18:00\u20139am", 180, set()), ("18:00\u20139am", 900, {"C1"}),
+                                        ("10pm\u201306:30", 510, {"C1"}),
+                                        ("9:00 \u2013 10:15pm", 75, {"C1"}), ("12:50\u20131:05", 15, {"C1"})):
+            with self.subTest(line=line, minutes=minutes):
+                block = check(kind="fits_window", start="00:00", segments_min=[minutes], end="23:59", end_next_day=False)
+                reply = "These times are my assumptions.\n| " + line + " | Build |\nStart 00:00, end 23:59."
+                self.assertEqual(stated(reply, block, said), expected)
+
     def test_an_assumed_year_is_read_on_its_own(self):
         assumed = check(kind="before", first="2026-03-01", second="2026-03-03")
         said = "Copy is due March 1 and the launch is March 3."

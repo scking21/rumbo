@@ -2536,6 +2536,57 @@ def _minutes_phrase(minutes, line):
     return any(value == minutes and unit.match(line, end) for _start, end, value in _word_numbers(line))
 
 
+# A clock-time range in a reply, "9:20-10:35" or "9:00am to 9:20am": a schedule
+# written as ranges states each block's length without naming its minutes.
+# Each end has its minutes or a meridiem, so "30-50" stays a number range.
+CLOCK_END = r"(\d{1,2})(?::(\d{2}))?\s*(?:([ap])\.?\s*m\b\.?)?"
+TIME_RANGE = re.compile(r"(?<![\d:.])" + CLOCK_END + r"\s*(?:-|\u2013|\u2014|to|until|till)\s*" + CLOCK_END + r"(?![\d:])",
+                        re.IGNORECASE)
+
+
+def _range_spans(line):
+    """Minutes spanned by each clock-time range in line ("9:20-10:35" is 75)."""
+    if ":" not in line and not re.search(r"\d\s*[ap]\.?\s*m", line, re.IGNORECASE):
+        return set()
+    spans = set()
+    for match in TIME_RANGE.finditer(line):
+        hour1, minute1, half1, hour2, minute2, half2 = match.groups()
+        if not (minute1 or half1) or not (minute2 or half2):
+            continue
+        h1, m1, h2, m2 = int(hour1), int(minute1 or 0), int(hour2), int(minute2 or 0)
+        if (h1 > 23 or h2 > 23 or m1 > 59 or m2 > 59
+                or (half1 and not 1 <= h1 <= 12) or (half2 and not 1 <= h2 <= 12)):
+            continue
+
+        def at(hour, minute, half):
+            return ((hour % 12 + (12 if half.lower() == "p" else 0)) if half else hour) * 60 + minute
+
+        # An end is on a known clock when it has a meridiem or is a 24-hour
+        # time ("18:00", "09:00"); a bare "9:00" could be either half of the day.
+        known1 = bool(half1) or h1 > 12 or hour1.startswith("0")
+        known2 = bool(half2) or h2 > 12 or hour2.startswith("0")
+        if (known1 and known2) or (not half1 and not half2 and (known1 or known2)):
+            # Both ends known, or a 24-hour time with no meridiem anywhere: an end
+            # earlier than the start is the next day ("6pm-9am", "18:00-09:00"
+            # and "18:00-9am" are 900 minutes).
+            span = (at(h2, m2, half2) - at(h1, m1, half1)) % 1440
+        elif known1 or known2:
+            # One meridiem: the bare end takes the half that gives the shorter
+            # range, so "9:00-10:15pm" is 75 minutes and "9:00-1:00am" is 240.
+            if known2:
+                options = [(at(h2, m2, half2) - at(h1, m1, half)) % 1440 for half in "ap"]
+            else:
+                options = [(at(h2, m2, half) - at(h1, m1, half1)) % 1440 for half in "ap"]
+            span = min([option for option in options if option] or [0])
+        else:
+            # No meridiem and both hours 1 to 12: a 12-hour clock can cross noon
+            # or midnight ("11:50-12:05" and "12:50-1:05" are 15 minutes).
+            span = (at(h2, m2, None) - at(h1, m1, None)) % 720
+        if span:
+            spans.add(span)
+    return spans
+
+
 def _says(reading, value, line):
     """True when line states value, read the way the source check reads the user's words.
 
@@ -2553,7 +2604,7 @@ def _says(reading, value, line):
     if reading == "year":
         return re.search(r"(?<!\d)%s(?!\d)" % re.escape(value), line) is not None
     if reading == "minutes":
-        return _is_minutes_sourced(value, line)
+        return _is_minutes_sourced(value, line) or value in _range_spans(line)
     if reading == "minutes phrase":
         return _minutes_phrase(value, line)
     if reading == "number":
