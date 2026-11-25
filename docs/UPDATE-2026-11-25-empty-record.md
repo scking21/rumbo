@@ -1,6 +1,6 @@
 # November 25 Claude adapter 0.3.18: a record with only its objective gets one nudge
 
-This builds on [Claude adapter 0.3.17](UPDATE-2026-11-25-told-assumptions.md). It adds one prompt-time line and one Stop-gate nudge for a record that holds nothing but its objective; nothing else the hooks check changes.
+This builds on [Claude adapter 0.3.17](UPDATE-2026-11-25-told-assumptions.md). It adds one prompt-time line and one Stop-gate nudge for a record that holds nothing but its objective, and two lines to the commitments skill; nothing else the hooks check changes.
 
 ## Distribution identities
 
@@ -26,7 +26,7 @@ Those two launch sessions account for 7 of the 8 failed launch gradings on haiku
 
 - **Prompt hook.** While the record has no items and no checks, `show` adds one line after the objective: "rumbo: no decisions recorded yet. As the user decides, drafts or rules things out, add items with their exact words, and a check for any schedule, deadline or budget (see the commitments skill)." It also counts planning-looking prompts, as it does when there is no record.
 - **Stop gate.** With such a record and no other problem, the gate blocks once per session, once the session has had two planning-looking prompts. It asks the agent to record the user's decisions so far with their exact words and a check for any schedule, deadline or budget, or to tell the user in one line why the work does not need them. It never blocks a stop that comes right after a block, and a new `.empty` marker keeps it to once per session.
-- **Skill.** "A record with only its objective checks nothing: once you start one, record the decisions the user has already made, and keep adding them."
+- **Skill.** "A record with only its objective checks nothing: once you start one, record the decisions the user has already made, and keep adding them." And, before writing: "In what you write, only `commitment` items are decided. Present a `draft`, `preference`, `authorized`, `uncertain` or `deferred` item as open, a proposal or something to confirm. A no to one option rules that option out; it does not choose the others." In `11-rejected-option`, one haiku session's record held the community center as `uncertain`, and its plan still listed it as decided; the skill had not said that the status decides how an item is written.
 
 ## Evidence
 

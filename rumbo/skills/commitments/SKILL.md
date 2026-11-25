@@ -141,6 +141,11 @@ context. Deal with them before the deliverable, not after: fix the plan only as
 the user agrees, or say the problem plainly in what you write. After a context
 compaction the record is shown again; trust it over the compacted summary.
 
+In what you write, only `commitment` items are decided. Present a `draft`,
+`preference`, `authorized`, `uncertain` or `deferred` item as open, a proposal
+or something to confirm. A no to one option rules that option out; it does not
+choose the others.
+
 ## Stopping
 
 The Stop hook blocks, up to three times per session, while a check fails, a value
