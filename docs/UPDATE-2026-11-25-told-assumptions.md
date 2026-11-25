@@ -51,7 +51,7 @@ The one still blocked says "whether launch day is Oct 3", with no cue word or qu
 - A budget check was replaced by one with the same values. The reply named $2 and $250 and called its figures estimates, and the check's other value, $80, had been told for the check it replaced.
 - A reply said "My catering, handout and contingency figures from the budget are still my estimates".
 
-Replayed with the told values each session's gate had saved, both pass on this version. The third block was a new check comparing catering with the $300 line cap. Its reply did not name the $7 a head it assumed, so it still blocks. The other six sessions planned for that run (`02-launch-full` and `08-dropped-option`) did not start, because the account reached its weekly usage limit. The judge was cut off too: the 10 of 18 gradings it finished all passed, and the other 8 have no verdict yet.
+Replayed with the told values each session's gate had saved, both pass on this version. The third block was a new check comparing catering with the $300 line cap. Its reply did not name the $7 a head it assumed, so it still blocks. The other six sessions planned for that run (`02-launch-full` and `08-dropped-option`) did not start, because the account reached its weekly usage limit; the 0.3.18 runs cover those cases. The judge was cut off too, and the 8 gradings it missed were given later with `--regrade --errors-only`: all 18 passed.
 
 ## Verification and rollback
 
