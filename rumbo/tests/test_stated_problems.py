@@ -276,6 +276,26 @@ class StatementReadingTests(unittest.TestCase):
         self.assertEqual(record.stated_checks(document, AGENDA_STATUS + "\nSession 2 is now 80 minutes, my guess.",
                                               told), {"C2"})
 
+    def test_an_assumed_price_per_unit_is_named_by_its_total(self):
+        # Live (opus, 0.3.15): "my $280 catering estimate is still $80 over the
+        # foundation's $200 cap" named the total, not the $7 a head it assumed.
+        said = "40 people are coming. Dr. Okafor's travel is $250 and our budget is $600."
+        budget = check(kind="within_budget", amounts=[{"unit": 7, "quantity": 40}, 250], total_cap=600)
+        self.assertEqual(stated("My $280 catering estimate stays.", budget, said), {"C1"})
+        self.assertEqual(stated("$7 a head is my estimate.", budget, said), {"C1"})
+        self.assertEqual(stated("Catering comes to $280.", budget, said), set())
+        # A total says nothing about an assumed head count.
+        said = "Catering is $7 per person, Dr. Okafor's travel is $250 and our budget is $600."
+        self.assertEqual(stated("My $280 catering estimate stays.", budget, said), set())
+        self.assertEqual(stated("I assumed 40 people.", budget, said), {"C1"})
+
+    def test_an_overage_is_an_overrun(self):
+        # Live (haiku, 0.3.15): "The 5-minute overage goes away" stated the overrun.
+        late = check(kind="fits_window", start="09:45", segments_min=[75, 20, 75], end="12:30")
+        said = "A 9:45 start, two 75-minute sessions and a 20-minute break, 12:30 close."
+        self.assertEqual(stated("The 5-minute overage goes away with a shorter break.", late, said), {"C1"})
+        self.assertEqual(stated("The 5-minute break goes away.", late, said), set())
+
     def test_a_told_assumption_does_not_state_a_conflict(self):
         late = check(kind="fits_window", start="09:00", segments_min=[75, 20, 75, 60], end="12:30")
         told = {"C1": ["start 09:00", "end 12:30", "segments_min 75", "segments_min 20", "segments_min 75",

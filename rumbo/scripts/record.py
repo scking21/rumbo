@@ -2543,7 +2543,7 @@ def record_problems(record):
 ORDER_WORDS = re.compile(r"\b(?:after|later|past|but|conflicts?|conflicting|too late|wrong|"
                          r"mismatch(?:ed|es)?|impossible|precedes?|earlier|\d+\s+days?)\b", re.IGNORECASE)
 # Words that say an amount or a time goes beyond its limit, for an overrun stated as its excess.
-OVER_WORDS = re.compile(r"\b(?:over|overruns?|exceeds?|exceeded|exceeding|past|after|late|later|longer|"
+OVER_WORDS = re.compile(r"\b(?:over|overruns?|overages?|exceeds?|exceeded|exceeding|past|after|late|later|longer|"
                         r"too long|too much|more than|above|beyond|short|conflicts?|conflicting)\b", re.IGNORECASE)
 # Words that call a value the agent's own. A section (see _sections) that has
 # one covers the values in it; a question mark covers only its own line.
@@ -2710,7 +2710,8 @@ def stated_checks(record, reply, told=None):
     with a word such as "over" (and the same for an amount over item_cap). An
     unsourced value is stated when a line names it and either asks about it
     with a question mark, or sits in a section that calls something an
-    assumption or estimate, or the reply's preamble does.
+    assumption or estimate, or the reply's preamble does. An assumed price per
+    unit is also named by its entry's total.
 
     told maps a check id to the labels of assumed values ("start 09:00") that
     an earlier reply this session stated in full. A check whose assumed values
@@ -2755,15 +2756,22 @@ def _stated(record, reply, told=None):
         if check["id"] in replaced:
             continue
         ways = _conflict_ways(check)
-        unsourced = _unsourced(record, check)
+        # An assumed price per unit is also named by the line's total for it:
+        # "my $280 catering estimate" for $7 a head for 40.
+        products = _unit_products(check)
+        unsourced = [(label, reading, value, products.get(label, ())) for label, reading, value
+                     in _unsourced(record, check)]
         if not ways and not unsourced:
             continue
         if not all(any(all(says(reading, value, index) for reading, value in alternative)
                        for alternative in alternatives for index in range(len(lines)))
                    for alternatives in ways):
             continue
-        if all(named(reading, value) for _label, reading, value in unsourced):
-            in_full[check["id"]] = [label for label, _reading, _value in unsourced]
+        def named_value(reading, value, totals):
+            return named(reading, value) or any(named("number", total) for total in totals)
+
+        if all(named_value(reading, value, totals) for _label, reading, value, totals in unsourced):
+            in_full[check["id"]] = [label for label, _reading, _value, _totals in unsourced]
             stated.add(check["id"])
             continue
         counts = _told_counts(told, record, check)
@@ -2771,8 +2779,8 @@ def _stated(record, reply, told=None):
             continue
         # Each value is named here or was told before, and the reply still says
         # the check is open: by one of its values, or by what kind of check it is.
-        flags = [named(reading, value) for _label, reading, value in unsourced]
-        missing = [label for (label, _reading, _value), flag in zip(unsourced, flags) if not flag]
+        flags = [named_value(reading, value, totals) for _label, reading, value, totals in unsourced]
+        missing = [label for (label, _reading, _value, _totals), flag in zip(unsourced, flags) if not flag]
         if all(missing.count(label) <= counts.get(label, 0) for label in set(missing)) and (
                 any(flags) or any(KIND_WORDS[check["kind"]].search(line) and (_calls_own(line) or "?" in line)
                                   for line in lines)):
@@ -2788,6 +2796,17 @@ KIND_WORDS = {
     "fits_window": re.compile(r"\b(?:schedules?|agendas?|timings?|times|timetable)\b", re.IGNORECASE),
     "before": re.compile(r"\b(?:dates?|deadlines?)\b", re.IGNORECASE),
 }
+
+
+def _unit_products(check):
+    """For a within_budget check, the label of each price per unit ("amounts unit 7") -> its entries' totals."""
+    if check.get("kind") != "within_budget":
+        return {}
+    products = {}
+    for value, total in zip(check["amounts"], _budget(check)[0]):
+        if isinstance(value, dict):
+            products.setdefault("amounts unit %s" % fmt_num(value["unit"]), []).append(total)
+    return products
 
 
 def _told_counts(told, record, check):
