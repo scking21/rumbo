@@ -14,9 +14,9 @@ miss a scheduling conflict. The record is a memory aid, nothing more.
 - All subcommands: `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/record.py" <sub> --record "<record path>"`.
 - `init --objective TEXT --quote - <<'QUOTE'` — create the record with the goal and the user's own words, then a line with the user's exact words, then a line `QUOTE`; refuses to overwrite. Always pass the user's words through `--quote -` with a quoted heredoc (`<<'QUOTE'`); inside double quotes the shell rewrites `$` amounts and backticks.
 - `validate` — print `RECORD_OK`, or one fault line per problem.
-- `check` — validate, then print `PASS`/`FAIL` per check; exit 1 if any check fails.
+- `check` — validate, then print `PASS`/`FAIL` per check, `REPLACED` for a check a newer one replaces, and `DROPPED` for one a decision dropped; exit 1 if any check fails or is unsourced.
 - `show [--max-chars N]` — compact summary; silent when no record exists.
-- `stop-gate` — read the Stop hook input on stdin; block up to three times per session while checks or provenance remain unresolved. If the problems are unchanged when you stop again right after a block, the stop passes; at a later turn's stop, unchanged problems get a one-line status block.
+- `stop-gate` — read the Stop hook input on stdin; block up to three times per session while checks or provenance remain unresolved. A failing or unsourced check that your reply already states (see Stopping) does not block. If the problems are unchanged when you stop again right after a block, the stop passes; at a later turn's stop, unchanged problems get a one-line status block.
 - Exit codes: 0 clean, 1 content problem, 2 tool or I/O problem.
 
 ## When to start
@@ -57,7 +57,21 @@ ask them to decide it again.
 
 ## Sourced values
 
-A check's values must come from the user's quoted words. If you must assume a value (a year, a shortened break), leave it visible (`check` shows it as UNSOURCED) and tell the user plainly that it is your assumption. Never change a value to make a check pass.
+A check's values must come from the user's quoted words. If you must assume a value (a start time, a shortened break), leave it visible (`check` shows it as UNSOURCED) and tell the user plainly that it is your assumption. Never change a value to make a check pass.
+
+When the user later gives a value you assumed, or their own plan replaces the
+one a check was about, add an item with their words and a check with their
+values that lists the old check's id in `replaces`. That records the user's
+correction; it is not changing a value to pass. When a decision drops the
+option a check was about, replace that check with the same kind of check for
+what the user chose. If their choice leaves nothing of that kind to check (a
+speaker's payment deadline once they go without that speaker), record the
+decision as an item that replaces the option's items, quoting just the words
+that drop the option, and set the check's `dropped_by` to that item's id. A
+decision that names a date, time or amount may change the check instead; then
+replace it. A replaced or dropped check stays as history and is no longer
+reported; never delete a check. Do not keep reporting an assumption the user
+has already settled.
 
 List the supporting item ids in each check's `refs`. Only those items' quotes
 and the objective quote source the check; `done`, `rejected`, and replaced items
@@ -69,12 +83,17 @@ Add items and checks by editing the JSON directly, then run `validate`:
 
 ```json
 {"id": "I3", "text": "Maker-space team only", "quote": "I think we should go with just the maker-space team for this workshop.",
- "ref": "E12", "status": "commitment", "scope": "this workshop only", "replaces": []}
+ "ref": "E12", "status": "commitment", "scope": "this workshop only", "replaces": ["I6"]}
 {"id": "C1", "kind": "fits_window", "label": "session schedule", "start": "09:45", "segments_min": [75, 20, 75], "end": "12:30", "refs": ["I1"]}
+{"id": "C4", "kind": "within_budget", "label": "budget with the maker-space team", "amounts": [0, 200], "total_cap": 600,
+ "refs": ["I3", "I5"], "replaces": ["C2"]}
+{"id": "C5", "kind": "before", "label": "Dr. Okafor's payment deadline", "first": "03-12", "second": "04-01",
+ "refs": ["I1", "I6"], "dropped_by": "I3"}
 ```
 
-Every item carries the user's verbatim words in `quote`. A newer item that
-supersedes an older one lists the older id in `replaces`; never delete history.
+Every item carries the user's verbatim words in `quote`. A newer item or
+check that supersedes an older one lists the older id in `replaces`; never
+delete history.
 
 ## Times, dates and money
 
@@ -90,7 +109,7 @@ budget cap, add a check:
   put a product you computed in `amounts`.
 
 Run `check` before delivering any plan, schedule or summary. A FAIL line is a
-conflict: resolve it, or state it plainly to the user.
+conflict: resolve it, or state it plainly to the user with its values.
 
 A value is sourced however the user wrote it: "March 20th", "20 March", "3/20"
 or the end of "March 18–20" for `03-20`; "9am" or "noon" for `09:00` or `12:00`;
@@ -100,15 +119,18 @@ half" is 90, "half an hour" 30); "twenty-minute" for 20;
 exactly; do not convert them yourself. A bare "at 9" does not say morning or
 evening: ask.
 
-Write dates as MM-DD unless the user stated the year; never add a year the user
-did not say; if the dates cross a year boundary, you need the user's years. A
+Write dates as MM-DD unless the user stated the year. Never add a year the
+user did not say, in the record or in what you write: "March 12", not "March
+12, 2027". If the dates cross a year boundary, you need the user's years. A
 `before` failure that says "in the same year" is that case: ask the user.
 
 ## Tell the user
 
 When an item becomes a commitment or is replaced, say it in one line:
 "Treating as decided: ...". If the user corrects an item, fix the record
-immediately; the user's correction always wins over the record.
+immediately; the user's correction always wins over the record. Describe items
+and checks in the user's terms: ids such as I3 or C1 belong to the record, and
+the user never sees it.
 
 ## Before writing
 
@@ -130,10 +152,22 @@ session and has said something this session that may take it back (it names
 the item or an earlier decision and uses a word like cancel or instead). Check with
 them. If it changed, add the new item with `replaces`, or set the old one to
 `rejected`. If it still stands, record their confirmation from this session as
-a new item that replaces the old one.
+a new item that replaces the old one. A decision that drops a check counts too:
+if the user takes it back, replace it, and the check comes back.
+
+The gate reads the reply you are about to send. A conflict is stated when one
+line of it names the values that conflict: the time the plan reaches and the
+end it misses ("the sessions end at 12:35, after the 12:30 close", or "five
+minutes past the close"), both dates with a word that orders them ("the March
+20 deadline is after the March 12 workshop", with the years when they differ),
+or the total and its cap ("$550, over the $500 budget", or "$50 over the
+budget"). An assumed value is stated when its line, its section or the opening
+of the reply calls it your assumption, estimate or proposal, or its line asks
+the user about it. Stated problems do not block.
 
 If a repeat block lists problems you already told the user about, add
-one line naming what is still open rather than repeating the explanation.
+one line saying what is still open, in the user's terms rather than the
+record's ids, instead of repeating the explanation.
 Resolve each conflict or disclose it, update
 the record, then finish. Never delete or weaken a check to get past the gate, and
 copy quotes exactly from the user's messages or they will be reported as unverified.

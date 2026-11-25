@@ -8,6 +8,7 @@ Exit codes: 0 clean, 1 content problem, 2 tool or I/O problem.
 import argparse
 import decimal
 import datetime
+import functools
 import hashlib
 import json
 import math
@@ -73,6 +74,8 @@ class LoadError(Exception):
 
 
 MAX_JSON_DEPTH = 64
+JSON_STRING = re.compile(r'"[^"]*"')
+JSON_BRACKET = re.compile(r"[][{}]")
 
 
 def _loads(raw):
@@ -80,25 +83,22 @@ def _loads(raw):
 
     The decoder's own depth limit is a CPython detail (3.14 raises
     RecursionError, not ValueError), so depth is checked before decoding.
+    Brackets inside strings do not count. Removing escaped backslashes, then
+    escaped quotes, leaves each string as a plain "..." run; removing those
+    leaves only the brackets that nest. Every step but the final count runs
+    in C, because a Stop hook reads every line of a long session's
+    transcript inside its 10 second timeout.
     """
-    depth = 0
-    quoted = escaped = False
-    for char in raw:
-        if quoted:
-            if escaped:
-                escaped = False
-            elif char == "\\":
-                escaped = True
-            elif char == '"':
-                quoted = False
-        elif char == '"':
-            quoted = True
-        elif char in "[{":
-            depth += 1
-            if depth > MAX_JSON_DEPTH:
-                raise ValueError("JSON nesting exceeds limit")
-        elif char in "]}":
-            depth -= 1
+    structure = JSON_STRING.sub("", raw.replace("\\\\", "").replace('\\"', ""))
+    if structure.count("[") + structure.count("{") > MAX_JSON_DEPTH:
+        depth = 0
+        for char in JSON_BRACKET.findall(structure):
+            if char in "[{":
+                depth += 1
+                if depth > MAX_JSON_DEPTH:
+                    raise ValueError("JSON nesting exceeds limit")
+            else:
+                depth -= 1
     try:
         return json.loads(raw)
     except RecursionError:
@@ -829,30 +829,38 @@ def unsourced_values(record, check):
     """Return list of strings naming each unsourced value in check.
     Assumes record is valid.
     """
-    source = _source_text(record, check)
+    return [label for label, _reading, _value in _unsourced(record, check)]
+
+
+def _unsourced(record, check, source=None):
+    """(label, reading, value) for each unsourced value in check; reading names
+    the matcher that reads the value in text (see _says). source replaces the
+    check's own source text."""
+    if source is None:
+        source = _source_text(record, check)
     kind = check["kind"]
     unsourced = []
 
     if kind == "fits_window":
         # start HH:MM
         if not _is_time_sourced(check["start"], source):
-            unsourced.append(f"start {check['start']}")
+            unsourced.append((f"start {check['start']}", "time", check["start"]))
         # end HH:MM
         if not _is_time_sourced(check["end"], source):
-            unsourced.append(f"end {check['end']}")
+            unsourced.append((f"end {check['end']}", "time", check["end"]))
         # segments_min N for each segment
         for seg in check["segments_min"]:
             if not _is_minutes_sourced(seg, source):
-                unsourced.append(f"segments_min {fmt_num(seg)}")
+                unsourced.append((f"segments_min {fmt_num(seg)}", "minutes", seg))
 
     elif kind == "before":
         for field in ("first", "second"):
             date_val = check[field]
             month_day_sourced, year_sourced = _is_date_sourced(date_val, source)
             if not month_day_sourced:
-                unsourced.append(f"{field} month-day {date_val}")
+                unsourced.append((f"{field} month-day {date_val}", "date", date_val))
             if _has_year(date_val) and not year_sourced:
-                unsourced.append(f"{field} year {date_val[:4]}")
+                unsourced.append((f"{field} year {date_val[:4]}", "year", date_val[:4]))
 
     elif kind == "within_budget":
         # amounts N for each amount
@@ -861,17 +869,17 @@ def unsourced_values(record, check):
                 # The script multiplies; the user must have said both factors.
                 for key in ("unit", "quantity"):
                     if not _is_number_sourced(amt[key], source):
-                        unsourced.append(f"amounts {key} {fmt_num(amt[key])}")
+                        unsourced.append((f"amounts {key} {fmt_num(amt[key])}", "number", amt[key]))
             elif not _is_number_sourced(amt, source):
-                unsourced.append(f"amounts {fmt_num(amt)}")
+                unsourced.append((f"amounts {fmt_num(amt)}", "number", amt))
         # total_cap N
         cap = check["total_cap"]
         if not _is_number_sourced(cap, source):
-            unsourced.append(f"total_cap {fmt_num(cap)}")
+            unsourced.append((f"total_cap {fmt_num(cap)}", "number", cap))
         # item_cap N if present
         item_cap = check.get("item_cap")
         if item_cap is not None and not _is_number_sourced(item_cap, source):
-            unsourced.append(f"item_cap {fmt_num(item_cap)}")
+            unsourced.append((f"item_cap {fmt_num(item_cap)}", "number", item_cap))
 
     return unsourced
 
@@ -1067,31 +1075,49 @@ def _fold(text):
 NEGATION = re.compile(r"\b(?:not|no|never|\w+n't|dont|cannot|without|avoid|neither|nor|nobody|none|nothing)\b", re.IGNORECASE)
 
 
+@functools.lru_cache(maxsize=4096)
+def _quote_pattern(quote):
+    return re.compile(r"(?<!\w)(?<!\d[.,])" + re.escape(quote) + r"(?!\w|[.,]\d)")
+
+
 def _quote_in(quote, message, ignore_negation=False):
     """True when quote occurs in message as whole tokens and is not negated in its clause.
 
     Lexical, not semantic: "$900" does not match inside "$9000" or "$900.50", and
     "spend $900" does not match "Do not spend $900".
+    The Stop gate tries every quote against every message of a session, so a
+    message that does not contain the quote's text is rejected by a substring
+    test before any pattern runs, and each match looks only at the characters
+    before it that can change the answer.
     """
-    if not quote:
+    if not quote or quote not in message:
         return False
-    pattern = r"(?<!\w)(?<!\d[.,])" + re.escape(quote) + r"(?!\w|[.,]\d)"
-    for match in re.finditer(pattern, message):
+    for match in _quote_pattern(quote).finditer(message):
+        start = match.start()
         # A sign in front of a quoted number changes its value: "-$900" is not "$900".
-        if re.search(r"(?:^|[^\d])[-\u2212]\$?$", message[:match.start()]):
+        # Four characters hold what precedes the sign, the sign, an optional "$" and
+        # a newline, before which "$" also matches.
+        if re.search(r"(?:^|[^\d])[-\u2212]\$?$", message[max(0, start - 4):start]):
             continue
-        clause = re.split(r"[.!?;:\n]", message[:match.start()])[-1]
-        if ignore_negation or not NEGATION.search(clause[-40:]):
+        # The clause's last 40 characters: what follows the last clause break among them.
+        clause = re.split(r"[.!?;:\n]", message[max(0, start - 40):start])[-1]
+        if ignore_negation or not NEGATION.search(clause):
             return True
     return False
 
 
-def _unverified_line(record, path, messages):
-    """The UNVERIFIED diagnostic for path, saying whether a negation or absence caused it."""
+def _unverified_line(record, path, messages, folded=None):
+    """The UNVERIFIED diagnostic for path, saying whether a negation or absence caused it.
+
+    folded, when given, is messages already passed through _fold, so a caller
+    reporting many quotes folds each message once.
+    """
     match = re.fullmatch(r"items\[(\d+)\]\.quote", path)
     source = record["items"][int(match.group(1))] if match else record["objective"]
     quote = _fold(source.get("quote") or "")
-    if any(_quote_in(quote, _fold(message), ignore_negation=True) for message in messages):
+    if folded is None:
+        folded = [_fold(message) for message in messages]
+    if any(_quote_in(quote, message, ignore_negation=True) for message in folded):
         return ("%s: UNVERIFIED: these words follow a negation in the same clause of the user's "
                 "message; if the user did say this, quote the whole sentence" % path)
     return "%s: UNVERIFIED: quote not found in the user's messages" % path
@@ -1394,7 +1420,224 @@ def validate_record(record):
         else:
             faults.extend(_validate_check_values(base, kind, check))
 
+    faults.extend(_validate_check_replaces(checks, check_ids))
+    dropped_faults, pending = _validate_check_dropped(record, checks)
+    faults.extend(dropped_faults)
+    if not faults:
+        faults.extend(_dropped_value_faults(record, pending))
     return faults
+
+
+def _validate_check_replaces(checks, check_ids):
+    """Faults in checks' replaces: ids of other checks of the same kind, with no cycle.
+
+    A cycle would leave every check in it replaced, so none of them would be
+    checked; refusing it keeps the newest check of every chain in force.
+    """
+    faults = []
+    # Only string ids can be replaced; validate_record reports any other id.
+    kinds = {check["id"]: check.get("kind") for check in checks
+             if isinstance(check, dict) and isinstance(check.get("id"), str)}
+    edges = {}
+    for index, check in enumerate(checks):
+        if not isinstance(check, dict) or check.get("replaces") is None:
+            continue
+        base = "checks[%d].replaces" % index
+        replaces = check["replaces"]
+        if not isinstance(replaces, list):
+            faults.append("%s: RECORD_BAD_REF: replaces must be a list of check ids" % base)
+            continue
+        for ref_index, ref_id in enumerate(replaces):
+            path = "%s[%d]" % (base, ref_index)
+            if not isinstance(ref_id, str) or ref_id not in check_ids or ref_id == check.get("id"):
+                faults.append("%s: RECORD_BAD_REF: replace the id of another check in checks" % path)
+            elif kinds.get(ref_id) != check.get("kind"):
+                faults.append("%s: RECORD_BAD_REF: replace only a check of the same kind (%s)"
+                              % (path, check.get("kind")))
+            elif isinstance(check.get("id"), str):
+                edges.setdefault(check["id"], []).append(ref_id)
+    cyclic = _on_a_cycle(edges)
+    for index, check in enumerate(checks):
+        if isinstance(check, dict) and isinstance(check.get("id"), str) and check["id"] in cyclic:
+            faults.append("checks[%d].replaces: RECORD_BAD_REF: replaces must not form a cycle" % index)
+    return faults
+
+
+def _on_a_cycle(edges):
+    """Ids on a cycle of edges, with no edge from an id to itself.
+
+    Tarjan's strongly connected components, without recursion, so it takes
+    time linear in the record however long its chains of replacements are:
+    an id is on a cycle when its component has another member.
+    """
+    order, low, on_stack, stack, cyclic = {}, {}, set(), [], set()
+    for root in edges:
+        if root in order:
+            continue
+        order[root] = low[root] = len(order)
+        stack.append(root)
+        on_stack.add(root)
+        work = [(root, iter(edges.get(root, ())))]
+        while work:
+            node, children = work[-1]
+            for child in children:
+                if child not in order:
+                    order[child] = low[child] = len(order)
+                    stack.append(child)
+                    on_stack.add(child)
+                    work.append((child, iter(edges.get(child, ()))))
+                    break
+                if child in on_stack:
+                    low[node] = min(low[node], order[child])
+            else:
+                work.pop()
+                if work:
+                    parent = work[-1][0]
+                    low[parent] = min(low[parent], low[node])
+                if low[node] == order[node]:
+                    component = []
+                    while True:
+                        member = stack.pop()
+                        on_stack.discard(member)
+                        component.append(member)
+                        if member == node:
+                            break
+                    if len(component) > 1:
+                        cyclic.update(component)
+    return cyclic
+
+
+def replaced_checks(record):
+    """Ids of checks that a newer check replaces; assumes a valid record."""
+    return {ref for check in record.get("checks") or [] for ref in check.get("replaces") or []}
+
+
+def dropped_checks(record):
+    """Ids of checks that a user's decision dropped (dropped_by); assumes a valid record."""
+    return {check["id"] for check in record.get("checks") or [] if check.get("dropped_by") is not None}
+
+
+def retired_checks(record):
+    """Ids of checks no longer in force: replaced by a newer check or dropped by a decision."""
+    return replaced_checks(record) | dropped_checks(record)
+
+
+# A decision that drops an option can leave a check about it nothing to check,
+# such as a speaker's payment deadline once the user goes without that speaker.
+# The check then names the decision in dropped_by. Only a decision in force
+# drops an option, so the check comes back when the user changes the decision.
+DROPPED_STATUSES = ("commitment", "rejected")
+# A decision that names a value of the check's kind may change the check
+# rather than drop it ("Dr. Okafor's slides are now due March 25"), so the
+# words that drop a check name none: no digit, no number word, and no month or
+# weekday for a date, hour or minute for a schedule, or money for a budget.
+# Telling a value the check already has from a new one would need every form
+# the source check reads ("two hundred fifty dollars", "March 20-25",
+# "three-quarter hour"), so any value counts. "one" and "may" alone do not,
+# being as often a pronoun and a verb; beside a number, the number counts.
+VALUE_NUMBER_WORDS = ("zero two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen "
+                      "sixteen seventeen eighteen nineteen twenty thirty forty fifty sixty seventy eighty ninety "
+                      "hundred thousand million billion dozen")
+VALUE_WORDS = {
+    "before": r"jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|june?|july?|aug(?:ust)?|sep(?:t(?:ember)?)?"
+              r"|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?|monday|tuesday|wednesday|thursday|friday|saturday|sunday",
+    "fits_window": r"noon|midnight|hours?|hrs?|minutes?|mins?|quarters?|half|o'?clock",
+    "within_budget": r"free|dollars?|bucks|euros?|pounds?|cents?|grand",
+}
+NAMES_VALUE = {kind: re.compile(r"\d|[$€£¥]|\b(?:%s|%s)\b" % ("|".join(VALUE_NUMBER_WORDS.split()), words)
+                                if kind == "within_budget" else
+                                r"\d|\b(?:%s|%s)\b" % ("|".join(VALUE_NUMBER_WORDS.split()), words),
+                                re.IGNORECASE)
+               for kind, words in VALUE_WORDS.items()}
+
+
+def _validate_check_dropped(record, checks):
+    """Faults in checks' dropped_by, and the drops whose values remain to be read.
+
+    dropped_by names an item with the user's decision: a commitment or a
+    rejection, not replaced, whose replaces lists one of the check's refs. The
+    values are read by _dropped_value_faults once the rest of the record is
+    valid.
+    """
+    faults, pending = [], []
+    items = record.get("items") if isinstance(record.get("items"), list) else []
+    by_id = {item["id"]: item for item in items if isinstance(item, dict) and isinstance(item.get("id"), str)}
+    # Built once, rather than scanning every item again for each dropped check.
+    newer_of = {}
+    for item in by_id.values():
+        for ref in item.get("replaces") if isinstance(item.get("replaces"), list) else ():
+            if isinstance(ref, str) and item["id"] not in newer_of.get(ref, ()):
+                newer_of.setdefault(ref, []).append(item["id"])
+    for index, check in enumerate(checks):
+        if not isinstance(check, dict) or check.get("dropped_by") is None:
+            continue
+        path = "checks[%d].dropped_by" % index
+        decision_id = check["dropped_by"]
+        decision = by_id.get(decision_id) if isinstance(decision_id, str) else None
+        refs = check.get("refs") if isinstance(check.get("refs"), list) else []
+        if decision is None:
+            faults.append("%s: RECORD_BAD_REF: name the id of the item that records the user's decision" % path)
+            continue
+        if not refs:
+            faults.append("%s: RECORD_BAD_REF: list this check's items in refs; the decision must replace one "
+                          "of them" % path)
+            continue
+        replaced = decision.get("replaces") if isinstance(decision.get("replaces"), list) else []
+        dropped_refs = [ref for ref in refs if isinstance(ref, str) and ref in replaced]
+        newer = newer_of.get(decision_id, [])
+        if not dropped_refs:
+            faults.append("%s: RECORD_BAD_REF: %s does not replace any of this check's refs; record the "
+                          "decision as an item that replaces the dropped option's items" % (path, decision_id))
+        elif decision.get("status") not in DROPPED_STATUSES:
+            faults.append("%s: RECORD_BAD_REF: %s has status %s; only a commitment or a rejection drops an "
+                          "option" % (path, decision_id, decision.get("status")))
+        elif newer:
+            faults.append("%s: RECORD_BAD_REF: %s is replaced by %s, so it may no longer drop this option; "
+                          "name the decision in force, or remove dropped_by" % (path, decision_id, ", ".join(newer)))
+        else:
+            pending.append((path, check, decision, dropped_refs))
+    return faults, pending
+
+
+def _dropped_value_faults(record, pending):
+    """Faults for drops that would retire a check still in force; needs a valid record.
+
+    A decision whose words name a value of the check's kind may update the
+    check, and a check none of whose values came only from the items the
+    decision replaced is about the current plan. Either way, dropping it could
+    hide a conflict or an assumption that still holds.
+    """
+    faults = []
+    by_id = {item["id"]: item for item in record.get("items") or []}
+    for path, check, decision, dropped_refs in pending:
+        named = _named_value(check["kind"], decision["quote"])
+        if named is not None:
+            faults.append("%s: RECORD_BAD_REF: %s's words name a value (%s), so the decision may update the check "
+                          "rather than drop it: if the user gave a new value, write a check with it that lists %s "
+                          "in replaces; if they only dropped the option, change %s's quote to just their words "
+                          "that drop it" % (path, decision["id"], json.dumps(named, ensure_ascii=False), check["id"],
+                                            decision["id"]))
+            continue
+        source = _source_text(record, check)
+        old = "\n".join(by_id[ref]["quote"] for ref in dropped_refs)
+        current = [label for label, _reading, _value in _unsourced(record, check, source=source)]
+        with_old = {label for label, _reading, _value in _unsourced(record, check, source=source + "\n" + old)}
+        if not [label for label in current if label not in with_old]:
+            faults.append("%s: RECORD_BAD_REF: no value of this check comes only from the items %s replaced, so "
+                          "it is still about the current plan: resolve it or tell the user, and remove dropped_by"
+                          % (path, decision["id"]))
+    return faults
+
+
+def _named_value(kind, text):
+    """The words around the first value of this kind that text names, or None."""
+    match = NAMES_VALUE[kind].search(text)
+    if match is None:
+        return None
+    # Show the value with the words beside it: "March 20-25", "two hundred fifty".
+    start = text.rfind(" ", 0, match.start()) + 1
+    words = text[start:].split()[:3]
+    return " ".join(words).rstrip(".,;:!?") or match.group(0)
 
 
 def _validate_check_values(base, kind, check):
@@ -1488,7 +1731,12 @@ def _validate_check_values(base, kind, check):
                 path = "%s.amounts[%d]" % (base, amount_index)
                 if isinstance(amount, dict):
                     if set(amount) != {"unit", "quantity"}:
-                        bad(path, 'use {"unit": N, "quantity": N} with exactly those two keys')
+                        if "unit" in amount or "quantity" in amount:
+                            bad(path, 'use {"unit": N, "quantity": N} with exactly those two keys')
+                        else:
+                            # Agents name budget lines as {"label": ..., "amount": N}.
+                            bad(path, "use the amount as a plain number and name the lines in the "
+                                      'check\'s label, or {"unit": N, "quantity": N} for a price per unit')
                         continue
                     for key in ("unit", "quantity"):
                         if not _is_number(amount[key]) or amount[key] < 0:
@@ -1548,6 +1796,32 @@ def evaluate_check(check):
                        "for both years" % check["second"])
         return False, detail
 
+    amounts, labels, total, cap, item_cap, excess = _budget(check)
+    problems = []
+    if total > cap:
+        lines = [label for label in labels if label]
+        problems.append(
+            "total %s exceeds total_cap %s by %s%s"
+            % (fmt_num(total), fmt_num(cap), fmt_num(excess),
+               " (%s)" % "; ".join(lines) if lines else "")
+        )
+    if item_cap is not None:
+        for amount, label in zip(amounts, labels):
+            if amount > item_cap:
+                problems.append(
+                    "amount %s exceeds item_cap %s"
+                    % (label or fmt_num(amount), fmt_num(item_cap))
+                )
+    if not problems:
+        return True, None
+    return False, "; ".join(problems)
+
+
+def _budget(check):
+    """(amounts, labels, total, cap, item_cap, total - cap) of a within_budget check, as exact Decimals.
+
+    A unit-price entry counts as its product; its label names the factors.
+    """
     amounts, labels = [], []
     for value in check["amounts"]:
         if isinstance(value, dict):
@@ -1574,24 +1848,8 @@ def evaluate_check(check):
     with decimal.localcontext() as context:
         context.prec = max(1, precision)
         total = sum(amounts, decimal.Decimal(0))
-        problems = []
-        if total > cap:
-            lines = [label for label in labels if label]
-            problems.append(
-                "total %s exceeds total_cap %s by %s%s"
-                % (fmt_num(total), fmt_num(cap), fmt_num(total - cap),
-                   " (%s)" % "; ".join(lines) if lines else "")
-            )
-        if item_cap is not None:
-            for amount, label in zip(amounts, labels):
-                if amount > item_cap:
-                    problems.append(
-                        "amount %s exceeds item_cap %s"
-                        % (label or fmt_num(amount), fmt_num(item_cap))
-                    )
-        if not problems:
-            return True, None
-        return False, "; ".join(problems)
+        excess = total - cap
+    return amounts, labels, total, cap, item_cap, excess
 
 
 def status_line(check):
@@ -1609,7 +1867,10 @@ def status_line(check):
 def failing_checks(record):
     """List of (check, detail) for every failing check, in record order."""
     results = []
+    replaced = retired_checks(record)
     for check in record.get("checks") or []:
+        if check.get("id") in replaced:
+            continue
         try:
             passed, detail = evaluate_check(check)
         except (KeyError, TypeError):
@@ -1628,7 +1889,7 @@ CONFLICT_ACTIONS = {
     "within_budget": "tell the user it is over budget, or cut only what they agree to cut",
 }
 ASSUMPTION_ACTION = "ask the user, or tell them plainly it is your assumption; never change a value to pass"
-OPEN_HEADER = "Open problems (resolve each in your answer or tell the user before finishing):"
+OPEN_HEADER = "Open problems (resolve each in your answer or tell the user before finishing, in their terms rather than the record's ids):"
 COMPACT_NOTE = ("Re-shown after context compaction: the summary may have dropped decisions; "
                 "this record is current.")
 PRE_WRITE_INTRO = ("rumbo: before this write, the decision record still has open problems. "
@@ -1640,7 +1901,10 @@ def open_problem_lines(record):
     lines = []
     for check, detail in failing_checks(record):
         lines.append("CONFLICT %s: %s -> %s" % (check["id"], detail, CONFLICT_ACTIONS[check["kind"]]))
+    replaced = retired_checks(record)
     for check in record.get("checks") or []:
+        if check["id"] in replaced:
+            continue
         passed, _ = evaluate_check(check)
         if passed:
             unsourced = unsourced_values(record, check)
@@ -1681,7 +1945,18 @@ def cmd_check(args):
         return 1
     failed = False
     unsourced_found = False
+    replaced = replaced_checks(record)
     for check in record.get("checks") or []:
+        label = (" " + check["label"]) if check.get("label") else ""
+        if check["id"] in replaced:
+            # History: a newer check of the same kind is in force instead.
+            newer = [c["id"] for c in record["checks"] if check["id"] in (c.get("replaces") or [])]
+            print("%s: REPLACED %s%s by %s" % (check["id"], check["kind"], label, ", ".join(newer)))
+            continue
+        if check.get("dropped_by") is not None:
+            # History: the user's decision dropped the option this check was about.
+            print("%s: DROPPED %s%s by %s" % (check["id"], check["kind"], label, check["dropped_by"]))
+            continue
         passed, detail = evaluate_check(check)
         unsourced = unsourced_values(record, check)
 
@@ -1714,8 +1989,9 @@ def cmd_check(args):
             return 2
         unverified = unverified_quotes(record, messages)
         if unverified:
+            folded = [_fold(message) for message in messages]
             for path in unverified:
-                print(_unverified_line(record, path, messages))
+                print(_unverified_line(record, path, messages, folded))
             return 1
 
     return 1 if (failed or unsourced_found) else 0
@@ -2089,6 +2365,11 @@ def _stop_gate(args, hook_input):
         return _block_bounded(session_id, [BROKEN_RECORD] + faults[:5], BROKEN_TAIL, chained=chained)
 
     parts, problem_ids = record_problems(record)
+    # A conflict or assumption the reply already states plainly needs no block:
+    # the user has just been told. Only the harness's copy of the reply counts.
+    reply = hook_input.get("last_assistant_message") if isinstance(hook_input, dict) else None
+    stated = stated_checks(record, reply)
+    stated_parts = {part for part, check_id in zip(parts, problem_ids) if check_id in stated}
     for check_id in _read_failed_ids(session_id):
         if check_id not in {c.get("id") for c in record.get("checks") or []}:
             parts.append("%s: check was failing and has been removed from the record" % check_id)
@@ -2101,6 +2382,7 @@ def _stop_gate(args, hook_input):
                      "the harness or disclose that provenance is unverified")
     else:
         unverified = set(unverified_quotes(record, messages))
+        folded = [_fold(message) for message in messages] if unverified else []
         saved = _read_ledger(args.record)
         if saved is None:
             ledger_parts.append(LEDGER_UNREADABLE)
@@ -2108,6 +2390,9 @@ def _stop_gate(args, hook_input):
         changed = False
         items = record.get("items") or []
         replaced = {ref for item in items for ref in item.get("replaces") or []}
+        # A rejection that drops a check is a decision in force, as an approval is:
+        # it needs words recorded for that status, and a later retraction reopens it.
+        dropping = {check["dropped_by"] for check in record.get("checks") or [] if check.get("dropped_by") is not None}
         for path, quote in _quote_paths(record):
             full, core = _fingerprints(record, path)
             match = re.fullmatch(r"items\[(\d+)\]\.quote", path)
@@ -2118,15 +2403,20 @@ def _stop_gate(args, hook_input):
                         ledger[key] = {"session": session_id or "", "seen": datetime.date.today().isoformat()}
                         changed = True
                 continue
-            approval = item is not None and item.get("status") in ("commitment", "authorized")
-            if (full if approval else core) not in ledger:
-                parts.append(_unverified_line(record, path, messages))
+            drops = item is not None and item.get("status") == "rejected" and item.get("id") in dropping
+            in_force = item is not None and (item.get("status") in ("commitment", "authorized") or drops)
+            if (full if in_force else core) not in ledger:
+                parts.append(_unverified_line(record, path, messages, folded))
                 continue
             # Verified in an earlier session. That shows the words were said, not
-            # that an approval still stands after this session's messages.
-            if item and item.get("status") in ("commitment", "authorized") and item.get("id") not in replaced:
+            # that an approval or a decision still stands after this session's messages.
+            if in_force and item.get("id") not in replaced:
                 said = _retraction_for(item, messages)
-                if said:
+                if said and drops:
+                    parts.append('%s: EARLIER_APPROVAL: decided in an earlier session, and it drops a check, '
+                                 'but this session the user said "%s"; check it still stands, and replace it '
+                                 'in the record if it changed, so the check comes back' % (path, said))
+                elif said:
                     parts.append('%s: EARLIER_APPROVAL: approved in an earlier session, but this '
                                  'session the user said "%s"; check it still stands, and replace '
                                  'or reject it in the record if it changed' % (path, said))
@@ -2150,7 +2440,17 @@ def _stop_gate(args, hook_input):
         return 0
     present = {c.get("id") for c in record.get("checks") or []}
     remembered = problem_ids + [i for i in _read_failed_ids(session_id) if i not in present]
-    return _block_bounded(session_id, ledger_parts + parts, CONFLICT_TAIL, remembered, chained)
+    shown = [part for part in parts if part not in stated_parts]
+    if not shown:
+        # Every open problem is a check the reply states. Keep their ids so a
+        # check deleted later is still reported, and leave the block count as it is.
+        _remember_failed(session_id, remembered)
+        if ledger_parts:
+            return _block_bounded(session_id, ledger_parts, CONFLICT_TAIL, chained=chained, marker=".ledger-")
+        return 0
+    labels = {check["id"]: check.get("label") or check["kind"] for check in record.get("checks") or []}
+    return _block_bounded(session_id, ledger_parts + parts, CONFLICT_TAIL, remembered, chained,
+                          shown=ledger_parts + shown, labels=labels)
 
 
 BROKEN_RECORD = "rumbo: the decision record is unreadable or invalid"
@@ -2163,15 +2463,16 @@ LEDGER_UNWRITABLE = ("verified-quotes.json: LEDGER_UNWRITABLE: quotes verified t
                      "be saved, so a later session will report them as UNVERIFIED. Fix the cause "
                      "(permissions, disk space, file size limit) or tell the user")
 REPEAT_REASON = ("rumbo: still open, unchanged since the last block: %s. Fix them, or if "
-                 "your previous reply already told the user, add one line naming what is "
-                 "still open. Do not repeat the full explanation.")
+                 "your previous reply already told the user, add one line saying what is "
+                 "still open, in the user's terms rather than the record's ids. Do not "
+                 "repeat the full explanation.")
 GATE_ERROR_TAIL = "Tell the user plainly that the decision record could not be checked this turn."
 BROKEN_TAIL = ("Fix the record with record.py validate before finishing; "
                "do not delete it to get past this check.")
 CONFLICT_TAIL = ("Before finishing, resolve each conflict in your answer or state it "
-                 "plainly to the user; say which values are your assumptions and ask "
-                 "the user to confirm them; do not delete or weaken a check to pass; "
-                 "then update the record.")
+                 "plainly to the user, naming its values on one line; say which values "
+                 "are your assumptions and ask the user to confirm them; do not delete "
+                 "or weaken a check to pass; then update the record.")
 STATE_UNAVAILABLE = ("rumbo: STATE_UNAVAILABLE: the block counter could not be saved, so this "
                      "is the only block for this stop; the problems above are still open.")
 MAX_BLOCKS = 3
@@ -2180,7 +2481,10 @@ MAX_BLOCKS = 3
 def record_problems(record):
     """FAIL and UNSOURCED lines, as `check` prints them, and the ids involved."""
     parts, ids = [], []
+    replaced = retired_checks(record)
     for check in record.get("checks") or []:
+        if check["id"] in replaced:
+            continue
         passed, _detail = evaluate_check(check)
         unsourced = unsourced_values(record, check)
         if not passed:
@@ -2199,6 +2503,180 @@ def record_problems(record):
     return parts, ids
 
 
+# Words that put two dates in order. "before" is left out: "what has to happen
+# before March 20" names a deadline without saying that it falls after the event.
+ORDER_WORDS = re.compile(r"\b(?:after|later|past|but|conflicts?|conflicting|too late|wrong|"
+                         r"mismatch(?:ed|es)?|impossible|precedes?|earlier|\d+\s+days?)\b", re.IGNORECASE)
+# Words that say an amount or a time goes beyond its limit, for an overrun stated as its excess.
+OVER_WORDS = re.compile(r"\b(?:over|overruns?|exceeds?|exceeded|exceeding|past|after|late|later|longer|"
+                        r"too long|too much|more than|above|beyond|short|conflicts?|conflicting)\b", re.IGNORECASE)
+# Words that call a value the agent's own. A section (see _sections) that has
+# one covers the values in it; a question mark covers only its own line.
+ASSUMPTION_WORDS = re.compile(r"\b(?:assum\w*|estimat\w*|est\.|guess\w*|propos\w*|suggest\w*|placeholders?|"
+                              r"unconfirmed|not (?:yet )?confirmed|please confirm|not yours)", re.IGNORECASE)
+# After "you" or "your" and at most two more words, those words give the value
+# to the user ("the $15 you suggested", "your earlier estimate"), which is the
+# claim an unsourced value contradicts, so they do not count there.
+USERS_WORDS = re.compile(r"\b(?:you|your|you've|you'd|you're|yours)\b(?:\W+\w+){0,2}\W*$", re.IGNORECASE)
+# 0 written as a number or a word; the source check counts 0 as always sourced,
+# but a reply that never says it has not stated a cap of 0.
+EXPLICIT_ZERO = re.compile(r"(?<![\d.,:])0+(?:\.0+)?(?![\d.,:]?\d)|\bzero\b", re.IGNORECASE)
+# Bounds that keep a long reply inside the hook timeout. Text past them is not
+# read, so it can only leave a problem unstated: the gate then blocks as before.
+STATED_MAX_CHARS = 20000
+STATED_MAX_LINE = 2000
+
+
+def _minutes_phrase(minutes, line):
+    """True when line says minutes with an explicit minute unit: "5 minutes", "five-minute", "5 min"."""
+    unit = re.compile(r"\s*-?\s*(?:minutes?|mins?)\b", re.IGNORECASE)
+    for match in re.finditer(r"(?<![\d.:])(\d+)(?![\d:]|\.\d)", line):
+        if int(match.group(1)) == minutes and unit.match(line, match.end()):
+            return True
+    return any(value == minutes and unit.match(line, end) for _start, end, value in _word_numbers(line))
+
+
+def _says(reading, value, line):
+    """True when line states value, read the way the source check reads the user's words.
+
+    Each reading first looks for text its matcher cannot do without (the
+    minutes of a time, the day of a date), so most lines cost a substring test.
+    """
+    if reading == "time":
+        hours, minutes = value.split(":")
+        if ":" + minutes not in line and not (minutes == "00" and (
+                str(int(hours) % 12 or 12) in line or re.search(r"noon|midnight", line, re.IGNORECASE))):
+            return False
+        return _is_time_sourced(value, line)
+    if reading == "date":
+        return str(int(value[-2:])) in line and _is_date_sourced(value, line)[0]
+    if reading == "year":
+        return re.search(r"(?<!\d)%s(?!\d)" % re.escape(value), line) is not None
+    if reading == "minutes":
+        return _is_minutes_sourced(value, line)
+    if reading == "minutes phrase":
+        return _minutes_phrase(value, line)
+    if reading == "number":
+        return EXPLICIT_ZERO.search(line) is not None if value == 0 else _is_number_sourced(value, line)
+    if reading == "order":
+        return ORDER_WORDS.search(line) is not None
+    if reading == "over":
+        return OVER_WORDS.search(line) is not None
+    return False
+
+
+def _calls_own(line):
+    """True when line calls a value the agent's own, not one it gives to the user."""
+    return any(not USERS_WORDS.search(line[max(0, match.start() - 60):match.start()])
+               for match in ASSUMPTION_WORDS.finditer(line))
+
+
+def _conflict_ways(check):
+    """The ways a reply can state a failing check: for each thing that fails,
+    alternatives of (reading, value) facts that one line must all say."""
+    if evaluate_check(check)[0]:
+        return []
+    kind = check["kind"]
+    if kind == "fits_window":
+        start, end = parse_time(check["start"]), parse_time(check["end"])
+        if check.get("end_next_day"):
+            end += 24 * 60
+        reached = start + sum(check["segments_min"])
+        return [[[("time", "%02d:%02d" % divmod(reached % (24 * 60), 60)), ("time", check["end"])],
+                 [("minutes phrase", reached - end), ("over", None)]]]
+    if kind == "before":
+        first, second = check["first"], check["second"]
+        facts = [("date", first), ("date", second), ("order", None)]
+        if _has_year(first) and first[:4] != second[:4]:
+            # The years decide this conflict, so the line must say them too:
+            # "March 1, 2026 is earlier than March 3, 2026" restates the dates
+            # with another year and does not tell the user about 2027.
+            facts += [("year", first[:4]), ("year", second[:4])]
+        return [[facts]]
+    amounts, _labels, total, cap, item_cap, excess = _budget(check)
+    ways = []
+    if total > cap:
+        ways.append([[("number", total), ("number", cap)], [("number", excess), ("over", None)]])
+    if item_cap is not None:
+        for amount in amounts:
+            if amount > item_cap:
+                ways.append([[("number", amount), ("number", item_cap)],
+                             [("number", amount), ("number", amount - item_cap), ("over", None)]])
+    return ways
+
+
+def _sections(lines):
+    """Group lines under markdown headings: [(first line index, last line index + 1)].
+
+    Text before the first heading is the reply's preamble.
+    """
+    starts = [0] + [index for index, line in enumerate(lines) if index and line.lstrip().startswith("#")]
+    return list(zip(starts, starts[1:] + [len(lines)]))
+
+
+def stated_checks(record, reply):
+    """Ids of the failing or unsourced checks whose problem the reply already states.
+
+    Word matching, not understanding. A failing check is stated when one line
+    of the reply names the values that conflict: the time the segments reach
+    and the window's end, or the minutes over with a word such as "over"; both
+    dates and a word that orders them; the total and its cap, or the excess
+    with a word such as "over" (and the same for an amount over item_cap). An
+    unsourced value is stated when a line names it and either asks about it
+    with a question mark, or sits in a section that calls something an
+    assumption or estimate, or the reply's preamble does.
+    """
+    if not isinstance(reply, str):
+        return set()
+    lines = [line for line in reply[:STATED_MAX_CHARS].splitlines() if line.strip() and len(line) <= STATED_MAX_LINE]
+    if not lines:
+        return set()
+    sections = _sections(lines)
+    cued = set()
+    for index, (first, last) in enumerate(sections):
+        if any(_calls_own(line) for line in lines[first:last]):
+            cued.update(range(first, last))
+            if index == 0 and not lines[0].lstrip().startswith("#"):
+                cued.update(range(len(lines)))
+    memo = {}
+
+    def says(reading, value, index):
+        key = (reading, repr(value), index)
+        if key not in memo:
+            memo[key] = _says(reading, value, lines[index])
+        return memo[key]
+
+    stated = set()
+    replaced = retired_checks(record)
+    for check in record.get("checks") or []:
+        if check["id"] in replaced:
+            continue
+        ways = _conflict_ways(check)
+        unsourced = [(reading, value) for _label, reading, value in _unsourced(record, check)]
+        if not ways and not unsourced:
+            continue
+        if all(any(all(says(reading, value, index) for reading, value in alternative)
+                   for alternative in alternatives for index in range(len(lines)))
+               for alternatives in ways) and \
+           all(any(says(reading, value, index) and (index in cued or "?" in lines[index])
+                   for index in range(len(lines)))
+               for reading, value in unsourced):
+            stated.add(check["id"])
+    return stated
+
+
+def _remember_failed(session_id, problem_ids):
+    """Keep the ids of open checks, so removing one later is reported."""
+    path = _marker_path(session_id, ".failed")
+    if not path:
+        return
+    try:
+        with _open_marker(path, "w") as handle:
+            json.dump(problem_ids, handle)
+    except OSError:
+        pass
+
+
 def _read_failed_ids(session_id):
     path = _marker_path(session_id, ".failed")
     try:
@@ -2211,15 +2689,21 @@ def _read_failed_ids(session_id):
     return [i for i in ids if isinstance(i, str)] if isinstance(ids, list) else []
 
 
-def _block_bounded(session_id, parts, tail, problem_ids=None, chained=False, marker="."):
+def _block_bounded(session_id, parts, tail, problem_ids=None, chained=False, marker=".", shown=None,
+                   labels=None):
     """Print a Stop-hook block, at most MAX_BLOCKS times per session; always exit 0.
 
     chained is the harness's stop_hook_active flag: the only loop guard left
     when the per-session counter cannot be saved. marker starts the counter's
     file names: a ledger problem an agent may not be able to clear must not use
-    up the blocks a later conflict needs.
+    up the blocks a later conflict needs. shown, when given, is the part of
+    parts to print; a repeat is still judged on all of parts, so stating one
+    problem and then another cannot keep a stop blocking. labels maps a check
+    id to what the short repeat calls it, so the agent can tell the user what
+    is open without the record's ids.
     """
     reason = "\n".join(parts) + "\n" + tail
+    display = reason if shown is None else "\n".join(shown) + "\n" + tail
     blocks_path = _marker_path(session_id, marker + "blocks")
     if blocks_path:
         # Same problems as the last block: ask for a one-line status instead of
@@ -2249,7 +2733,7 @@ def _block_bounded(session_id, parts, tail, problem_ids=None, chained=False, mar
         except OSError:
             if chained:
                 return 0
-            print(json.dumps({"decision": "block", "reason": reason + "\n" + STATE_UNAVAILABLE}))
+            print(json.dumps({"decision": "block", "reason": display + "\n" + STATE_UNAVAILABLE}))
             return 0
         try:
             with _open_marker(last_path, "w") as handle:
@@ -2260,10 +2744,11 @@ def _block_bounded(session_id, parts, tail, problem_ids=None, chained=False, mar
         except OSError:
             pass
         if repeat:
-            names = ", ".join(part.split(":")[0] for part in parts
-                              if not part.startswith("rumbo")) or "the decision record"
-            reason = REPEAT_REASON % names
-    print(json.dumps({"decision": "block", "reason": reason}))
+            ids = [part.split(":")[0] for part in (parts if shown is None else shown) if not part.startswith("rumbo")]
+            names = ", ".join("%s (%s)" % (name, labels[name]) if labels and name in labels else name
+                              for name in ids) or "the decision record"
+            display = REPEAT_REASON % names
+    print(json.dumps({"decision": "block", "reason": display}))
     return 0
 
 # ------------------------------------------------------------------ main
