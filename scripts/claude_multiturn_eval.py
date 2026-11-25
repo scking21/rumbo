@@ -132,21 +132,24 @@ def read_session(transcript):
     return blocks, sorted(naming)
 
 
-def grade(case, project, transcript, judge):
+def grade(case, project, transcript, judge, only=None):
     """Verdict per grader: PASS, FAIL, ERROR (no judge answer), MISSING (no evidence) or SKIPPED (unsupported).
 
     An llm grader whose focus is a file judges that file; any other llm grader
     (focus: trace) judges the assistant's replies. A file_exists grader globs
-    its path in the project.
+    its path in the project. With only, just the graders it names are graded,
+    and their votes join the ones saved earlier.
     """
     verdicts, all_votes = {}, {}
     folder = os.path.join(case, "graders")
     for name in sorted(os.listdir(folder)):
+        key = name[:-3]
+        if only is not None and key not in only:
+            continue
         text = open(os.path.join(folder, name), encoding="utf-8").read()
         meta = FRONT_MATTER.match(text)
         header = meta.group(1) if meta else ""
         kind = (re.search(r"^type:\s*(\S+)", header, re.M) or [None, None])[1]
-        key = name[:-3]
         if kind == "file_exists":
             pattern = re.search(r'^path:\s*"?([^"\n]+?)"?\s*$', header, re.M)
             wanted = re.search(r"^exists:\s*(true|false)\s*$", header, re.M | re.I)
@@ -184,9 +187,17 @@ def grade(case, project, transcript, judge):
         verdicts[name[:-3]] = verdict_of(votes)
         all_votes[name[:-3]] = votes
     # Each judge's votes, beside the session, to see how often the judges disagree.
+    votes_path = os.path.join(os.path.dirname(os.path.normpath(project)), "judge-votes.json")
+    if only is not None:
+        try:
+            with open(votes_path, encoding="utf-8") as handle:
+                earlier = json.load(handle)
+            if isinstance(earlier, dict):
+                all_votes = dict(earlier, **all_votes)
+        except (OSError, ValueError):
+            pass
     try:
-        with open(os.path.join(os.path.dirname(os.path.normpath(project)), "judge-votes.json"), "w",
-                  encoding="utf-8") as handle:
+        with open(votes_path, "w", encoding="utf-8") as handle:
             json.dump(all_votes, handle, indent=1)
     except OSError:
         pass
@@ -221,8 +232,12 @@ def verdict_of(votes):
     return "ERROR"
 
 
-def regrade(folder, judge):
-    """Grade an earlier run's complete sessions again with each case's current graders."""
+def regrade(folder, judge, errors_only=False):
+    """Grade an earlier run's complete sessions again with each case's current graders.
+
+    With errors_only, only the graders whose verdict is ERROR are graded again
+    (a usage limit, say, cut the judge off) and every other verdict is kept.
+    """
     path = os.path.join(folder, "summary.json")
     with open(path, encoding="utf-8") as handle:
         summary = json.load(handle)
@@ -236,7 +251,14 @@ def regrade(folder, judge):
                 os.path.basename(os.path.normpath(row["case"])), row["run"], row["case"]), file=sys.stderr)
             continue
         out = os.path.join(folder, "%s-%d" % (os.path.basename(os.path.normpath(row["case"])), row["run"]))
-        row["graders"] = grade(row["case"], os.path.join(out, "project"), row.get("transcript"), judge)
+        if not errors_only:
+            row["graders"] = grade(row["case"], os.path.join(out, "project"), row.get("transcript"), judge)
+            continue
+        earlier = row.get("graders") or {}
+        only = {name for name, verdict in earlier.items() if verdict == "ERROR"}
+        if only:
+            row["graders"] = dict(earlier, **grade(row["case"], os.path.join(out, "project"),
+                                                   row.get("transcript"), judge, only))
     with open(path, "w", encoding="utf-8") as handle:
         json.dump(summary, handle, indent=1)
     report(summary["sessions"])
@@ -260,6 +282,8 @@ def main(argv=None):
     parser.add_argument("--out", help="new or empty directory for sessions and summary.json")
     parser.add_argument("--regrade", metavar="DIR",
                         help="grade an earlier run's sessions in DIR again instead of running sessions")
+    parser.add_argument("--errors-only", action="store_true",
+                        help="with --regrade, grade again only the verdicts the judge could not give")
     parser.add_argument("--plugin-dir", default=os.path.join(os.path.dirname(__file__), os.pardir, "rumbo"))
     parser.add_argument("--model", default="sonnet")
     parser.add_argument("--runs", type=int, default=1)
@@ -275,7 +299,9 @@ def main(argv=None):
             parser.error("--regrade takes the run's directory only, no cases or --out")
         if shutil.which("claude") is None:
             parser.error("the claude CLI is not on PATH")
-        return regrade(args.regrade, args.judge_model)
+        return regrade(args.regrade, args.judge_model, args.errors_only)
+    if args.errors_only:
+        parser.error("--errors-only goes with --regrade DIR")
     if not args.cases or not args.out:
         parser.error("give the case directories and --out, or --regrade DIR")
     if not args.allow_shell:
