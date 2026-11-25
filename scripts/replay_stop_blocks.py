@@ -22,6 +22,7 @@ This measures a change to the reader against real replies; it does not rerun
 sessions. A block passes when every one of its problems is read as stated.
 """
 import argparse
+import collections
 import importlib.util
 import json
 import os
@@ -36,6 +37,11 @@ from claude_multiturn_eval import _is_user_turn  # noqa: E402
 UNSOURCED = re.compile(r"^(C\d+): UNSOURCED (fits_window|within_budget|before)(?: .*?)?: "
                        r"((?:start|end|segments_min|amounts|total_cap|item_cap|first|second) .*) "
                        r"not in the user's quoted words$")
+FAILING = re.compile(r"^(C\d+): FAIL (fits_window|within_budget|before)\b")
+ALSO_UNSOURCED = re.compile(r" \(also unsourced: (.*)\)$")
+# A repeat block names no problem lines, only the ids of the problems its
+# reply left unstated; their lines are the last full block's, unchanged.
+REPEAT = re.compile(r"rumbo: still open, unchanged since the last block: (.*?)\. Fix them, or if", re.DOTALL)
 UNSET_CAP = 987654
 
 
@@ -112,18 +118,44 @@ def _stand_in(kind, values):
     return check
 
 
+def _rebuild_failing(line, reader, final):
+    """A FAIL line rebuilt from the final record's check, or None: only an exact match counts."""
+    match = FAILING.match(line)
+    if not match or not isinstance(final, dict) or final.get("kind") != match.group(2):
+        return None
+    also = ALSO_UNSOURCED.search(line)
+    values = [v.strip() for v in also.group(1).split(",")] if also else []
+    check = {key: value for key, value in final.items() if key not in ("replaces", "dropped_by")}
+    check.update(id=match.group(1), refs=[])
+    left, words = list(values), []
+    try:
+        for label, phrase in _phrases(check, reader):
+            if label in left:
+                left.remove(label)
+            else:
+                words.append(phrase)
+    except (KeyError, TypeError, ValueError):
+        return None
+    record = {"version": 1, "objective": {"text": "Replay", "quote": "We plan for %s." % "; ".join(words or ["it"])},
+              "items": [], "checks": [check]}
+    if reader.validate_record(record) or reader.record_problems(record)[0] != [line]:
+        return None
+    return match.group(1), record
+
+
 def rebuild(line, reader, final=None):
-    """(check id, one-check record) for a block's UNSOURCED line, or None when it cannot be rebuilt.
+    """(check id, one-check record) for a block's UNSOURCED or FAIL line, or None when it cannot be rebuilt.
 
     final is the check with the same id in the session's final record, if any:
     it supplies the values the block does not name, such as the head count
     behind a price per unit. Otherwise those values get stand-ins. Either way
     the rebuilt check must validate, pass its arithmetic and leave unsourced
-    exactly the values the block names.
+    exactly the values the block names. A FAIL line is rebuilt only from the
+    final record, and only when the rebuilt check gives back the same line.
     """
     match = UNSOURCED.match(line)
     if not match:
-        return None
+        return _rebuild_failing(line, reader, final)
     check_id, kind, values = match.group(1), match.group(2), [v.strip() for v in match.group(3).split(",")]
     candidates = []
     if isinstance(final, dict) and final.get("kind") == kind:
@@ -188,10 +220,15 @@ def stops(transcript):
 
 
 def replay(reader, run_dirs, told=False):
-    """(blocks with check problems, assumption-only blocks rebuilt, those read as stated, names of the passing
-    ones, assumption-only blocks that could not be rebuilt)."""
-    total = assumed = passed = skipped = 0
-    names = []
+    """(counts, names of the blocks read as stated) over the saved runs.
+
+    counts has "blocks" (with check problems, a repeat counting with the
+    problems it names), "repeats", "repeats not recovered" (a repeat that names
+    a check its last full block did not show), and for "assumed" (only UNSOURCED problems)
+    and "conflict" (at least one FAIL) the blocks, those rebuilt and those
+    read as stated, as KIND, KIND + " rebuilt" and KIND + " stated".
+    """
+    counts, names = collections.Counter(), []
     for run_dir in run_dirs:
         with open(os.path.join(run_dir, "summary.json"), encoding="utf-8") as handle:
             sessions = json.load(handle)["sessions"]
@@ -208,18 +245,31 @@ def replay(reader, run_dirs, told=False):
             except (OSError, ValueError, AttributeError):
                 pass
             block_stops = [n for n, (is_block, _reply) in enumerate(session_stops) if is_block]
+            shown = {}
             for index, block in enumerate(row["blocks"]):
                 problems = [line for line in block["reason"].splitlines() if re.match(r"^C\d+: ", line)]
+                repeat = REPEAT.match(block["reason"]) if not problems else None
+                if problems:
+                    shown = {line.split(":")[0]: line for line in problems}
+                elif repeat:
+                    named = re.findall(r"(?:^|, )(C\d+)(?= \(|,|$)", repeat.group(1))
+                    if not named or not all(check_id in shown for check_id in named):
+                        # A check the last full block did not show: its line is unknown.
+                        counts["blocks"] += 1
+                        counts["repeats"] += 1
+                        counts["repeats not recovered"] += 1
+                        continue
+                    problems = [shown[check_id] for check_id in named]
                 if not problems or index >= len(block_stops):
                     continue
-                total += 1
-                if not all(UNSOURCED.match(line) for line in problems):
-                    continue
+                counts["blocks"] += 1
+                counts["repeats"] += bool(repeat)
+                kind = "assumed" if all(UNSOURCED.match(line) for line in problems) else "conflict"
+                counts[kind] += 1
                 rebuilt = [rebuild(line, reader, final.get(line.split(":")[0])) for line in problems]
                 if not all(rebuilt):
-                    skipped += 1
                     continue
-                assumed += 1
+                counts[kind + " rebuilt"] += 1
                 at = block_stops[index]
                 reply = session_stops[at][1]
                 ok = True
@@ -234,11 +284,11 @@ def replay(reader, run_dirs, told=False):
                     stated = reader.stated_checks(record, reply, memory) if memory else reader.stated_checks(record, reply)
                     ok = ok and check_id in stated
                 if ok:
-                    passed += 1
-                    names.append("%s %s run %d turn %d" % (os.path.basename(os.path.normpath(run_dir)),
-                                                           os.path.basename(os.path.normpath(row["case"])),
-                                                           row["run"], block["turn"]))
-    return total, assumed, passed, names, skipped
+                    counts[kind + " stated"] += 1
+                    names.append("%s %s run %d turn %d%s" % (os.path.basename(os.path.normpath(run_dir)),
+                                                             os.path.basename(os.path.normpath(row["case"])),
+                                                             row["run"], block["turn"], " (repeat)" if repeat else ""))
+    return counts, names
 
 
 def main(argv=None):
@@ -250,11 +300,14 @@ def main(argv=None):
     parser.add_argument("--told", action="store_true", help="count what earlier replies stated in full as told")
     args = parser.parse_args(argv)
     reader = load_reader(args.scripts)
-    total, assumed, passed, names, skipped = replay(reader, args.runs, args.told)
+    counts, names = replay(reader, args.runs, args.told)
     for name in names:
         print("read as stated: " + name)
-    print("blocks with check problems: %d; with only assumed values: %d rebuilt, %d not; read as stated: %d"
-          % (total, assumed, skipped, passed))
+    print("blocks with check problems: %d (%d repeats, %d of them not recovered)"
+          % (counts["blocks"], counts["repeats"], counts["repeats not recovered"]))
+    for kind, title in (("assumed", "only assumed values"), ("conflict", "a conflict")):
+        print("  with %s: %d, rebuilt %d, read as stated %d" % (title, counts[kind], counts[kind + " rebuilt"],
+                                                             counts[kind + " stated"]))
     return 0
 
 
