@@ -131,6 +131,29 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(done.returncode, 2)
         self.assertIn("--errors-only goes with --regrade DIR", done.stderr)
 
+    def test_rerun_runs_only_the_incomplete_sessions_again_in_place(self):
+        self.assertEqual(self.runner("--allow-shell", "--grade", "--runs", "2", "--out", self.out, self.case).returncode, 0)
+        summary = self.summary()
+        # As when a usage limit cut the second session short.
+        summary["sessions"][1] = dict(summary["sessions"][1], failure="turn 2: You've hit your weekly limit",
+                                      turns=1, graders=None)
+        with open(os.path.join(self.out, "summary.json"), "w", encoding="utf-8") as handle:
+            json.dump(summary, handle)
+        leftover = os.path.join(self.out, "agenda-2", "project", "half-written.md")
+        with open(leftover, "w", encoding="utf-8") as handle:
+            handle.write("partial")
+        kept = summary["sessions"][0]
+        done = self.runner("--rerun", self.out, "--allow-shell", "--grade")
+        self.assertEqual(done.returncode, 0, done.stderr)
+        rows = self.summary()["sessions"]
+        self.assertEqual(rows[0], kept)
+        self.assertIsNone(rows[1]["failure"])
+        self.assertEqual((rows[1]["turns"], rows[1]["graders"]), (2, {"says-the-end": "PASS"}))
+        self.assertFalse(os.path.exists(leftover), "a rerun starts in a fresh project")
+        for args in (["--rerun", self.out], ["--rerun", self.out, "--allow-shell", self.case]):
+            done = self.runner(*args)
+            self.assertEqual(done.returncode, 2)
+
     def test_regrade_takes_only_the_run_directory(self):
         for args in (["--regrade", self.out, self.case], ["--regrade", self.out, "--out", self.out]):
             done = self.runner(*args)
@@ -138,7 +161,7 @@ class RunnerTests(unittest.TestCase):
             self.assertIn("--regrade takes the run's directory only", done.stderr)
         done = self.runner("--allow-shell", self.case)
         self.assertEqual(done.returncode, 2)
-        self.assertIn("give the case directories and --out, or --regrade DIR", done.stderr)
+        self.assertIn("give the case directories and --out, --regrade DIR or --rerun DIR", done.stderr)
 
 
 if __name__ == "__main__":

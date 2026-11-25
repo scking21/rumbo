@@ -32,6 +32,11 @@ case's current graders, as a run with --grade would, without running any
 session, and rewrites DIR/summary.json; use it after adding or changing a
 grader. Run it from the directory the run started in, since the summary keeps
 case paths as given.
+
+--rerun DIR runs the incomplete sessions of an earlier run again, in place and
+with the run's plugin and model, for instance after a usage limit cut a batch
+short; add --grade to grade them. Each one starts over in a fresh project, and
+DIR/summary.json gets its new row.
 """
 import argparse
 import concurrent.futures
@@ -276,6 +281,61 @@ def report(rows):
             "" if not row["failure"] else ", INCOMPLETE (%s)" % row["failure"]))
 
 
+def run_one(case, n, root, plugin, model, turn_timeout, judge=None):
+    """Run of case number n under root, as a summary row; with judge, a complete session is graded."""
+    out = os.path.join(root, "%s-%d" % (os.path.basename(os.path.normpath(case)), n))
+    row = dict(case=case, run=n, session=None, turns=0, cost=None, transcript=None, failure=None,
+               blocks=[], naming_ids=[])
+    # One broken session, transcript or judge must not lose the others' results.
+    try:
+        row.update(run_session(case, plugin, model, out, turn_timeout))
+        if row["transcript"]:
+            blocks, row["naming_ids"] = read_session(row["transcript"])
+            row["blocks"] = [{"turn": turn, "reason": reason} for turn, reason in blocks]
+        # An incomplete session has no final artifact to judge, and judging a
+        # partial one would mix unfinished cases into the comparison.
+        if judge and not row["failure"]:
+            row["graders"] = grade(case, os.path.join(out, "project"), row["transcript"], judge)
+    except Exception as error:
+        row["failure"] = row["failure"] or "%s: %s" % (type(error).__name__, error)
+    if row["failure"]:
+        row["failure"] = " ".join(row["failure"].split())
+    return row
+
+
+def rerun(folder, judge, jobs, turn_timeout):
+    """Run an earlier run's incomplete sessions again, in place, with the run's plugin and model."""
+    path = os.path.join(folder, "summary.json")
+    with open(path, encoding="utf-8") as handle:
+        summary = json.load(handle)
+    rows = summary["sessions"]
+    todo = []
+    for index, row in enumerate(rows):
+        if not row.get("failure"):
+            continue
+        if not os.path.isfile(os.path.join(row["case"], "prompt.md")):
+            print("%s run %d: no case at %s; run --rerun from where the run started" % (
+                os.path.basename(os.path.normpath(row["case"])), row["run"], row["case"]), file=sys.stderr)
+            continue
+        todo.append(index)
+
+    def again(index):
+        row = rows[index]
+        out = os.path.join(folder, "%s-%d" % (os.path.basename(os.path.normpath(row["case"])), row["run"]))
+        # The session starts over in a fresh project, as in the first run.
+        if os.path.realpath(os.path.dirname(out)) == os.path.realpath(folder) and os.path.isdir(out):
+            shutil.rmtree(out)
+        return run_one(row["case"], row["run"], folder, summary["plugin"], summary["model"], turn_timeout, judge)
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, jobs)) as pool:
+        for index, row in zip(todo, pool.map(again, todo)):
+            rows[index] = row
+    with open(path, "w", encoding="utf-8") as handle:
+        json.dump(summary, handle, indent=1)
+    report(rows)
+    return 0
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("cases", nargs="*", help="eval case directories holding prompt.md")
@@ -284,6 +344,8 @@ def main(argv=None):
                         help="grade an earlier run's sessions in DIR again instead of running sessions")
     parser.add_argument("--errors-only", action="store_true",
                         help="with --regrade, grade again only the verdicts the judge could not give")
+    parser.add_argument("--rerun", metavar="DIR",
+                        help="run an earlier run's incomplete sessions in DIR again, with its plugin and model")
     parser.add_argument("--plugin-dir", default=os.path.join(os.path.dirname(__file__), os.pardir, "rumbo"))
     parser.add_argument("--model", default="sonnet")
     parser.add_argument("--runs", type=int, default=1)
@@ -302,37 +364,25 @@ def main(argv=None):
         return regrade(args.regrade, args.judge_model, args.errors_only)
     if args.errors_only:
         parser.error("--errors-only goes with --regrade DIR")
-    if not args.cases or not args.out:
-        parser.error("give the case directories and --out, or --regrade DIR")
+    if args.rerun:
+        if args.cases or args.out:
+            parser.error("--rerun takes the run's directory only, no cases or --out")
+    elif not args.cases or not args.out:
+        parser.error("give the case directories and --out, --regrade DIR or --rerun DIR")
     if not args.allow_shell:
         parser.error("--allow-shell is required; the agent under test runs shell commands without asking")
     if shutil.which("claude") is None:
         parser.error("the claude CLI is not on PATH")
+    if args.rerun:
+        return rerun(args.rerun, args.judge_model if args.grade else None, args.jobs, args.turn_timeout)
     if os.path.isdir(args.out) and os.listdir(args.out):
         parser.error("--out must be a new or empty directory")
     plugin = os.path.realpath(args.plugin_dir)
     jobs = [(case, n) for case in args.cases for n in range(1, args.runs + 1)]
 
     def one(job):
-        case, n = job
-        out = os.path.join(args.out, "%s-%d" % (os.path.basename(os.path.normpath(case)), n))
-        row = dict(case=case, run=n, session=None, turns=0, cost=None, transcript=None, failure=None,
-                   blocks=[], naming_ids=[])
-        # One broken session, transcript or judge must not lose the others' results.
-        try:
-            row.update(run_session(case, plugin, args.model, out, args.turn_timeout))
-            if row["transcript"]:
-                blocks, row["naming_ids"] = read_session(row["transcript"])
-                row["blocks"] = [{"turn": turn, "reason": reason} for turn, reason in blocks]
-            # An incomplete session has no final artifact to judge, and judging a
-            # partial one would mix unfinished cases into the comparison.
-            if args.grade and not row["failure"]:
-                row["graders"] = grade(case, os.path.join(out, "project"), row["transcript"], args.judge_model)
-        except Exception as error:
-            row["failure"] = row["failure"] or "%s: %s" % (type(error).__name__, error)
-        if row["failure"]:
-            row["failure"] = " ".join(row["failure"].split())
-        return row
+        return run_one(job[0], job[1], args.out, plugin, args.model, args.turn_timeout,
+                       args.judge_model if args.grade else None)
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, args.jobs)) as pool:
         rows = list(pool.map(one, jobs))
