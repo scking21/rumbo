@@ -54,6 +54,15 @@ NUDGE_TEMPLATE = (
     "QUOTE"
 )
 
+# A record that holds only its objective checks nothing: no decision, time or
+# amount the user gives reaches the gate until the agent records it.
+EMPTY_NOTE = ("rumbo: no decisions recorded yet. As the user decides, drafts or rules things out, add items "
+              "with their exact words, and a check for any schedule, deadline or budget (see the commitments skill).")
+EMPTY_REASON = ("This session is planning work, and the decision record still holds only its objective. Before "
+                "finishing, record the user's decisions so far as items, each with their exact words, and add a "
+                "check for any schedule, deadline or budget they set (see the commitments skill); or tell the user "
+                "in one line why this work does not need them.")
+
 PLANNING_PATTERN = re.compile(
     r"(?<!\S:)(?<!\bline )(?<![\w\]]\[)\b\d{1,2}:\d{2}\b(?!:\d)"
     r"|\$\s?\d"
@@ -2114,6 +2123,11 @@ def cmd_show(args):
         print("rumbo: record invalid, run record.py validate")
         return 0
 
+    empty = not record.get("items") and not record.get("checks")
+    if empty and payload is not None and isinstance(payload.get("prompt"), str) and \
+            PLANNING_PATTERN.search(payload["prompt"]):
+        # Counted for the Stop gate's nudge, as without a record.
+        _count_planning_prompt(payload.get("session_id"))
     lines = []
     if payload is not None and payload.get("source") == "compact":
         lines.append(COMPACT_NOTE)
@@ -2123,6 +2137,8 @@ def cmd_show(args):
         lines.append(OPEN_HEADER)
         lines.extend(problems)
     lines.append("Objective: %s" % record["objective"]["text"])
+    if empty:
+        lines.append(EMPTY_NOTE)
 
     items = record.get("items") or []
     replaced = set()
@@ -2441,6 +2457,8 @@ def _stop_gate(args, hook_input):
                     pass
         if ledger_parts:
             return _block_bounded(session_id, ledger_parts, CONFLICT_TAIL, chained=chained, marker=".ledger-")
+        if not record.get("items") and not record.get("checks") and _nudge_empty_record(session_id, chained):
+            print(json.dumps({"decision": "block", "reason": EMPTY_REASON}))
         return 0
     present = {c.get("id") for c in record.get("checks") or []}
     remembered = problem_ids + [i for i in _read_failed_ids(session_id) if i not in present]
@@ -2811,6 +2829,22 @@ def _remember_told(session_id, told, in_full):
             json.dump(merged, handle)
     except OSError:
         pass
+
+
+def _nudge_empty_record(session_id, chained):
+    """True once per session, at a stop after two planning prompts while the record holds only its objective."""
+    if chained or _planning_prompts(session_id) < 2:
+        return False
+    path = _marker_path(session_id, ".empty")
+    try:
+        if not path or os.path.exists(path):
+            return False
+        with _open_marker(path, "w") as handle:
+            handle.write("1")
+    except OSError:
+        # Without the marker the nudge could not stay once per session.
+        return False
+    return True
 
 
 def _remember_failed(session_id, problem_ids):
