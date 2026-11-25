@@ -174,7 +174,10 @@ minutes. Once a reply has stated every assumed value of a check, a later
 reply in the session states them with one line that calls one of them, or the
 check's budget, schedule or dates, still your assumption ("9:00–12:30 is still
 my assumption", "the budget figures are still my estimates"), until a value
-changes. Stated problems do not block.
+changes. A conflict you have stated in full works the same way: a later line
+that names one of its values as still a problem ("the 9:45 start still ends
+at 12:35") states it, while the conflict stays the same. Stated problems do
+not block.
 
 If a repeat block lists problems you already told the user about, add
 one line saying what is still open, in the user's terms rather than the

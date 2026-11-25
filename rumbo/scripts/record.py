@@ -2769,16 +2769,39 @@ def _stated(record, reply, told=None):
             unsourced.append((label, reading, value, products.get(label, [])[index:index + 1]))
         if not ways and not unsourced:
             continue
-        if not all(any(all(says(reading, value, index) for reading, value in alternative)
-                       for alternative in alternatives for index in range(len(lines)))
-                   for alternatives in ways):
-            continue
-        if all(named_value(reading, value, totals) for _label, reading, value, totals in unsourced):
-            in_full[check["id"]] = [label for label, _reading, _value, _totals in unsourced]
+        conflict = "conflict " + evaluate_check(check)[1] if ways else None
+        conflict_in_full = all(any(all(says(reading, value, index) for reading, value in alternative)
+                                   for alternative in alternatives for index in range(len(lines)))
+                               for alternatives in ways)
+        all_named = all(named_value(reading, value, totals) for _label, reading, value, totals in unsourced)
+        # What this reply tells in full is remembered, the conflict and the
+        # assumed values each on their own.
+        told_now = ([conflict] if ways and conflict_in_full else []) + (
+            [label for label, _reading, _value, _totals in unsourced] if unsourced and all_named else [])
+        if told_now:
+            in_full[check["id"]] = told_now
+        if conflict_in_full and all_named:
             stated.add(check["id"])
             continue
         counts = _told_counts(told, record, check)
         if not counts:
+            continue
+        # A conflict told in full before is still stated by a line that names
+        # one of its values with an overrun word or "still" ("the 9:45 start
+        # still ends at 12:35"), or calls the check's schedule, budget or dates
+        # a conflict ("the schedule conflict from earlier still applies").
+        if not conflict_in_full and not (counts.get(conflict) and (
+                any(KIND_WORDS[check["kind"]].search(line) and (OVER_WORDS.search(line) or ORDER_WORDS.search(line))
+                    for line in lines)
+                or all(any(any(says(reading, value, index) for alternative in alternatives
+                               for reading, value in alternative if value is not None)
+                           and (OVER_WORDS.search(lines[index]) or ORDER_WORDS.search(lines[index])
+                                or STILL_WORD.search(lines[index]))
+                           for index in range(len(lines)))
+                       for alternatives in ways))):
+            continue
+        if all_named:
+            stated.add(check["id"])
             continue
         # Each value is named here or was told before, and the reply still says
         # the check is open: by one of its values, or by what kind of check it is.
@@ -2791,6 +2814,7 @@ def _stated(record, reply, told=None):
     return in_full, stated
 
 
+STILL_WORD = re.compile(r"\bstill\b", re.IGNORECASE)
 # What a status line calls a kind of check when it names none of its values:
 # "my catering and handout figures from the budget are still my estimates".
 KIND_WORDS = {

@@ -49,7 +49,7 @@ Those two launch sessions account for 7 of the 8 failed launch gradings on haiku
 
 `rumbo/tests/test_nudge_year.py` checks that the year line comes with the nudge for dates without a year, and not for a prompt with a year, without a date, with "may" as a verb, or once the nudge has been shown.
 
-This release is not yet verified live: the account running the evals reached its weekly usage limit before it could run. The four sessions above and `04-deadline-after-event` on haiku and opus are the cases to rerun.
+**Live.** Every case was run again on this version with the same models, run counts and judge (88 sessions; see [the results](EVAL-RESULTS-2026-11-25.md#0318-against-0315)). Gradings passed rose from 230 to 242 of 248: sonnet 93 of 93 on both versions, haiku 83 to 88 of 93, opus 54 to 61 of 62. Empty records fell from 4 to 1, case-04 replies on haiku and opus that named a year from 5 of 5 to 1 of 5, and the launch case now fails one grading on each of haiku and opus. Stop blocks fell on sonnet (7 to 3) and opus (14 to 5) and rose on haiku (11 to 23), whose fuller records gave the gate more to check. Haiku still writes the remaining venue in `11-rejected-option` as decided, 0 of 3.
 
 ## Verification and rollback
 
