@@ -39,8 +39,9 @@ UNSOURCED = re.compile(r"^(C\d+): UNSOURCED (fits_window|within_budget|before)(?
                        r"not in the user's quoted words$")
 FAILING = re.compile(r"^(C\d+): FAIL (fits_window|within_budget|before)\b")
 ALSO_UNSOURCED = re.compile(r" \(also unsourced: (.*)\)$")
-# A repeat block names no problem lines: they are the last block's, unchanged.
-REPEAT = "rumbo: still open, unchanged since the last block"
+# A repeat block names no problem lines, only the ids of the problems its
+# reply left unstated; their lines are the last full block's, unchanged.
+REPEAT = re.compile(r"rumbo: still open, unchanged since the last block: (.*?)\. Fix them, or if", re.DOTALL)
 UNSET_CAP = 987654
 
 
@@ -221,8 +222,9 @@ def stops(transcript):
 def replay(reader, run_dirs, told=False):
     """(counts, names of the blocks read as stated) over the saved runs.
 
-    counts has "blocks" (with check problems, a repeat counting with its last
-    block's problems), "repeats", and for "assumed" (only UNSOURCED problems)
+    counts has "blocks" (with check problems, a repeat counting with the
+    problems it names), "repeats", "repeats not recovered" (a repeat that names
+    a check its last full block did not show), and for "assumed" (only UNSOURCED problems)
     and "conflict" (at least one FAIL) the blocks, those rebuilt and those
     read as stated, as KIND, KIND + " rebuilt" and KIND + " stated".
     """
@@ -243,18 +245,25 @@ def replay(reader, run_dirs, told=False):
             except (OSError, ValueError, AttributeError):
                 pass
             block_stops = [n for n, (is_block, _reply) in enumerate(session_stops) if is_block]
-            last_problems = []
+            shown = {}
             for index, block in enumerate(row["blocks"]):
                 problems = [line for line in block["reason"].splitlines() if re.match(r"^C\d+: ", line)]
-                repeat = not problems and block["reason"].startswith(REPEAT)
-                if repeat:
-                    problems = last_problems
-                elif problems:
-                    last_problems = problems
+                repeat = REPEAT.match(block["reason"]) if not problems else None
+                if problems:
+                    shown = {line.split(":")[0]: line for line in problems}
+                elif repeat:
+                    named = re.findall(r"(?:^|, )(C\d+)(?= \(|,|$)", repeat.group(1))
+                    if not named or not all(check_id in shown for check_id in named):
+                        # A check the last full block did not show: its line is unknown.
+                        counts["blocks"] += 1
+                        counts["repeats"] += 1
+                        counts["repeats not recovered"] += 1
+                        continue
+                    problems = [shown[check_id] for check_id in named]
                 if not problems or index >= len(block_stops):
                     continue
                 counts["blocks"] += 1
-                counts["repeats"] += repeat
+                counts["repeats"] += bool(repeat)
                 kind = "assumed" if all(UNSOURCED.match(line) for line in problems) else "conflict"
                 counts[kind] += 1
                 rebuilt = [rebuild(line, reader, final.get(line.split(":")[0])) for line in problems]
@@ -294,7 +303,8 @@ def main(argv=None):
     counts, names = replay(reader, args.runs, args.told)
     for name in names:
         print("read as stated: " + name)
-    print("blocks with check problems: %d (%d repeats)" % (counts["blocks"], counts["repeats"]))
+    print("blocks with check problems: %d (%d repeats, %d of them not recovered)"
+          % (counts["blocks"], counts["repeats"], counts["repeats not recovered"]))
     for kind, title in (("assumed", "only assumed values"), ("conflict", "a conflict")):
         print("  with %s: %d, rebuilt %d, read as stated %d" % (title, counts[kind], counts[kind + " rebuilt"],
                                                              counts[kind + " stated"]))

@@ -79,14 +79,25 @@ class ReplayTests(unittest.TestCase):
                 handle.write(json.dumps(item) + "\n")
         with open(os.path.join(self.run, "summary.json"), encoding="utf-8") as handle:
             summary = json.load(handle)
+        tail = (". Fix them, or if your previous reply already told the user, add one line saying what is still "
+                "open, in the user's terms rather than the record's ids. Do not repeat the full explanation.")
         summary["sessions"][0]["blocks"].append(
-            {"turn": 3, "reason": "rumbo: still open, unchanged since the last block: C1 (draft agenda). Fix them."})
+            {"turn": 3, "reason": "rumbo: still open, unchanged since the last block: C1 (draft agenda)" + tail})
         with open(os.path.join(self.run, "summary.json"), "w", encoding="utf-8") as handle:
             json.dump(summary, handle)
         reader = replay.load_reader(os.path.join(ROOT, "rumbo", "scripts"))
         counts, names = replay.replay(reader, [self.run], told=True)
         self.assertEqual((counts["blocks"], counts["repeats"], counts["assumed stated"]), (2, 1, 2))
         self.assertEqual(names[1], "run 01-workshop-full run 1 turn 3 (repeat)")
+        # Review: a repeat names the checks its own reply left unstated, which can be one the
+        # last full block did not show; its line is unknown, so the repeat is not judged.
+        summary["sessions"][0]["blocks"][1]["reason"] = (
+            "rumbo: still open, unchanged since the last block: C2 (budget split)" + tail)
+        with open(os.path.join(self.run, "summary.json"), "w", encoding="utf-8") as handle:
+            json.dump(summary, handle)
+        counts, names = replay.replay(reader, [self.run], told=True)
+        self.assertEqual((counts["repeats"], counts["repeats not recovered"], counts["assumed"]), (1, 1, 1))
+        self.assertEqual(len(names), 1)
 
     def test_each_stop_keeps_the_last_reply_and_blocks_stay_in_order(self):
         stops = replay.stops(os.path.join(self.run, "t.jsonl"))
