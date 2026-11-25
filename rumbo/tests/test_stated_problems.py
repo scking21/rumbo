@@ -317,6 +317,46 @@ class StatementReadingTests(unittest.TestCase):
         self.assertEqual(stated("The 5-minute overage goes away with a shorter break.", late, said), {"C1"})
         self.assertEqual(stated("The 5-minute break goes away.", late, said), set())
 
+    def test_a_status_line_states_a_conflict_told_in_full_earlier(self):
+        # Live (haiku, 0.3.18): a later turn's "The 9:45 start still ends at
+        # 12:35" and "Still open: the 9:45 schedule conflict" were blocked,
+        # because a conflict was stated only by its full values.
+        late = check(kind="fits_window", start="09:45", segments_min=[75, 20, 75], end="12:30")
+        said = "A 9:45 start, two 75-minute sessions and a 20-minute break, 12:30 close."
+        told = {"C1": ["conflict 09:45 + 170 min ends 12:35, 5 min after 12:30"]}
+        for reply, expected in (("The 9:45 start still ends at 12:35.", {"C1"}),
+                                ("**Still open:** the 9:45 schedule conflict, and the speaker.", {"C1"}),
+                                ("The agenda still runs past the close.", {"C1"}),
+                                ("We end at 12:35, so pick a fix.", set()),
+                                ("The schedule is still being drafted.", set()),
+                                ("Session 1 starts at 9:45.", set())):
+            with self.subTest(reply=reply):
+                self.assertEqual(stated(reply, late, said, told), expected)
+                self.assertEqual(stated(reply, late, said), set())
+        # Told for a different conflict, or for another check: the full values are needed.
+        for other in ({"C1": ["conflict 09:45 + 175 min ends 12:40, 10 min after 12:30"]},
+                      {"C2": told["C1"]}):
+            self.assertEqual(stated("The 9:45 start still ends at 12:35.", late, said, other), set())
+        budget = check(kind="within_budget", amounts=[350, 300], total_cap=600)
+        said = "Catering is $350 and the venue $300; the budget is $600."
+        told = {"C1": ["conflict total 650 exceeds total_cap 600 by 50"]}
+        self.assertEqual(stated("We are still over budget.", budget, said, told), {"C1"})
+        self.assertEqual(stated("The budget is the same.", budget, said, told), set())
+
+    def test_what_a_reply_tells_in_full_is_remembered_part_by_part(self):
+        # The conflict and the assumed values are each remembered when the
+        # reply tells them in full, even if it leaves the other out.
+        late = check(kind="fits_window", start="09:45", segments_min=[75, 20, 75], end="12:30")
+        said = "Two 75-minute sessions with a 20-minute break."
+        document = {"version": 1, "objective": {"text": "Plan", "quote": said}, "items": [], "checks": [late]}
+        conflict = "conflict 09:45 + 170 min ends 12:35, 5 min after 12:30"
+        in_full, stated_ids = record._stated(document, "The sessions end at 12:35, after the 12:30 close.")
+        self.assertEqual((in_full, stated_ids), ({"C1": [conflict]}, set()))
+        in_full, stated_ids = record._stated(document, "The 9:45 start and the 12:30 close are my assumptions.")
+        self.assertEqual((in_full, stated_ids), ({"C1": ["start 09:45", "end 12:30"]}, set()))
+        both = "The sessions end at 12:35, after the 12:30 close.\nThe 9:45 start and 12:30 close are my assumptions."
+        self.assertEqual(record._stated(document, both), ({"C1": [conflict, "start 09:45", "end 12:30"]}, {"C1"}))
+
     def test_a_told_assumption_does_not_state_a_conflict(self):
         late = check(kind="fits_window", start="09:00", segments_min=[75, 20, 75, 60], end="12:30")
         told = {"C1": ["start 09:00", "end 12:30", "segments_min 75", "segments_min 20", "segments_min 75",
@@ -433,6 +473,23 @@ class StatedStopGateTests(unittest.TestCase):
         self.assertIsNone(self.marker("s1", ".told"))
         self.write(AGENDA)
         self.assertIn("C1: UNSOURCED fits_window", self.stop(AGENDA_STATUS))
+
+    def test_a_status_line_passes_once_the_conflict_was_told_in_full(self):
+        document = json.loads(json.dumps(CONFLICTS))
+        document["checks"] = document["checks"][:1]
+        self.write(document)
+        self.assertIsNone(self.stop(SAYS_C1))
+        self.assertIn("conflict 09:45 + 170 min ends 12:35, 5 min after 12:30",
+                      json.loads(self.marker("s1", ".told"))["C1"])
+        self.assertIsNone(self.stop("Speakers are settled.\nThe 9:45 start still ends at 12:35."))
+        self.assertIsNone(self.marker("s1", ".blocks"))
+        # Another session was never told; a changed conflict needs its full values again.
+        self.assertIn("C1: FAIL fits_window", self.stop("The 9:45 start still ends at 12:35.", session="s2"))
+        document["checks"][0]["segments_min"] = [75, 25, 75]
+        self.write(document)
+        reason = self.stop("The 9:45 start still ends at 12:40.")
+        self.assertIn("C1: FAIL fits_window: 09:45 + 175 min ends 12:40", reason)
+        self.assertNotIn("UNVERIFIED", reason)
 
     def test_without_a_session_id_a_status_line_is_not_enough(self):
         self.write(AGENDA)
