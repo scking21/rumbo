@@ -63,6 +63,17 @@ EMPTY_REASON = ("This session is planning work, and the decision record still ho
                 "check for any schedule, deadline or budget they set (see the commitments skill); or tell the user "
                 "in one line why this work does not need them.")
 
+# A one-turn request starts no record, so the skill's year rule is never read:
+# in repeated runs every haiku and opus reply dated "May 9" in a year the user
+# never gave. The nudge says it when the prompt has a month and day but no year.
+NUDGE_NO_YEAR = ("rumbo: the dates here have no year. Keep them without one in what you write, "
+                 "and ask if the year matters.")
+# "May" only with its capital: "may 3 people come?" names no date.
+MONTH_NAME = r"(?:(?i:(?:jan|feb|mar|apr|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*)|May)"
+MONTH_DAY = re.compile(r"\b" + MONTH_NAME + r"\.?\s+\d{1,2}(?:st|nd|rd|th)?\b"
+                       r"|\b\d{1,2}(?:st|nd|rd|th)?\s+(?:of\s+)?" + MONTH_NAME + r"\b")
+YEAR_WORD = re.compile(r"(?<!\d)(?:19|20)\d{2}(?!\d)")
+
 PLANNING_PATTERN = re.compile(
     r"(?<!\S:)(?<!\bline )(?<![\w\]]\[)\b\d{1,2}:\d{2}\b(?!:\d)"
     r"|\$\s?\d"
@@ -2100,6 +2111,8 @@ def maybe_nudge(args, payload):
             if existing and os.path.exists(existing):
                 return
     print(NUDGE_TEMPLATE % (os.path.abspath(__file__), args.record))
+    if MONTH_DAY.search(prompt) and not YEAR_WORD.search(prompt):
+        print(NUDGE_NO_YEAR)
     marker_path = _marker_path(session_id, ".nudged")
     if marker_path:
         try:
