@@ -2368,7 +2368,11 @@ def _stop_gate(args, hook_input):
     # A conflict or assumption the reply already states plainly needs no block:
     # the user has just been told. Only the harness's copy of the reply counts.
     reply = hook_input.get("last_assistant_message") if isinstance(hook_input, dict) else None
-    stated = stated_checks(record, reply)
+    # An assumption stated in full stays told for the session: while the values
+    # are the same, a later reply's status line that names one of them states them.
+    told = _read_told(session_id)
+    in_full, stated = _stated(record, reply, told)
+    _remember_told(session_id, told, in_full)
     stated_parts = {part for part, check_id in zip(parts, problem_ids) if check_id in stated}
     for check_id in _read_failed_ids(session_id):
         if check_id not in {c.get("id") for c in record.get("checks") or []}:
@@ -2428,7 +2432,7 @@ def _stop_gate(args, hook_input):
 
     if not parts:
         ledger_markers = () if ledger_parts else (".ledger-blocks", ".ledger-lastreason")
-        for suffix in (".blocks", ".failed", ".lastreason") + ledger_markers:
+        for suffix in (".blocks", ".failed", ".lastreason", ".told") + ledger_markers:
             path = _marker_path(session_id, suffix)
             if path:
                 try:
@@ -2665,7 +2669,7 @@ def _sections(lines):
     return list(zip(starts, starts[1:] + [len(lines)]))
 
 
-def stated_checks(record, reply):
+def stated_checks(record, reply, told=None):
     """Ids of the failing or unsourced checks whose problem the reply already states.
 
     Word matching, not understanding. A failing check is stated when one line
@@ -2676,12 +2680,23 @@ def stated_checks(record, reply):
     unsourced value is stated when a line names it and either asks about it
     with a question mark, or sits in a section that calls something an
     assumption or estimate, or the reply's preamble does.
+
+    told maps a check id to the labels of assumed values ("start 09:00") that
+    an earlier reply this session stated in full. While every assumed value of
+    a check is among them, one of them named that way states them all: the
+    user already has the values, and the line says they are still open.
     """
+    return set(_stated(record, reply, told)[1])
+
+
+def _stated(record, reply, told=None):
+    """(check id -> labels of the assumed values, for each check the reply states in full;
+    ids of every check it states, in full or by a told value), as stated_checks reads them."""
     if not isinstance(reply, str):
-        return set()
+        return {}, set()
     lines = [line for line in reply[:STATED_MAX_CHARS].splitlines() if line.strip() and len(line) <= STATED_MAX_LINE]
     if not lines:
-        return set()
+        return {}, set()
     sections = _sections(lines)
     cued = set()
     for index, (first, last) in enumerate(sections):
@@ -2697,23 +2712,74 @@ def stated_checks(record, reply):
             memo[key] = _says(reading, value, lines[index])
         return memo[key]
 
-    stated = set()
+    def named(reading, value):
+        return any(says(reading, value, index) and (index in cued or "?" in lines[index])
+                   for index in range(len(lines)))
+
+    in_full, stated = {}, set()
     replaced = retired_checks(record)
     for check in record.get("checks") or []:
         if check["id"] in replaced:
             continue
         ways = _conflict_ways(check)
-        unsourced = [(reading, value) for _label, reading, value in _unsourced(record, check)]
+        unsourced = _unsourced(record, check)
         if not ways and not unsourced:
             continue
-        if all(any(all(says(reading, value, index) for reading, value in alternative)
-                   for alternative in alternatives for index in range(len(lines)))
-               for alternatives in ways) and \
-           all(any(says(reading, value, index) and (index in cued or "?" in lines[index])
-                   for index in range(len(lines)))
-               for reading, value in unsourced):
+        if not all(any(all(says(reading, value, index) for reading, value in alternative)
+                       for alternative in alternatives for index in range(len(lines)))
+                   for alternatives in ways):
+            continue
+        if all(named(reading, value) for _label, reading, value in unsourced):
+            in_full[check["id"]] = [label for label, _reading, _value in unsourced]
             stated.add(check["id"])
-    return stated
+        elif _told_covers(told, check["id"], unsourced) and any(
+                named(reading, value) for _label, reading, value in unsourced):
+            stated.add(check["id"])
+    return in_full, stated
+
+
+def _told_covers(told, check_id, unsourced):
+    """True when every assumed value of the check is among those told for it this session."""
+    earlier = told.get(check_id) if isinstance(told, dict) else None
+    if not unsourced or not isinstance(earlier, list):
+        return False
+    labels = [label for label, _reading, _value in unsourced]
+    return all(labels.count(label) <= earlier.count(label) for label in set(labels))
+
+
+def _read_told(session_id):
+    """Check id -> labels of the assumed values that a reply this session stated in full."""
+    path = _marker_path(session_id, ".told")
+    try:
+        if not path:
+            return {}
+        with _open_marker(path) as handle:
+            told = _loads(handle.read())
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(told, dict):
+        return {}
+    return {key: [label for label in labels if isinstance(label, str)]
+            for key, labels in told.items() if isinstance(key, str) and isinstance(labels, list)}
+
+
+def _remember_told(session_id, told, in_full):
+    """Add the assumed values this reply stated in full to the ones told this session."""
+    path = _marker_path(session_id, ".told")
+    if not path or not any(in_full.values()):
+        return
+    merged = {key: list(labels) for key, labels in told.items()}
+    for check_id, labels in in_full.items():
+        have = merged.setdefault(check_id, [])
+        for label in set(labels):
+            have.extend([label] * (labels.count(label) - have.count(label)))
+    if merged == told:
+        return
+    try:
+        with _open_marker(path, "w") as handle:
+            json.dump(merged, handle)
+    except OSError:
+        pass
 
 
 def _remember_failed(session_id, problem_ids):
