@@ -45,10 +45,22 @@ def check(**fields):
     return dict({"id": "C1", "refs": []}, **fields)
 
 
-def stated(reply, one_check, said):
+def stated(reply, one_check, said, told=None):
     """Ids stated by reply, for a record whose objective quote is the user's words said."""
     document = {"version": 1, "objective": {"text": "Plan", "quote": said}, "items": [], "checks": [one_check]}
-    return record.stated_checks(document, reply)
+    return record.stated_checks(document, reply, told)
+
+
+AGENDA_SAID = "Please draft a morning agenda for the workshop."
+AGENDA = {"version": 1, "objective": {"text": "Workshop", "quote": OBJECTIVE},
+          "items": [{"id": "I1", "text": "Agenda", "quote": AGENDA_SAID, "status": "draft"}],
+          "checks": [{"id": "C1", "kind": "fits_window", "label": "draft agenda", "start": "09:00",
+                      "segments_min": [75, 20, 75], "end": "12:30", "refs": ["I1"]}]}
+AGENDA_TOLD = ["start 09:00", "end 12:30", "segments_min 75", "segments_min 20", "segments_min 75"]
+# A first reply that lays the agenda out, and a later one that only says it is still open.
+AGENDA_IN_FULL = ("Every time here is my assumption, not your decision.\n| 9:00\u201310:15 | Session 1 |\n"
+                  "| 10:15\u201310:35 | Break |\n| 10:35\u201311:50 | Session 2 |\nWe close at 12:30.")
+AGENDA_STATUS = "Here are the two speakers side by side.\n\nStill open: the 9:00 to 12:30 times are my assumption."
 
 
 class StatementReadingTests(unittest.TestCase):
@@ -213,6 +225,65 @@ class StatementReadingTests(unittest.TestCase):
                 reply = "These times are my assumptions.\n| " + line + " | Build |\nStart 00:00, end 23:59."
                 self.assertEqual(stated(reply, block, said), expected)
 
+    def test_a_status_line_states_assumed_values_told_in_full_earlier(self):
+        # Live sessions on 0.3.15: in 8 of 10 blocks left after the time-range
+        # fix, an earlier reply had stated every assumed value, and the blocked
+        # later reply still said "9:00-12:30 is my assumption" without
+        # repeating each block length.
+        agenda = AGENDA["checks"][0]
+        self.assertEqual(stated(AGENDA_IN_FULL, agenda, OBJECTIVE), {"C1"})
+        self.assertEqual(stated(AGENDA_STATUS, agenda, OBJECTIVE), set())
+        self.assertEqual(stated(AGENDA_STATUS, agenda, OBJECTIVE, {"C1": AGENDA_TOLD}), {"C1"})
+        # Only for the values told, for that check, with a line that calls them
+        # assumptions or asks about them.
+        self.assertEqual(stated(AGENDA_STATUS, agenda, OBJECTIVE, {"C1": AGENDA_TOLD[:-1]}), set())
+        self.assertEqual(stated(AGENDA_STATUS, agenda, OBJECTIVE, {"C2": AGENDA_TOLD}), set())
+        self.assertEqual(stated("We still start at 9:00.", agenda, OBJECTIVE, {"C1": AGENDA_TOLD}), set())
+        self.assertEqual(stated("Still starting at 9:00?", agenda, OBJECTIVE, {"C1": AGENDA_TOLD}), {"C1"})
+        for told in (None, [], {"C1": "start 09:00"}, {"C1": [None, 3]}):
+            self.assertEqual(stated(AGENDA_STATUS, agenda, OBJECTIVE, told), set(), told)
+
+    def test_a_told_check_is_stated_by_a_line_that_calls_its_kind_an_assumption(self):
+        # Live, on 0.3.17's first version: "My catering, handout and contingency
+        # figures from the budget are still my estimates" named no amount.
+        agenda = AGENDA["checks"][0]
+        told = {"C1": AGENDA_TOLD}
+        for reply, expected in (("The schedule is still my assumption.", {"C1"}),
+                                ("Do the agenda times still work for you?", {"C1"}),
+                                ("The schedule stays as drafted.", set()),
+                                # The cue must be on that line: a section's is not enough
+                                # without a value.
+                                ("## My assumptions\nThe schedule stays as drafted.", set()),
+                                ("The budget is still my estimate.", set())):
+            with self.subTest(reply=reply):
+                self.assertEqual(stated(reply, agenda, OBJECTIVE, told), expected)
+                self.assertEqual(stated(reply, agenda, OBJECTIVE), set())
+
+    def test_values_told_for_a_check_carry_to_the_check_that_replaces_it(self):
+        # Live: the agent replaced a told budget check with one holding the same
+        # values and new refs, and the gate treated the new one as never told.
+        older = dict(AGENDA["checks"][0])
+        newer = dict(older, id="C2", replaces=["C1"])
+        other = dict(older, id="C3")
+        document = {"version": 1, "objective": {"text": "Plan", "quote": OBJECTIVE}, "items": [],
+                    "checks": [older, newer, other]}
+        told = {"C1": AGENDA_TOLD}
+        self.assertEqual(record.stated_checks(document, AGENDA_STATUS, told), {"C2"})
+        self.assertEqual(record.stated_checks(document, AGENDA_STATUS, {"C2": AGENDA_TOLD}), {"C2"})
+        document["checks"][1] = dict(newer, segments_min=[75, 20, 80])
+        self.assertEqual(record.stated_checks(document, AGENDA_STATUS, told), set())
+        # A value not told before can be named in this reply instead.
+        self.assertEqual(record.stated_checks(document, AGENDA_STATUS + "\nSession 2 is now 80 minutes, my guess.",
+                                              told), {"C2"})
+
+    def test_a_told_assumption_does_not_state_a_conflict(self):
+        late = check(kind="fits_window", start="09:00", segments_min=[75, 20, 75, 60], end="12:30")
+        told = {"C1": ["start 09:00", "end 12:30", "segments_min 75", "segments_min 20", "segments_min 75",
+                       "segments_min 60"]}
+        self.assertEqual(stated(AGENDA_STATUS, late, OBJECTIVE, told), set())
+        conflict = "The sessions end at 12:50, after the 12:30 close."
+        self.assertEqual(stated(conflict + "\n" + AGENDA_STATUS, late, OBJECTIVE, told), {"C1"})
+
     def test_an_assumed_year_is_read_on_its_own(self):
         assumed = check(kind="before", first="2026-03-01", second="2026-03-03")
         said = "Copy is due March 1 and the launch is March 3."
@@ -281,6 +352,52 @@ class StatedStopGateTests(unittest.TestCase):
             return None
         with open(os.path.join(self.state, names[0]), encoding="utf-8") as handle:
             return handle.read()
+
+    def test_a_status_line_passes_once_the_assumptions_were_told_in_full(self):
+        self.write(AGENDA)
+        self.said(OBJECTIVE, AGENDA_SAID)
+        self.assertIsNone(self.stop(AGENDA_IN_FULL))
+        self.assertEqual(sorted(json.loads(self.marker("s1", ".told"))["C1"]), sorted(AGENDA_TOLD))
+        # A later turn's reply that only says the times are still assumed.
+        self.assertIsNone(self.stop(AGENDA_STATUS))
+        self.assertIsNone(self.marker("s1", ".blocks"))
+        # Another session has not told the user anything.
+        self.assertIn("C1: UNSOURCED fits_window", self.stop(AGENDA_STATUS, session="s2"))
+
+    def test_an_assumed_value_not_yet_told_needs_the_full_statement(self):
+        self.write(AGENDA)
+        self.said(OBJECTIVE, AGENDA_SAID)
+        self.assertIsNone(self.stop(AGENDA_IN_FULL))
+        longer = json.loads(json.dumps(AGENDA))
+        longer["checks"][0]["segments_min"].append(10)
+        self.write(longer)
+        reason = self.stop(AGENDA_STATUS)
+        self.assertIn("C1: UNSOURCED fits_window draft agenda: start 09:00, end 12:30", reason)
+        self.assertIn("segments_min 10", reason)
+        # Told in full again, the new value joins the others.
+        self.assertIsNone(self.stop(AGENDA_IN_FULL + "\nThen a 10-minute wrap-up, also my assumption.", chained=True))
+        self.assertIn("segments_min 10", json.loads(self.marker("s1", ".told"))["C1"])
+        self.assertIsNone(self.stop(AGENDA_STATUS))
+
+    def test_told_values_are_forgotten_once_the_problems_are_gone(self):
+        self.write(AGENDA)
+        self.said(OBJECTIVE, AGENDA_SAID)
+        self.assertIsNone(self.stop(AGENDA_IN_FULL))
+        settled = json.loads(json.dumps(AGENDA))
+        settled["items"][0]["quote"] = ("Start at 9:00 and close at 12:30: two 75-minute sessions "
+                                        "with a 20-minute break.")
+        self.write(settled)
+        self.said(OBJECTIVE, AGENDA_SAID, settled["items"][0]["quote"])
+        self.assertIsNone(self.stop("Done."))
+        self.assertIsNone(self.marker("s1", ".told"))
+        self.write(AGENDA)
+        self.assertIn("C1: UNSOURCED fits_window", self.stop(AGENDA_STATUS))
+
+    def test_without_a_session_id_a_status_line_is_not_enough(self):
+        self.write(AGENDA)
+        self.said(OBJECTIVE, AGENDA_SAID)
+        self.assertIsNone(self.stop(AGENDA_IN_FULL, session=None))
+        self.assertIn("C1: UNSOURCED fits_window", self.stop(AGENDA_STATUS, session=None))
 
     def test_a_reply_that_states_every_conflict_passes_without_using_a_block(self):
         self.assertIsNone(self.stop(SAYS_ALL))

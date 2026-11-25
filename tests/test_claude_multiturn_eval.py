@@ -108,6 +108,29 @@ class RunnerTests(unittest.TestCase):
         # is graded in a run, so regrading grades it too; its trace grader has no evidence.
         self.assertEqual(rows[3]["graders"], {"says-the-end": "MISSING"})
 
+    def test_regrading_errors_only_asks_the_judge_again_for_those_verdicts(self):
+        self.assertEqual(self.runner("--allow-shell", "--grade", "--out", self.out, self.case).returncode, 0)
+        with open(os.path.join(self.case, "graders", "names-the-stop.md"), "w") as handle:
+            handle.write(GRADER.replace("says when the agenda ends", "names the 16:15 stop"))
+        summary = self.summary()
+        # As when a usage limit cut the judge off: one verdict is ERROR, one is a
+        # verdict to keep, and the grader added since was never asked.
+        summary["sessions"][0]["graders"] = {"says-the-end": "ERROR", "names-the-stop": "FAIL"}
+        with open(os.path.join(self.out, "summary.json"), "w", encoding="utf-8") as handle:
+            json.dump(summary, handle)
+        votes = os.path.join(self.out, "agenda-1", "judge-votes.json")
+        with open(votes, "w", encoding="utf-8") as handle:
+            json.dump({"says-the-end": ["ERROR"] * 3, "names-the-stop": ["FAIL"] * 3}, handle)
+        done = self.runner("--regrade", self.out, "--errors-only")
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertEqual(self.summary()["sessions"][0]["graders"],
+                         {"says-the-end": "PASS", "names-the-stop": "FAIL"})
+        with open(votes, encoding="utf-8") as handle:
+            self.assertEqual(json.load(handle), {"says-the-end": ["PASS"] * 3, "names-the-stop": ["FAIL"] * 3})
+        done = self.runner("--allow-shell", "--errors-only", "--out", os.path.join(self.tmp.name, "new"), self.case)
+        self.assertEqual(done.returncode, 2)
+        self.assertIn("--errors-only goes with --regrade DIR", done.stderr)
+
     def test_regrade_takes_only_the_run_directory(self):
         for args in (["--regrade", self.out, self.case], ["--regrade", self.out, "--out", self.out]):
             done = self.runner(*args)
