@@ -49,13 +49,32 @@ TOOL_SPECS = [
 ]
 
 
-def tool_definitions(oauth=False):
+# Local stdio extension only. HTTP and the separately implemented Sites catalog do not
+# automatically inherit an unimplemented option. All properties here are optional inputs.
+QUESTION_RELATED = prop('array', 'Only supply when you can declare all relevant extra tasks. An explicit empty list declares just the target and its prerequisites. Omit for the conservative whole-project check.',
+                        maxItems=99, uniqueItems=True, items=TASK)
+QUESTION_INPUTS = {
+    'rumbo_state': {
+        'question_task_id': prop('string', 'Return a full snapshot and its question_observation for this task on this bound project.', minLength=1, maxLength=64),
+        'related_task_ids': QUESTION_RELATED,
+    },
+    'rumbo_request_decision': {
+        'observation': prop('object', 'Return the exact question_observation from the state used to compose this question. A stale observation appends nothing; reread and reconsider the wording. Not permission or proof a user read the question.'),
+    },
+}
+
+
+def tool_definitions(oauth=False, *, question_observations=False):
     result=[]
     for name,title,description,properties,readonly in TOOL_SPECS:
         schema_properties=dict(properties)
+        if question_observations:
+            schema_properties.update(QUESTION_INPUTS.get(name, {}))
         if not readonly:
             schema_properties['response_mode']=RESPONSE_MODE
         item=dict(name=name,title=title,description=description,inputSchema=dict(type='object',properties=schema_properties,required=list(properties),additionalProperties=False),outputSchema=dict(type='object'),annotations=dict(readOnlyHint=readonly,destructiveHint=False,openWorldHint=False,idempotentHint=readonly))
+        if question_observations and name=='rumbo_state':
+            item['inputSchema']['dependentRequired']={'related_task_ids':['question_task_id']}
         if oauth:
             item['securitySchemes']=[dict(type='oauth2',scopes=['rumbo:read'] if readonly else ['rumbo:read','rumbo:write'])]
         if name=='open_project_board':
@@ -99,10 +118,11 @@ def safe_json(raw):
 
 
 class Protocol:
-    def __init__(self,engine,oauth=False,owner_url=None):
+    def __init__(self,engine,oauth=False,owner_url=None,*,question_observations=False):
         if engine.role=='human':
             raise ValueError('MCP principals cannot hold human authority')
         self.engine=engine; self.oauth=oauth; self.owner_url=owner_url
+        self.question_observations=question_observations
 
     def dispatch(self,request):
         if not isinstance(request,dict) or request.get('jsonrpc')!='2.0' or not isinstance(request.get('method'),str) or ('id' in request and type(request['id']) not in (str,int)):
@@ -119,7 +139,7 @@ class Protocol:
             elif method=='ping':
                 result={}
             elif method=='tools/list':
-                result=dict(tools=tool_definitions(self.oauth))
+                result=dict(tools=tool_definitions(self.oauth,question_observations=self.question_observations))
             elif method=='tools/call':
                 fields(params, {'name'}, {'arguments','_meta'})
                 name=params['name']; args=params.get('arguments',{})
@@ -127,13 +147,22 @@ class Protocol:
                 if not spec:
                     return rpc_error(id,-32602,'Unknown tool')
                 try:
-                    fields(args,set(spec[3]),set() if spec[4] else {'response_mode'})
+                    optional=set() if spec[4] else {'response_mode'}
+                    if self.question_observations:
+                        optional.update(QUESTION_INPUTS.get(name, {}))
+                    fields(args,set(spec[3]),optional)
+                    if name=='rumbo_state' and 'related_task_ids' in args:
+                        if 'question_task_id' not in args or not isinstance(args['related_task_ids'], list):
+                            fail('BAD_INPUT','related_task_ids must be an array and requires question_task_id')
                     mode=args.get('response_mode','snapshot')
                     if mode not in ('snapshot','receipt'):
                         fail('BAD_INPUT','response_mode must be snapshot or receipt')
                     # Do not mutate caller-owned arguments or pass transport options to the engine.
                     action_args={key:value for key,value in args.items() if key!='response_mode'}
-                    state=self.engine.artifact_view(action_args) if name=='rumbo_read_artifact' else (self.engine.snapshot() if spec[4] else self.engine.execute(name.removeprefix('rumbo_'),action_args))
+                    if name=='rumbo_state' and 'question_task_id' in action_args:
+                        state=self.engine.observe_question(action_args['question_task_id'], related_task_ids=action_args.get('related_task_ids'))
+                    else:
+                        state=self.engine.artifact_view(action_args) if name=='rumbo_read_artifact' else (self.engine.snapshot() if spec[4] else self.engine.execute(name.removeprefix('rumbo_'),action_args))
                     if self.owner_url and name in ('rumbo_state','open_project_board'):
                         state['owner_review_url']=self.owner_url
                     if mode=='receipt':
@@ -142,6 +171,11 @@ class Protocol:
                     result=dict(content=[dict(type='text',text=state['notice'] if name=='rumbo_read_artifact' or mode=='receipt' else 'Rumbo project '+str(state['project_id'])+', contract revision '+str(state['contract_revision'])+'. '+str(len(state['tasks']))+' tasks. Evidence is not authorization.')],structuredContent=state,isError=False)
                 except RumboError as e:
                     result=dict(content=[dict(type='text',text=str(e))],isError=True)
+                    if self.question_observations and name=='rumbo_request_decision' and e.code=='STALE_QUESTION':
+                        # Recover conservatively. Do not ask clients to discard the guard, repeat
+                        # the old words, or preserve what might be an incomplete declaration.
+                        result['structuredContent']=dict(code=e.code, recovery=dict(tool='rumbo_state',
+                            arguments={'question_task_id': args['task_id']}))
             elif method=='resources/list':
                 result=dict(resources=[dict(uri=UI_URI,name='project-board',title='Project Board',mimeType='text/html;profile=mcp-app')])
             elif method=='resources/read':
@@ -160,7 +194,7 @@ class Protocol:
 
 
 def serve_stdio(engine):
-    serve_protocol_stdio(Protocol(engine))
+    serve_protocol_stdio(Protocol(engine,question_observations=True))
 
 
 def serve_protocol_stdio(protocol):

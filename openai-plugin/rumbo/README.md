@@ -1,6 +1,6 @@
-# Rumbo 0.3.7 local plugin review candidate
+# Rumbo 0.3.8 local plugin review candidate
 
-The OpenAI adapter is versioned independently at 0.3.7; the canonical shared engine remains 0.3.5. This ZIP is for local review and testing, not public-directory submission. It contains the portable Agent Plugins 1.0 manifest, a stdio MCP server, workflow skills and an inline MCP Apps board. Current public review requires an authenticated public HTTPS MCP endpoint; none is configured or claimed here.
+The OpenAI adapter is versioned independently at 0.3.8; the bundled Python engine is 0.3.6. This ZIP is for local review and testing, not public-directory submission. It contains the portable Agent Plugins 1.0 manifest, a stdio MCP server, workflow skills and an inline MCP Apps board. Current public review requires an authenticated public HTTPS MCP endpoint; none is configured or claimed here.
 
 Python 3.9+ on Linux/macOS is required. The installed launcher starts unbound. The human operator first initializes the approved project through the trusted source-release CLI, then registers an alias using `python3 -m rumbo.registry --plugin-data /absolute/plugin/data add project-alias --root /absolute/project`. The host supplies that same private directory as `PLUGIN_DATA`; aliases live in `projects.json`. The agent calls `rumbo_list_projects`, then `rumbo_connect_project` with only the approved alias. It cannot supply paths or roles or reconnect within that process.
 
@@ -30,3 +30,9 @@ exclude this local-only skill and helper. Existing worker/reviewer boundaries
 remain unchanged. Local package tests do not verify installation, discovery or
 a live session in Codex. Retain the previous reviewed package for rollback; do
 not overwrite active installed files or user records during activation.
+
+## Guarded questions on local stdio (0.3.8 candidate)
+
+On an already bound project, call `rumbo_state` with `{"question_task_id":"outline"}` before composing a decision question. Keep the returned `question_observation` from that actual read and pass it as `observation` with `task_id` and `question` to `rumbo_request_decision`. The default guards the whole observed ledger and projected state. Only if all context is known to lie in named tasks, shared terms and their prerequisites, also supply `related_task_ids` with the additional IDs (an explicit empty array declares target only). Unknown context requires the conservative default. A falsely narrow declaration can miss a stale reference. The guard cannot attest to unregistered files or prove anyone read the snapshot.
+
+On `isError:true` and `structuredContent.code == "STALE_QUESTION"`, nothing was appended. The suggested `recovery` is a read on the same bound project; reconsider the wording before any new request. Never discard the guard or just attach a fresh observation to old text. After a lost response, inspect requests before retrying. A question is not a decision or permission. Plain state, old unguarded question calls, receipts and worker-only privileges remain compatible. Use tools/list to detect these optional inputs, not a version guess; if unavailable, guarded behavior is unavailable, not delegated to the old tool. This local protocol test is not an in-host installation or a hosted Sites update.

@@ -32,7 +32,7 @@ ACTION_FIELDS = {
     'ingest_artifact': ({'task_id','contract_revision','filename','content'}, set()),
     'run_checks': ({'task_id','contract_revision','artifact_revision'}, set()),
     'submit_review': ({'task_id','contract_revision','artifact_revision','check_id','outcome','detail'}, set()),
-    'request_decision': ({'task_id','question'}, set()),
+    'request_decision': ({'task_id','question'}, {'observation'}),
     'decide': ({'task_id','contract_revision','artifact_revision','outcome','reason'}, set()),
 }
 
@@ -548,6 +548,109 @@ class Engine:
         with self._db() as db:
             return self._project(self._replay(db))
 
+    @staticmethod
+    def _question_scope(task_id, related_ids):
+        identifier(task_id, 'task_id')
+        if related_ids is None:
+            return {'mode': 'whole_project'}
+        if not isinstance(related_ids, list) or len(related_ids) > 99:
+            fail('BAD_INPUT', 'related_task_ids must be a list of up to 99 other task IDs')
+        for tid in related_ids:
+            identifier(tid, 'related task ID')
+        if task_id in related_ids or len(set(related_ids)) != len(related_ids):
+            fail('BAD_INPUT', 'List only distinct other task IDs')
+        return {'mode': 'declared_tasks', 'related_task_ids': sorted(related_ids)}
+
+    @staticmethod
+    def _question_context(state, task_id, scope, *, progress):
+        if scope['mode'] == 'whole_project':
+            # Unknown context: no selective reuse. Also bind projected state, since lease
+            # expiry or local artifact drift can change it without an intervening event.
+            return hashlib.sha256(canonical({'v': 2, 'scope': scope, 'task_id': task_id,
+                                             'state': state}).encode()).hexdigest()
+        # Only the caller can declare the question's non-graph references. Bind the
+        # transitive closure of every declared root; never guess scope by parsing prose.
+        by_id = {t['id']: t for t in state['tasks']}
+        pending = [task_id, *scope['related_task_ids']]
+        if any(tid not in by_id for tid in pending):
+            return None
+        members = {}
+        while pending:
+            tid = pending.pop()
+            if tid in members:
+                continue
+            t = by_id[tid]
+            record = {key: t[key] for key in ('id', 'title', 'dependencies', 'acceptance')}
+            if progress:
+                # Latest event identities distinguish new checks, re-registrations and re-decisions,
+                # even when bytes or outcomes are identical. Questions do not change readiness.
+                record.update(status=t['status'], stale_reason=t['stale_reason'],
+                              artifact=t['artifact'], lease=t['lease'],
+                              last_evidence=t['evidence'][-1]['id'] if t['evidence'] else None,
+                              last_decision=t['decisions'][-1]['id'] if t['decisions'] else None)
+            members[tid] = record
+            pending.extend(t['dependencies'])
+        material = dict(v=2, scope=scope, project_id=state['project_id'], task_id=task_id,
+                        original_request=state['original_request'], goal=state['goal'],
+                        constraints=state['constraints'], decision_owner=state['decision_owner'],
+                        demo=state.get('demo', False), revision_scope=state.get('revision_scope', 'contract'),
+                        members=members)
+        return hashlib.sha256(canonical(material).encode()).hexdigest()
+
+    def observe_question(self, task_id, *, related_task_ids=None):
+        """Return the full snapshot used to compose the question plus its scoped precondition."""
+        scope = self._question_scope(task_id, related_task_ids)
+        state = self.snapshot()
+        self._task(task_id, state)
+        for tid in scope.get('related_task_ids', []):
+            self._task(tid, state)
+        state['question_observation'] = dict(version=2, scope=scope, project_id=state['project_id'], task_id=task_id,
+            events_count=state['events_count'], ledger_head=state['ledger_head'],
+            context_sha256=self._question_context(state, task_id, scope, progress=True))
+        return state
+
+    def _check_question(self, db, state, task_id, observed):
+        # Caller holds BEGIN IMMEDIATE; no other ledger writer can intervene before append.
+        fields(observed, {'version', 'scope', 'project_id', 'task_id', 'events_count', 'ledger_head', 'context_sha256'})
+        integer(observed['version'], 'observation version', 2, 2)
+        scope = observed['scope']
+        fields(scope, {'mode'}, {'related_task_ids'})
+        if scope['mode'] == 'whole_project':
+            fields(scope, {'mode'})
+        elif scope['mode'] == 'declared_tasks':
+            fields(scope, {'mode', 'related_task_ids'})
+            if scope['related_task_ids'] is None or scope != self._question_scope(task_id, scope['related_task_ids']):
+                fail('BAD_INPUT', 'Use the declared scope exactly as returned by the observation')
+        else:
+            fail('BAD_INPUT', 'Unknown question observation scope')
+        identifier(task_id, 'task_id')
+        identifier(observed['task_id'], 'observed task_id')
+        identifier(observed['project_id'], 'observed project_id')
+        seq = integer(observed['events_count'], 'observed events_count', 1, MAX_EVENTS)
+        for key in ('ledger_head', 'context_sha256'):
+            if not isinstance(observed[key], str) or not re.fullmatch(r'[0-9a-f]{64}', observed[key]):
+                fail('BAD_INPUT', key + ' must be a lowercase SHA-256 digest')
+
+        def stale():
+            fail('STALE_QUESTION', 'Read the current task and its prerequisites, then reconsider the question')
+
+        if (observed['project_id'] != state['project_id'] or observed['task_id'] != task_id
+                or db.execute('SELECT digest FROM events WHERE seq=?', (seq,)).fetchone() != (observed['ledger_head'],)
+                or observed['context_sha256'] != self._question_context(state, task_id, scope, progress=True)):
+            stale()
+        # Content equality alone would accept task removal/recreation or an intervening edit
+        # subsequently reverted. Check the intervening contract versions, not every sibling edit.
+        if scope['mode'] == 'whole_project':
+            return
+        current = None
+        for payload, in db.execute('SELECT payload FROM events WHERE seq>? ORDER BY seq', (seq,)):
+            event = json.loads(payload)
+            if event['action'] == 'revise_contract':
+                if current is None:
+                    current = self._question_context(state, task_id, scope, progress=False)
+                if self._question_context(event['data'], task_id, scope, progress=False) != current:
+                    stale()
+
     def checkpoint(self):
         """Verify existing ledger history without reading mutable artifact files."""
         with self._db() as db:
@@ -623,6 +726,8 @@ class Engine:
             state = self._project(state, now)
             if state['events_count'] >= MAX_EVENTS:
                 fail('LEDGER_LIMIT', 'Ledger holds its maximum of ' + str(MAX_EVENTS) + ' events; ask its owner to archive the project and start a new one')
+            if action == 'request_decision' and 'observation' in arguments:
+                self._check_question(db, state, arguments['task_id'], arguments['observation'])
             data = self._prepare(action, arguments, state, now)
             event = dict(action=action, data=data, actor=self.actor, role=self.role, at=now)
             raw = canonical(event); prev = state['ledger_head']
@@ -660,6 +765,8 @@ class Engine:
         fingerprint = dict(task_fingerprint=task_fingerprint(state, task)) if scoped else {}
         if action == 'request_decision':
             string(args['question'], 'question')
+            if 'observation' in args:
+                fingerprint['observation'] = copy.deepcopy(args['observation'])
             return dict(id=eventid, task_id=task['id'], question=args['question'], actor=self.actor, contract_revision=rev, at=now, **fingerprint)
         integer(args['contract_revision'], 'contract_revision')
         self._current_contract(args['contract_revision'], state)
