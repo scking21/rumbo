@@ -164,7 +164,10 @@ or the total and its cap ("$550, over the $500 budget", or "$50 over the
 budget"). An assumed value is stated when its line, its section or the opening
 of the reply calls it your assumption, estimate or proposal, or its line asks
 the user about it; a block written as a time range ("9:20–10:35") names its
-minutes. Stated problems do not block.
+minutes. Once a reply has stated every assumed value of a check, a later
+reply in the session states them with one line that names any of them as
+still your assumption ("9:00–12:30 is still my assumption"), until the values
+change. Stated problems do not block.
 
 If a repeat block lists problems you already told the user about, add
 one line saying what is still open, in the user's terms rather than the
