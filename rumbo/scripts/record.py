@@ -2751,6 +2751,9 @@ def _stated(record, reply, told=None):
         return any(says(reading, value, index) and (index in cued or "?" in lines[index])
                    for index in range(len(lines)))
 
+    def named_value(reading, value, totals):
+        return named(reading, value) or any(named("number", total) for total in totals)
+
     in_full, stated = {}, set()
     replaced = retired_checks(record)
     for check in record.get("checks") or []:
@@ -2770,9 +2773,6 @@ def _stated(record, reply, told=None):
                        for alternative in alternatives for index in range(len(lines)))
                    for alternatives in ways):
             continue
-        def named_value(reading, value, totals):
-            return named(reading, value) or any(named("number", total) for total in totals)
-
         if all(named_value(reading, value, totals) for _label, reading, value, totals in unsourced):
             in_full[check["id"]] = [label for label, _reading, _value, _totals in unsourced]
             stated.add(check["id"])
