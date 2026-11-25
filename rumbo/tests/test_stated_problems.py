@@ -198,6 +198,18 @@ class StatementReadingTests(unittest.TestCase):
                 self.assertEqual(stated("These times are my assumptions.\n" + line + "\nStart 9:00, end 12:30.", one,
                                         said), set())
 
+    def test_a_range_on_a_known_clock_rolls_over_a_whole_day(self):
+        # Review of this change: every range rolled over 12 hours, so "6pm-9am"
+        # read as 180 minutes and could clear an assumed three-hour block.
+        said = "We plan an overnight build."
+        for line, minutes, expected in (("6pm\u20139am", 180, set()), ("6pm\u20139am", 900, {"C1"}),
+                                        ("18:00\u201309:00", 180, set()), ("18:00\u201309:00", 900, {"C1"}),
+                                        ("9:00 \u2013 10:15pm", 75, {"C1"}), ("12:50\u20131:05", 15, {"C1"})):
+            with self.subTest(line=line, minutes=minutes):
+                block = check(kind="fits_window", start="00:00", segments_min=[minutes], end="23:59", end_next_day=False)
+                reply = "These times are my assumptions.\n| " + line + " | Build |\nStart 00:00, end 23:59."
+                self.assertEqual(stated(reply, block, said), expected)
+
     def test_an_assumed_year_is_read_on_its_own(self):
         assumed = check(kind="before", first="2026-03-01", second="2026-03-03")
         said = "Copy is due March 1 and the launch is March 3."

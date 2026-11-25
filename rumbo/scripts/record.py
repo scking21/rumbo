@@ -2553,21 +2553,33 @@ def _range_spans(line):
         hour1, minute1, half1, hour2, minute2, half2 = match.groups()
         if not (minute1 or half1) or not (minute2 or half2):
             continue
-        ends = []
-        for hour, minute, half in ((hour1, minute1, half1), (hour2, minute2, half2)):
-            hour, minute = int(hour), int(minute or 0)
-            if hour > 23 or minute > 59 or (half and not 1 <= hour <= 12):
-                break
-            if half:
-                hour = hour % 12 + (12 if half.lower() == "p" else 0)
-            ends.append(hour * 60 + minute)
-        if len(ends) != 2:
+        h1, m1, h2, m2 = int(hour1), int(minute1 or 0), int(hour2), int(minute2 or 0)
+        if (h1 > 23 or h2 > 23 or m1 > 59 or m2 > 59
+                or (half1 and not 1 <= h1 <= 12) or (half2 and not 1 <= h2 <= 12)):
             continue
-        span = ends[1] - ends[0]
-        # On a 12-hour clock a range can cross noon or midnight: "11:50-12:05", "12:50-1:05".
-        while span <= 0:
-            span += 720
-        spans.add(span)
+
+        def at(hour, minute, half):
+            return ((hour % 12 + (12 if half.lower() == "p" else 0)) if half else hour) * 60 + minute
+
+        if (half1 and half2) or (not half1 and not half2 and (
+                h1 > 12 or h2 > 12 or hour1.startswith("0") or hour2.startswith("0"))):
+            # Both ends on a known clock, by meridiems or a 24-hour time: an end
+            # earlier than the start is the next day ("6pm-9am" is 900 minutes).
+            span = (at(h2, m2, half2) - at(h1, m1, half1)) % 1440
+        elif half1 or half2:
+            # One meridiem: the bare end takes the half that gives the shorter
+            # range, so "9:00-10:15pm" is 75 minutes and "9:00-1:00am" is 240.
+            if half2:
+                options = [(at(h2, m2, half2) - at(h1, m1, half)) % 1440 for half in "ap"]
+            else:
+                options = [(at(h2, m2, half) - at(h1, m1, half1)) % 1440 for half in "ap"]
+            span = min([option for option in options if option] or [0])
+        else:
+            # No meridiem and both hours 1 to 12: a 12-hour clock can cross noon
+            # or midnight ("11:50-12:05" and "12:50-1:05" are 15 minutes).
+            span = (at(h2, m2, None) - at(h1, m1, None)) % 720
+        if span:
+            spans.add(span)
     return spans
 
 
