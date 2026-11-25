@@ -2548,7 +2548,8 @@ OVER_WORDS = re.compile(r"\b(?:over|overruns?|overages?|exceeds?|exceeded|exceed
 # Words that call a value the agent's own. A section (see _sections) that has
 # one covers the values in it; a question mark covers only its own line.
 ASSUMPTION_WORDS = re.compile(r"\b(?:assum\w*|estimat\w*|est\.|guess\w*|propos\w*|suggest\w*|placeholders?|"
-                              r"unconfirmed|not (?:yet )?confirmed|please confirm|not yours)", re.IGNORECASE)
+                              r"unconfirmed|not (?:yet )?confirmed|please confirm|to be confirmed|tb[cd]\b|still open|"
+                              r"not yours)", re.IGNORECASE)
 # After "you" or "your" and at most two more words, those words give the value
 # to the user ("the $15 you suggested", "your earlier estimate"), which is the
 # claim an unsourced value contradicts, so they do not count there.

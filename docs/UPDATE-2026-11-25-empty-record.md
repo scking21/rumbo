@@ -1,6 +1,6 @@
 # November 25 Claude adapter 0.3.18: a record with only its objective gets one nudge
 
-This builds on [Claude adapter 0.3.17](UPDATE-2026-11-25-told-assumptions.md). It adds one prompt-time line and one Stop-gate nudge for a record that holds nothing but its objective, a line about years to the no-record nudge, two lines to the commitments skill, and two readings to how the Stop gate reads a reply.
+This builds on [Claude adapter 0.3.17](UPDATE-2026-11-25-told-assumptions.md). It adds one prompt-time line and one Stop-gate nudge for a record that holds nothing but its objective, a line about years to the no-record nudge, two lines to the commitments skill, and three readings to how the Stop gate reads a reply.
 
 ## Distribution identities
 
@@ -34,6 +34,8 @@ Those two launch sessions account for 7 of the 8 failed launch gradings on haiku
 
   Replayed with each check rebuilt from its block's values, all three pass on this version and none on 0.3.15. The fourth is a later turn's "blocked on the 12:35 overrun I raised earlier", which names the overrun without the 12:30 close, and it still blocks.
 
+  The one block of only assumed values that 0.3.17 still did not read said "Still open from before: whether to go with the newsletter or social ads, and whether launch day is Oct 3". "Still open", "to be confirmed", "TBC" and "TBD" now mark a value as not decided, as "unconfirmed" does. With them, the replay reads all 14 such blocks as stated.
+
 ## Evidence
 
 `rumbo/tests/test_empty_record.py` covers the empty record:
@@ -43,7 +45,7 @@ Those two launch sessions account for 7 of the 8 failed launch gradings on haiku
 - A record with an item or a check is not nudged, and other problems (an unverified objective quote) are reported first.
 - Nothing is counted without a session id.
 
-`rumbo/tests/test_stated_problems.py` covers both readings with the live replies' wording, including a total that does not name an assumed head count.
+`rumbo/tests/test_stated_problems.py` covers the new readings with the live replies' wording, including a total that does not name an assumed head count.
 
 `rumbo/tests/test_nudge_year.py` checks that the year line comes with the nudge for dates without a year, and not for a prompt with a year, without a date, with "may" as a verb, or once the nudge has been shown.
 

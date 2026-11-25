@@ -289,6 +289,19 @@ class StatementReadingTests(unittest.TestCase):
         self.assertEqual(stated("My $280 catering estimate stays.", budget, said), set())
         self.assertEqual(stated("I assumed 40 people.", budget, said), {"C1"})
 
+    def test_still_open_and_to_be_confirmed_mark_a_value_as_not_decided(self):
+        # Live (opus, 0.3.15): "Still open from before: whether to go with the
+        # newsletter or social ads, and whether launch day is Oct 3."
+        launch = check(kind="before", first="08-20", second="10-03")
+        said = "Today is August 20, and we launch on the first Saturday of October."
+        for reply, expected in (("Still open from before: whether launch day is Oct 3.", {"C1"}),
+                                ("Launch day: Oct 3 (TBD).", {"C1"}),
+                                ("Launch on Oct 3, to be confirmed.", {"C1"}),
+                                ("## Still open\n- Launch day, Oct 3", {"C1"}),
+                                ("Launch day is Oct 3.", set())):
+            with self.subTest(reply=reply):
+                self.assertEqual(stated(reply, launch, said), expected)
+
     def test_an_overage_is_an_overrun(self):
         # Live (haiku, 0.3.15): "The 5-minute overage goes away" stated the overrun.
         late = check(kind="fits_window", start="09:45", segments_min=[75, 20, 75], end="12:30")
