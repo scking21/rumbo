@@ -54,6 +54,26 @@ NUDGE_TEMPLATE = (
     "QUOTE"
 )
 
+# A record that holds only its objective checks nothing: no decision, time or
+# amount the user gives reaches the gate until the agent records it.
+EMPTY_NOTE = ("rumbo: no decisions recorded yet. As the user decides, drafts or rules things out, add items "
+              "with their exact words, and a check for any schedule, deadline or budget (see the commitments skill).")
+EMPTY_REASON = ("This session is planning work, and the decision record still holds only its objective. Before "
+                "finishing, record the user's decisions so far as items, each with their exact words, and add a "
+                "check for any schedule, deadline or budget they set (see the commitments skill); or tell the user "
+                "in one line why this work does not need them.")
+
+# A one-turn request starts no record, so the skill's year rule is never read:
+# in repeated runs every haiku and opus reply dated "May 9" in a year the user
+# never gave. The nudge says it when the prompt has a month and day but no year.
+NUDGE_NO_YEAR = ("rumbo: the dates here have no year. Keep them without one in what you write, "
+                 "and ask if the year matters.")
+# "May" only with its capital: "may 3 people come?" names no date.
+MONTH_NAME = r"(?:(?i:(?:jan|feb|mar|apr|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*)|May)"
+MONTH_DAY = re.compile(r"\b" + MONTH_NAME + r"\.?\s+\d{1,2}(?:st|nd|rd|th)?\b"
+                       r"|\b\d{1,2}(?:st|nd|rd|th)?\s+(?:of\s+)?" + MONTH_NAME + r"\b")
+YEAR_WORD = re.compile(r"(?<!\d)(?:19|20)\d{2}(?!\d)")
+
 PLANNING_PATTERN = re.compile(
     r"(?<!\S:)(?<!\bline )(?<![\w\]]\[)\b\d{1,2}:\d{2}\b(?!:\d)"
     r"|\$\s?\d"
@@ -2091,6 +2111,8 @@ def maybe_nudge(args, payload):
             if existing and os.path.exists(existing):
                 return
     print(NUDGE_TEMPLATE % (os.path.abspath(__file__), args.record))
+    if MONTH_DAY.search(prompt) and not YEAR_WORD.search(prompt):
+        print(NUDGE_NO_YEAR)
     marker_path = _marker_path(session_id, ".nudged")
     if marker_path:
         try:
@@ -2114,6 +2136,11 @@ def cmd_show(args):
         print("rumbo: record invalid, run record.py validate")
         return 0
 
+    empty = not record.get("items") and not record.get("checks")
+    if empty and payload is not None and isinstance(payload.get("prompt"), str) and \
+            PLANNING_PATTERN.search(payload["prompt"]):
+        # Counted for the Stop gate's nudge, as without a record.
+        _count_planning_prompt(payload.get("session_id"))
     lines = []
     if payload is not None and payload.get("source") == "compact":
         lines.append(COMPACT_NOTE)
@@ -2123,6 +2150,8 @@ def cmd_show(args):
         lines.append(OPEN_HEADER)
         lines.extend(problems)
     lines.append("Objective: %s" % record["objective"]["text"])
+    if empty:
+        lines.append(EMPTY_NOTE)
 
     items = record.get("items") or []
     replaced = set()
@@ -2441,6 +2470,8 @@ def _stop_gate(args, hook_input):
                     pass
         if ledger_parts:
             return _block_bounded(session_id, ledger_parts, CONFLICT_TAIL, chained=chained, marker=".ledger-")
+        if not record.get("items") and not record.get("checks") and _nudge_empty_record(session_id, chained):
+            print(json.dumps({"decision": "block", "reason": EMPTY_REASON}))
         return 0
     present = {c.get("id") for c in record.get("checks") or []}
     remembered = problem_ids + [i for i in _read_failed_ids(session_id) if i not in present]
@@ -2512,12 +2543,13 @@ def record_problems(record):
 ORDER_WORDS = re.compile(r"\b(?:after|later|past|but|conflicts?|conflicting|too late|wrong|"
                          r"mismatch(?:ed|es)?|impossible|precedes?|earlier|\d+\s+days?)\b", re.IGNORECASE)
 # Words that say an amount or a time goes beyond its limit, for an overrun stated as its excess.
-OVER_WORDS = re.compile(r"\b(?:over|overruns?|exceeds?|exceeded|exceeding|past|after|late|later|longer|"
+OVER_WORDS = re.compile(r"\b(?:over|overruns?|overages?|exceeds?|exceeded|exceeding|past|after|late|later|longer|"
                         r"too long|too much|more than|above|beyond|short|conflicts?|conflicting)\b", re.IGNORECASE)
 # Words that call a value the agent's own. A section (see _sections) that has
 # one covers the values in it; a question mark covers only its own line.
 ASSUMPTION_WORDS = re.compile(r"\b(?:assum\w*|estimat\w*|est\.|guess\w*|propos\w*|suggest\w*|placeholders?|"
-                              r"unconfirmed|not (?:yet )?confirmed|please confirm|not yours)", re.IGNORECASE)
+                              r"unconfirmed|not (?:yet )?confirmed|please confirm|to be confirmed|tb[cd]\b|still open|"
+                              r"not yours)", re.IGNORECASE)
 # After "you" or "your" and at most two more words, those words give the value
 # to the user ("the $15 you suggested", "your earlier estimate"), which is the
 # claim an unsourced value contradicts, so they do not count there.
@@ -2679,7 +2711,8 @@ def stated_checks(record, reply, told=None):
     with a word such as "over" (and the same for an amount over item_cap). An
     unsourced value is stated when a line names it and either asks about it
     with a question mark, or sits in a section that calls something an
-    assumption or estimate, or the reply's preamble does.
+    assumption or estimate, or the reply's preamble does. An assumed price per
+    unit is also named by its entry's total.
 
     told maps a check id to the labels of assumed values ("start 09:00") that
     an earlier reply this session stated in full. A check whose assumed values
@@ -2718,21 +2751,30 @@ def _stated(record, reply, told=None):
         return any(says(reading, value, index) and (index in cued or "?" in lines[index])
                    for index in range(len(lines)))
 
+    def named_value(reading, value, totals):
+        return named(reading, value) or any(named("number", total) for total in totals)
+
     in_full, stated = {}, set()
     replaced = retired_checks(record)
     for check in record.get("checks") or []:
         if check["id"] in replaced:
             continue
         ways = _conflict_ways(check)
-        unsourced = _unsourced(record, check)
+        # An assumed price per unit is also named by its own entry's total:
+        # "my $280 catering estimate" for $7 a head for 40. Entries that share
+        # a price keep their own totals, in the order both lists walk amounts.
+        products, seen, unsourced = _unit_products(check), {}, []
+        for label, reading, value in _unsourced(record, check):
+            index = seen[label] = seen.get(label, -1) + 1
+            unsourced.append((label, reading, value, products.get(label, [])[index:index + 1]))
         if not ways and not unsourced:
             continue
         if not all(any(all(says(reading, value, index) for reading, value in alternative)
                        for alternative in alternatives for index in range(len(lines)))
                    for alternatives in ways):
             continue
-        if all(named(reading, value) for _label, reading, value in unsourced):
-            in_full[check["id"]] = [label for label, _reading, _value in unsourced]
+        if all(named_value(reading, value, totals) for _label, reading, value, totals in unsourced):
+            in_full[check["id"]] = [label for label, _reading, _value, _totals in unsourced]
             stated.add(check["id"])
             continue
         counts = _told_counts(told, record, check)
@@ -2740,8 +2782,8 @@ def _stated(record, reply, told=None):
             continue
         # Each value is named here or was told before, and the reply still says
         # the check is open: by one of its values, or by what kind of check it is.
-        flags = [named(reading, value) for _label, reading, value in unsourced]
-        missing = [label for (label, _reading, _value), flag in zip(unsourced, flags) if not flag]
+        flags = [named_value(reading, value, totals) for _label, reading, value, totals in unsourced]
+        missing = [label for (label, _reading, _value, _totals), flag in zip(unsourced, flags) if not flag]
         if all(missing.count(label) <= counts.get(label, 0) for label in set(missing)) and (
                 any(flags) or any(KIND_WORDS[check["kind"]].search(line) and (_calls_own(line) or "?" in line)
                                   for line in lines)):
@@ -2757,6 +2799,18 @@ KIND_WORDS = {
     "fits_window": re.compile(r"\b(?:schedules?|agendas?|timings?|times|timetable)\b", re.IGNORECASE),
     "before": re.compile(r"\b(?:dates?|deadlines?)\b", re.IGNORECASE),
 }
+
+
+def _unit_products(check):
+    """For a within_budget check, the label of each price per unit ("amounts unit 7") -> its entries' totals,
+    in the order of amounts, as _unsourced lists the entries."""
+    if check.get("kind") != "within_budget":
+        return {}
+    products = {}
+    for value, total in zip(check["amounts"], _budget(check)[0]):
+        if isinstance(value, dict):
+            products.setdefault("amounts unit %s" % fmt_num(value["unit"]), []).append(total)
+    return products
 
 
 def _told_counts(told, record, check):
@@ -2811,6 +2865,22 @@ def _remember_told(session_id, told, in_full):
             json.dump(merged, handle)
     except OSError:
         pass
+
+
+def _nudge_empty_record(session_id, chained):
+    """True once per session, at a stop after two planning prompts while the record holds only its objective."""
+    if chained or _planning_prompts(session_id) < 2:
+        return False
+    path = _marker_path(session_id, ".empty")
+    try:
+        if not path or os.path.exists(path):
+            return False
+        with _open_marker(path, "w") as handle:
+            handle.write("1")
+    except OSError:
+        # Without the marker the nudge could not stay once per session.
+        return False
+    return True
 
 
 def _remember_failed(session_id, problem_ids):

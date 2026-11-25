@@ -276,6 +276,47 @@ class StatementReadingTests(unittest.TestCase):
         self.assertEqual(record.stated_checks(document, AGENDA_STATUS + "\nSession 2 is now 80 minutes, my guess.",
                                               told), {"C2"})
 
+    def test_an_assumed_price_per_unit_is_named_by_its_total(self):
+        # Live (opus, 0.3.15): "my $280 catering estimate is still $80 over the
+        # foundation's $200 cap" named the total, not the $7 a head it assumed.
+        said = "40 people are coming. Dr. Okafor's travel is $250 and our budget is $600."
+        budget = check(kind="within_budget", amounts=[{"unit": 7, "quantity": 40}, 250], total_cap=600)
+        self.assertEqual(stated("My $280 catering estimate stays.", budget, said), {"C1"})
+        self.assertEqual(stated("$7 a head is my estimate.", budget, said), {"C1"})
+        self.assertEqual(stated("Catering comes to $280.", budget, said), set())
+        # Review of this change: entries that share an assumed price each need
+        # their own total, so the $280 says nothing about the $70.
+        said = "40 attendees and 10 volunteers are coming. Our budget is $600."
+        shared = check(kind="within_budget", amounts=[{"unit": 7, "quantity": 40}, {"unit": 7, "quantity": 10}],
+                       total_cap=600)
+        self.assertEqual(stated("My $280 catering estimate for attendees stays.", shared, said), set())
+        self.assertEqual(stated("My estimates: $280 for attendees, $70 for volunteers.", shared, said), {"C1"})
+        self.assertEqual(stated("$7 a head is my estimate.", shared, said), {"C1"})
+        # A total says nothing about an assumed head count.
+        said = "Catering is $7 per person, Dr. Okafor's travel is $250 and our budget is $600."
+        self.assertEqual(stated("My $280 catering estimate stays.", budget, said), set())
+        self.assertEqual(stated("I assumed 40 people.", budget, said), {"C1"})
+
+    def test_still_open_and_to_be_confirmed_mark_a_value_as_not_decided(self):
+        # Live (opus, 0.3.15): "Still open from before: whether to go with the
+        # newsletter or social ads, and whether launch day is Oct 3."
+        launch = check(kind="before", first="08-20", second="10-03")
+        said = "Today is August 20, and we launch on the first Saturday of October."
+        for reply, expected in (("Still open from before: whether launch day is Oct 3.", {"C1"}),
+                                ("Launch day: Oct 3 (TBD).", {"C1"}),
+                                ("Launch on Oct 3, to be confirmed.", {"C1"}),
+                                ("## Still open\n- Launch day, Oct 3", {"C1"}),
+                                ("Launch day is Oct 3.", set())):
+            with self.subTest(reply=reply):
+                self.assertEqual(stated(reply, launch, said), expected)
+
+    def test_an_overage_is_an_overrun(self):
+        # Live (haiku, 0.3.15): "The 5-minute overage goes away" stated the overrun.
+        late = check(kind="fits_window", start="09:45", segments_min=[75, 20, 75], end="12:30")
+        said = "A 9:45 start, two 75-minute sessions and a 20-minute break, 12:30 close."
+        self.assertEqual(stated("The 5-minute overage goes away with a shorter break.", late, said), {"C1"})
+        self.assertEqual(stated("The 5-minute break goes away.", late, said), set())
+
     def test_a_told_assumption_does_not_state_a_conflict(self):
         late = check(kind="fits_window", start="09:00", segments_min=[75, 20, 75, 60], end="12:30")
         told = {"C1": ["start 09:00", "end 12:30", "segments_min 75", "segments_min 20", "segments_min 75",

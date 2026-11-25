@@ -27,7 +27,8 @@ since inside double quotes the shell rewrites `$` amounts and backticks. The obj
 achieve. Constraints, cautions and limits go in items, never in the objective.
 If a hook line says "no decision record yet", decide whether this is multi-step
 work with decisions; if it is, run init with the user's own words; if not,
-ignore it.
+ignore it. A record with only its objective checks nothing: once you start
+one, record the decisions the user has already made, and keep adding them.
 
 ## When to update
 
@@ -139,6 +140,11 @@ Before you write or edit a file, a hook may add the record's open problems
 context. Deal with them before the deliverable, not after: fix the plan only as
 the user agrees, or say the problem plainly in what you write. After a context
 compaction the record is shown again; trust it over the compacted summary.
+
+In what you write, only `commitment` items are decided. Present a `draft`,
+`preference`, `authorized`, `uncertain` or `deferred` item as open, a proposal
+or something to confirm. A no to one option rules that option out; it does not
+choose the others.
 
 ## Stopping
 
