@@ -36,7 +36,7 @@
         ]
       },
       "publication": {
-        "release_notes": "0.3.8 local review candidate: adds optional question observations on local MCP stdio with engine 0.3.6. Existing clients keep full snapshots by default and unguarded questions are unchanged. Guarded stale questions append nothing; reread and reconsider. Mutations still support response_mode=receipt; tools/list schemas are larger even without opt-in. Receipts are incomplete operation-time observations with a full-state recovery call. No new roles. No deployment, live installation or human approval claimed."
+        "release_notes": "0.3.8 local review candidate: adds optional question observations on local MCP stdio with engine 0.3.6. Existing clients keep full snapshots by default and unguarded questions are unchanged. Guarded stale questions append nothing; reread and reconsider. Mutations still support response_mode=receipt; tools/list schemas are larger even without opt-in. Receipts are incomplete operation-time observations with a full-state recovery call. No new roles. No deployment, live installation or human approval claimed. The local commitments helper bundles the Claude adapter 0.3.15 record runtime: a check can name older checks of its kind in replaces, or the user's decision that dropped its option in dropped_by."
       }
     }
   }
