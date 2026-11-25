@@ -20,21 +20,38 @@ Neither names the block lengths, so the gate blocked both. Each block is one of 
 
 ## What changed
 
-When a reply states every assumed value of a check, the gate remembers those values for the session. At a later stop, while each assumed value of that check is among the ones told, a line that names any one of them as an assumption (or asks about it) states them all. A value the user has not been told yet needs the full statement again: a new block in the agenda, say. A conflict is never stated this way; it still needs its values on one line. The memory is kept per `session_id` in a new `.told` marker, beside the block count, and is cleared with it once the record has no problems.
+When a reply states every assumed value of a check, the gate remembers those values for the session. What was told for a check also counts for a check that replaces it, since agents often replace a check with one that has the same values and new refs.
 
-This is still word matching: the status line shows that the reply calls one of the told values an assumption, not that the user read it.
+At a later stop, each assumed value of a check must be named in the reply or have been told. Then the check is stated when the reply names one of its values as an assumption (or asks about it). It is also stated by a line that itself calls the check's budget, schedule or dates an assumption ("my catering and handout figures from the budget are still my estimates").
+
+A value the user has not been told yet still needs the full statement: a new block in the agenda, say, or a new check that replaces nothing. A conflict is never stated this way; it still needs its values on one line. The memory is kept per `session_id` in a new `.told` marker, beside the block count, and is cleared with it once the record has no problems.
+
+This is still word matching: the status line shows that the reply calls a told check an assumption, not that the user read it.
 
 ## Evidence
 
-`rumbo/tests/test_stated_problems.py` covers the reader and the gate: a status line passes once the values were told and not before; another session, a new value or a line without a cue still blocks; a told assumption does not state a conflict; without a session id nothing is remembered.
+`rumbo/tests/test_stated_problems.py` covers the reader and the gate:
 
-Every Stop block saved from three batches on 0.3.15 (sonnet, haiku and opus, 70 sessions) was replayed. Each check was rebuilt from the values its block named, and the session's earlier replies were read in order to find what had been told. This assumes each check had the same values at those earlier stops.
+- A status line passes once the values were told and not before.
+- Another session, a new value or a line without a cue still blocks.
+- Told values carry to a check that replaces the told one, and a value not told can be named in the reply instead.
+- A kind word counts only with a cue on its own line.
+- A told assumption does not state a conflict, and nothing is remembered without a session id.
+
+**Replay.** Every Stop block saved from three batches on 0.3.15 (sonnet, haiku and opus, 70 sessions) was replayed. Each check was rebuilt from the values its block named, and the session's earlier replies were read in order to find what had been told. This assumes each check had the same values at those earlier stops.
 
 | | 0.3.15 | 0.3.16 | 0.3.17 |
 | --- | --- | --- | --- |
-| Blocks whose only problems are assumed values, read as stated | 0 of 14 | 4 of 14 | 12 of 14 |
+| Blocks whose only problems are assumed values, read as stated | 0 of 14 | 4 of 14 | 13 of 14 |
 
-The two still blocked have replies that do not name the values: "whether launch day is Oct 3" has no cue word or question mark, and "the budget split are still my own suggestions" names no amount. The five blocks that include a conflict are unchanged.
+The one still blocked says "whether launch day is Oct 3", with no cue word or question mark. The five blocks that include a conflict are unchanged.
+
+**Live.** Three 15-turn `01-workshop-full` sessions on sonnet ran on a first version of this change, which keyed told values to the check's own id and needed a value on the line. They had 3 Stop blocks, against 6 in the three sessions of that case on 0.3.15. Two of the three came from those two limits:
+
+- A budget check was replaced by one with the same values. The reply named $2 and $250 and called its figures estimates, and the check's other value, $80, had been told for the check it replaced.
+- A reply said "My catering, handout and contingency figures from the budget are still my estimates".
+
+Replayed with the told values each session's gate had saved, both pass on this version. The third block was a new check comparing catering with the $300 line cap. Its reply did not name the $7 a head it assumed, so it still blocks. The other six sessions planned for that run (`02-launch-full` and `08-dropped-option`) did not start, because the account reached its weekly usage limit. The judge was cut off too: the 10 of 18 gradings it finished all passed, and the other 8 have no verdict yet.
 
 ## Verification and rollback
 

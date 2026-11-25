@@ -2682,9 +2682,11 @@ def stated_checks(record, reply, told=None):
     assumption or estimate, or the reply's preamble does.
 
     told maps a check id to the labels of assumed values ("start 09:00") that
-    an earlier reply this session stated in full. While every assumed value of
-    a check is among them, one of them named that way states them all: the
-    user already has the values, and the line says they are still open.
+    an earlier reply this session stated in full. A check whose assumed values
+    are each named that way or were told for it, or for a check it replaces,
+    is stated when the reply names one of them that way or has a line that
+    calls the check's budget, schedule or dates an assumption or asks about
+    them: the user already has the values, and the line says they are still open.
     """
     return set(_stated(record, reply, told)[1])
 
@@ -2732,19 +2734,48 @@ def _stated(record, reply, told=None):
         if all(named(reading, value) for _label, reading, value in unsourced):
             in_full[check["id"]] = [label for label, _reading, _value in unsourced]
             stated.add(check["id"])
-        elif _told_covers(told, check["id"], unsourced) and any(
-                named(reading, value) for _label, reading, value in unsourced):
+            continue
+        counts = _told_counts(told, record, check)
+        if not counts:
+            continue
+        # Each value is named here or was told before, and the reply still says
+        # the check is open: by one of its values, or by what kind of check it is.
+        flags = [named(reading, value) for _label, reading, value in unsourced]
+        missing = [label for (label, _reading, _value), flag in zip(unsourced, flags) if not flag]
+        if all(missing.count(label) <= counts.get(label, 0) for label in set(missing)) and (
+                any(flags) or any(KIND_WORDS[check["kind"]].search(line) and (_calls_own(line) or "?" in line)
+                                  for line in lines)):
             stated.add(check["id"])
     return in_full, stated
 
 
-def _told_covers(told, check_id, unsourced):
-    """True when every assumed value of the check is among those told for it this session."""
-    earlier = told.get(check_id) if isinstance(told, dict) else None
-    if not unsourced or not isinstance(earlier, list):
-        return False
-    labels = [label for label, _reading, _value in unsourced]
-    return all(labels.count(label) <= earlier.count(label) for label in set(labels))
+# What a status line calls a kind of check when it names none of its values:
+# "my catering and handout figures from the budget are still my estimates".
+KIND_WORDS = {
+    "within_budget": re.compile(r"\b(?:budgets?|costs?|prices?|pricing|figures|amounts|totals|spending)\b",
+                                re.IGNORECASE),
+    "fits_window": re.compile(r"\b(?:schedules?|agendas?|timings?|times|timetable)\b", re.IGNORECASE),
+    "before": re.compile(r"\b(?:dates?|deadlines?)\b", re.IGNORECASE),
+}
+
+
+def _told_counts(told, record, check):
+    """Label -> times told this session, for check or any check it replaces, directly or through others."""
+    if not isinstance(told, dict) or not told:
+        return {}
+    by_id = {other.get("id"): other for other in record.get("checks") or []}
+    counts, seen, waiting = {}, set(), [check["id"]]
+    while waiting:
+        check_id = waiting.pop()
+        if check_id in seen:
+            continue
+        seen.add(check_id)
+        earlier = told.get(check_id)
+        if isinstance(earlier, list):
+            for label in set(earlier):
+                counts[label] = max(counts.get(label, 0), earlier.count(label))
+        waiting.extend(older for older in by_id.get(check_id, {}).get("replaces") or [] if isinstance(older, str))
+    return counts
 
 
 def _read_told(session_id):

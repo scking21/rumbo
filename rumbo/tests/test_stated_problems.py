@@ -243,6 +243,39 @@ class StatementReadingTests(unittest.TestCase):
         for told in (None, [], {"C1": "start 09:00"}, {"C1": [None, 3]}):
             self.assertEqual(stated(AGENDA_STATUS, agenda, OBJECTIVE, told), set(), told)
 
+    def test_a_told_check_is_stated_by_a_line_that_calls_its_kind_an_assumption(self):
+        # Live, on 0.3.17's first version: "My catering, handout and contingency
+        # figures from the budget are still my estimates" named no amount.
+        agenda = AGENDA["checks"][0]
+        told = {"C1": AGENDA_TOLD}
+        for reply, expected in (("The schedule is still my assumption.", {"C1"}),
+                                ("Do the agenda times still work for you?", {"C1"}),
+                                ("The schedule stays as drafted.", set()),
+                                # The cue must be on that line: a section's is not enough
+                                # without a value.
+                                ("## My assumptions\nThe schedule stays as drafted.", set()),
+                                ("The budget is still my estimate.", set())):
+            with self.subTest(reply=reply):
+                self.assertEqual(stated(reply, agenda, OBJECTIVE, told), expected)
+                self.assertEqual(stated(reply, agenda, OBJECTIVE), set())
+
+    def test_values_told_for_a_check_carry_to_the_check_that_replaces_it(self):
+        # Live: the agent replaced a told budget check with one holding the same
+        # values and new refs, and the gate treated the new one as never told.
+        older = dict(AGENDA["checks"][0])
+        newer = dict(older, id="C2", replaces=["C1"])
+        other = dict(older, id="C3")
+        document = {"version": 1, "objective": {"text": "Plan", "quote": OBJECTIVE}, "items": [],
+                    "checks": [older, newer, other]}
+        told = {"C1": AGENDA_TOLD}
+        self.assertEqual(record.stated_checks(document, AGENDA_STATUS, told), {"C2"})
+        self.assertEqual(record.stated_checks(document, AGENDA_STATUS, {"C2": AGENDA_TOLD}), {"C2"})
+        document["checks"][1] = dict(newer, segments_min=[75, 20, 80])
+        self.assertEqual(record.stated_checks(document, AGENDA_STATUS, told), set())
+        # A value not told before can be named in this reply instead.
+        self.assertEqual(record.stated_checks(document, AGENDA_STATUS + "\nSession 2 is now 80 minutes, my guess.",
+                                              told), {"C2"})
+
     def test_a_told_assumption_does_not_state_a_conflict(self):
         late = check(kind="fits_window", start="09:00", segments_min=[75, 20, 75, 60], end="12:30")
         told = {"C1": ["start 09:00", "end 12:30", "segments_min 75", "segments_min 20", "segments_min 75",
