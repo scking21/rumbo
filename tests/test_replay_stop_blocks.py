@@ -46,12 +46,13 @@ class ReplayTests(unittest.TestCase):
 
     def test_a_status_line_passes_only_with_what_was_told(self):
         reader = replay.load_reader(os.path.join(ROOT, "rumbo", "scripts"))
-        self.assertEqual(replay.replay(reader, [self.run]), (1, 1, 0, [], 0))
-        self.assertEqual(replay.replay(reader, [self.run], told=True),
-                         (1, 1, 1, ["run 01-workshop-full run 1 turn 2"], 0))
+        counts, names = replay.replay(reader, [self.run])
+        self.assertEqual((counts["assumed"], counts["assumed rebuilt"], counts["assumed stated"], names), (1, 1, 0, []))
+        counts, names = replay.replay(reader, [self.run], told=True)
+        self.assertEqual((counts["assumed stated"], names), (1, ["run 01-workshop-full run 1 turn 2"]))
         done = subprocess.run([sys.executable, SCRIPT, "--told", self.run], capture_output=True, text=True, timeout=60)
         self.assertEqual(done.returncode, 0, done.stderr)
-        self.assertIn("with only assumed values: 1 rebuilt, 0 not; read as stated: 1", done.stdout)
+        self.assertIn("with only assumed values: 1, rebuilt 1, read as stated 1", done.stdout)
 
     def test_skill_text_and_hook_feedback_are_not_prompts(self):
         # Review: an injected message after an intermediate reply was taken for
@@ -69,7 +70,23 @@ class ReplayTests(unittest.TestCase):
         # The last stop is the session's end, after the block.
         self.assertEqual(replay.stops(transcript), [(False, "Working on it."), (True, STATUS), (False, STATUS)])
         reader = replay.load_reader(os.path.join(ROOT, "rumbo", "scripts"))
-        self.assertEqual(replay.replay(reader, [self.run], told=True), (1, 1, 0, [], 0))
+        self.assertEqual(replay.replay(reader, [self.run], told=True)[0]["assumed stated"], 0)
+
+    def test_a_repeat_block_is_judged_on_its_last_block_problems(self):
+        transcript = os.path.join(self.run, "t.jsonl")
+        with open(transcript, "a", encoding="utf-8") as handle:
+            for item in (entry("prompt", "And the venue?"), entry("reply", STATUS), entry("block")):
+                handle.write(json.dumps(item) + "\n")
+        with open(os.path.join(self.run, "summary.json"), encoding="utf-8") as handle:
+            summary = json.load(handle)
+        summary["sessions"][0]["blocks"].append(
+            {"turn": 3, "reason": "rumbo: still open, unchanged since the last block: C1 (draft agenda). Fix them."})
+        with open(os.path.join(self.run, "summary.json"), "w", encoding="utf-8") as handle:
+            json.dump(summary, handle)
+        reader = replay.load_reader(os.path.join(ROOT, "rumbo", "scripts"))
+        counts, names = replay.replay(reader, [self.run], told=True)
+        self.assertEqual((counts["blocks"], counts["repeats"], counts["assumed stated"]), (2, 1, 2))
+        self.assertEqual(names[1], "run 01-workshop-full run 1 turn 3 (repeat)")
 
     def test_each_stop_keeps_the_last_reply_and_blocks_stay_in_order(self):
         stops = replay.stops(os.path.join(self.run, "t.jsonl"))
@@ -102,8 +119,17 @@ class ReplayTests(unittest.TestCase):
         # Without the other factor a price per unit is not rebuilt, rather than judged as a different total.
         self.assertIsNone(replay.rebuild("C2: UNSOURCED within_budget catering: amounts unit 7 not in the user's "
                                          "quoted words", reader))
-        self.assertIsNone(replay.rebuild("C4: FAIL fits_window agenda: 09:00 + 240 min ends 13:00, 30 min after 12:30",
-                                         reader))
+        # A FAIL line is rebuilt only from the final record, and only when it gives back the same line.
+        late = "C4: FAIL fits_window agenda: 09:00 + 240 min ends 13:00, 30 min after 12:30"
+        self.assertIsNone(replay.rebuild(late, reader))
+        final_late = {"id": "C4", "kind": "fits_window", "label": "agenda", "start": "09:00",
+                      "segments_min": [120, 120], "end": "12:30", "refs": ["I1"], "replaces": ["C2"]}
+        check_id, record = replay.rebuild(late, reader, final_late)
+        self.assertEqual(reader.record_problems(record)[0], [late])
+        self.assertEqual(reader.stated_checks(record, "The sessions end at 13:00, after the 12:30 close."), {"C4"})
+        self.assertIsNone(replay.rebuild(late, reader, dict(final_late, label="other agenda")))
+        also = late + " (also unsourced: start 09:00)"
+        self.assertEqual(reader.record_problems(replay.rebuild(also, reader, final_late)[1])[0], [also])
 
 if __name__ == "__main__":
     unittest.main()
