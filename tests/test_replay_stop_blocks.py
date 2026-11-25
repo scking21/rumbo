@@ -46,12 +46,12 @@ class ReplayTests(unittest.TestCase):
 
     def test_a_status_line_passes_only_with_what_was_told(self):
         reader = replay.load_reader(os.path.join(ROOT, "rumbo", "scripts"))
-        self.assertEqual(replay.replay(reader, [self.run]), (1, 1, 0, []))
+        self.assertEqual(replay.replay(reader, [self.run]), (1, 1, 0, [], 0))
         self.assertEqual(replay.replay(reader, [self.run], told=True),
-                         (1, 1, 1, ["run 01-workshop-full run 1 turn 2"]))
+                         (1, 1, 1, ["run 01-workshop-full run 1 turn 2"], 0))
         done = subprocess.run([sys.executable, SCRIPT, "--told", self.run], capture_output=True, text=True, timeout=60)
         self.assertEqual(done.returncode, 0, done.stderr)
-        self.assertIn("with only assumed values: 1; read as stated: 1", done.stdout)
+        self.assertIn("with only assumed values: 1 rebuilt, 0 not; read as stated: 1", done.stdout)
 
     def test_each_stop_keeps_the_last_reply_and_blocks_stay_in_order(self):
         stops = replay.stops(os.path.join(self.run, "t.jsonl"))
@@ -59,17 +59,33 @@ class ReplayTests(unittest.TestCase):
 
     def test_a_block_line_is_rebuilt_with_its_named_values_unsourced(self):
         reader = replay.load_reader(os.path.join(ROOT, "rumbo", "scripts"))
-        for line in (AGENDA,
-                     "C2: UNSOURCED within_budget catering: amounts unit 7, amounts 50 not in the user's quoted words",
-                     "C3: UNSOURCED before launch: second month-day 10-03 not in the user's quoted words"):
+        final_budget = {"id": "C2", "kind": "within_budget", "label": "catering",
+                        "amounts": [{"unit": 7, "quantity": 40}, 50, 250], "total_cap": 600, "refs": ["I1"]}
+        final_dates = {"id": "C3", "kind": "before", "first": "2026-03-12", "second": "2027-03-20", "refs": []}
+        for line, final in ((AGENDA, None),
+                            ("C2: UNSOURCED within_budget catering: amounts unit 7, amounts 50 not in the user's "
+                             "quoted words", final_budget),
+                            ("C3: UNSOURCED before launch: second month-day 10-03 not in the user's quoted words", None),
+                            # Review: a year assumed on its own was dropped.
+                            ("C3: UNSOURCED before deadline: second year 2027 not in the user's quoted words", final_dates),
+                            ("C3: UNSOURCED before deadline: first year 2027 not in the user's quoted words", None)):
             with self.subTest(line=line):
-                check_id, record = replay.rebuild(line)
+                check_id, record = replay.rebuild(line, reader, final)
                 self.assertEqual(reader.validate_record(record), [])
+                self.assertTrue(reader.evaluate_check(record["checks"][0])[0])
                 named = sorted(label for label, _reading, _value in reader._unsourced(record, record["checks"][0]))
                 values = line.split(": ", 2)[2].rsplit(" not in", 1)[0]
                 self.assertEqual(named, sorted(v.strip() for v in values.split(",")))
-        self.assertIsNone(replay.rebuild("C4: FAIL fits_window agenda: 09:00 + 240 min ends 13:00, 30 min after 12:30"))
-
+        # Review: with the head count from the final record, the $280 total states the $7 a head.
+        _check_id, record = replay.rebuild("C2: UNSOURCED within_budget catering: amounts unit 7 not in the user's "
+                                           "quoted words", reader, final_budget)
+        self.assertEqual(record["checks"][0]["amounts"][0], {"unit": 7, "quantity": 40})
+        self.assertEqual(reader.stated_checks(record, "My catering estimate is $280."), {"C2"})
+        # Without the other factor a price per unit is not rebuilt, rather than judged as a different total.
+        self.assertIsNone(replay.rebuild("C2: UNSOURCED within_budget catering: amounts unit 7 not in the user's "
+                                         "quoted words", reader))
+        self.assertIsNone(replay.rebuild("C4: FAIL fits_window agenda: 09:00 + 240 min ends 13:00, 30 min after 12:30",
+                                         reader))
 
 if __name__ == "__main__":
     unittest.main()

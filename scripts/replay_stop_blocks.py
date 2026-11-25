@@ -5,12 +5,18 @@ usage: python3 scripts/replay_stop_blocks.py [--scripts DIR] [--told] RUN_DIR [R
 Each RUN_DIR holds the summary.json that scripts/claude_multiturn_eval.py
 writes, and its sessions' transcripts. For every saved block whose problems are
 all assumed values (UNSOURCED lines), the replay rebuilds each check from the
-values the block names, sources the values the block does not name, and asks
+values the block names and the values the session's final record holds for it
+(or stand-ins), sources the values the block does not name, and asks
 the reader in DIR/record.py (default: this tree's rumbo/scripts) whether the
 reply the gate read before that block states it. With --told, the session's
 earlier replies are read first, in order, and what they stated in full counts as
 told, as the Stop gate remembers it since 0.3.17; this assumes each check had
 the same values at those earlier stops.
+
+A rebuilt check must validate, pass its arithmetic and leave unsourced exactly
+the values its block names. A block with a check that cannot be rebuilt that
+way, such as a price per unit whose head count no record holds, is counted
+apart rather than judged on a different check.
 
 This measures a change to the reader against real replies; it does not rerun
 sessions. A block passes when every one of its problems is read as stated.
@@ -39,58 +45,106 @@ def _number(text):
     return float(text) if "." in text else int(text)
 
 
-def rebuild(line):
-    """(check id, one-check record) for a block's UNSOURCED line, or None when it cannot be rebuilt."""
+def _phrases(check, reader):
+    """(label, words that source it) for every value of check, labelled as the gate's UNSOURCED lines are."""
+    fmt = reader.fmt_num
+    out = []
+    if check["kind"] == "fits_window":
+        out += [("start " + check["start"], check["start"]), ("end " + check["end"], check["end"])]
+        out += [("segments_min %s" % fmt(seg), "%s minutes" % fmt(seg)) for seg in check["segments_min"]]
+    elif check["kind"] == "within_budget":
+        for amount in check["amounts"]:
+            if isinstance(amount, dict):
+                out += [("amounts %s %s" % (key, fmt(amount[key])), fmt(amount[key])) for key in ("unit", "quantity")]
+            else:
+                out.append(("amounts %s" % fmt(amount), "$" + fmt(amount)))
+        for cap in ("total_cap", "item_cap"):
+            if check.get(cap) is not None:
+                out.append(("%s %s" % (cap, fmt(check[cap])), "$" + fmt(check[cap])))
+    else:
+        for field in ("first", "second"):
+            out.append(("%s month-day %s" % (field, check[field]), check[field][-5:]))
+            if len(check[field]) == 10:
+                out.append(("%s year %s" % (field, check[field][:4]), check[field][:4]))
+    return out
+
+
+def _stand_in(kind, values):
+    """The check a block line describes, with stand-ins for the values it does not name, or None.
+
+    A price per unit or a head count alone cannot be rebuilt: its entry's total
+    needs the other factor, and a stand-in would judge a different total.
+    """
+    named = [value.split() for value in values]
+    if kind == "fits_window":
+        check = {"start": "00:00", "end": "23:59", "segments_min": []}
+        for parts in named:
+            if parts[0] in ("start", "end"):
+                check[parts[0]] = parts[1]
+            else:
+                check["segments_min"].append(int(parts[1]))
+        check["segments_min"] = check["segments_min"] or [1]
+    elif kind == "within_budget":
+        if any(parts[1] in ("unit", "quantity") for parts in named if parts[0] == "amounts"):
+            return None
+        check = {"amounts": [_number(parts[1]) for parts in named if parts[0] == "amounts"] or [0],
+                 "total_cap": UNSET_CAP}
+        for parts in named:
+            if parts[0] in ("total_cap", "item_cap"):
+                check[parts[0]] = _number(parts[1])
+    else:
+        days = {"first": "01-01", "second": "12-31"}
+        years = {}
+        for parts in named:
+            (days if parts[1] == "month-day" else years)[parts[0]] = parts[2]
+        if years:
+            # A year the block does not name was sourced, so it differs from the named ones.
+            years.setdefault("first", str(int(min(years.values())) - 1))
+            years.setdefault("second", str(int(max(years.values())) + 1))
+            check = {field: "%s-%s" % (years[field], days[field]) for field in ("first", "second")}
+        else:
+            check = dict(days)
+    return check
+
+
+def rebuild(line, reader, final=None):
+    """(check id, one-check record) for a block's UNSOURCED line, or None when it cannot be rebuilt.
+
+    final is the check with the same id in the session's final record, if any:
+    it supplies the values the block does not name, such as the head count
+    behind a price per unit. Otherwise those values get stand-ins. Either way
+    the rebuilt check must validate, pass its arithmetic and leave unsourced
+    exactly the values the block names.
+    """
     match = UNSOURCED.match(line)
     if not match:
         return None
     check_id, kind, values = match.group(1), match.group(2), [v.strip() for v in match.group(3).split(",")]
-    said = []
-    if kind == "fits_window":
-        check = {"start": None, "end": None, "segments_min": []}
-        for value in values:
-            name, _, text = value.partition(" ")
-            if name in ("start", "end"):
-                check[name] = text
-            elif name == "segments_min":
-                check["segments_min"].append(int(text))
-        # Values the block does not name were sourced: give them a sourced stand-in.
-        for name, stand_in in (("start", "00:00"), ("end", "23:59")):
-            if check[name] is None:
-                check[name] = stand_in
-                said.append(stand_in)
-        if not check["segments_min"]:
-            check["segments_min"] = [1]
-            said.append("1 minute")
-    elif kind == "within_budget":
-        check = {"amounts": [], "total_cap": UNSET_CAP}
-        for value in values:
-            parts = value.split()
-            if parts[0] == "amounts" and parts[1] in ("unit", "quantity"):
-                entry = {"unit": 1, "quantity": 1, parts[1]: _number(parts[2])}
-                check["amounts"].append(entry)
-                said.append("1 each")
-            elif parts[0] == "amounts":
-                check["amounts"].append(_number(parts[1]))
-            elif parts[0] in ("total_cap", "item_cap"):
-                check[parts[0]] = _number(parts[1])
-        if "total_cap" not in [value.split()[0] for value in values]:
-            said.append("a cap of %d" % UNSET_CAP)
-        if not check["amounts"]:
-            check["amounts"] = [0]
-    else:
-        check = {"first": None, "second": None}
-        for value in values:
-            parts = value.split()
-            if parts[1] == "month-day":
-                check[parts[0]] = parts[2]
-        for name, stand_in, words in (("first", "01-01", "January 1"), ("second", "12-31", "December 31")):
-            if check[name] is None:
-                check[name] = stand_in
-                said.append(words)
-    check.update(id=check_id, kind=kind, refs=[])
-    quote = "We plan for " + " and ".join(said) + "." if said else "We plan."
-    return check_id, {"version": 1, "objective": {"text": "Replay", "quote": quote}, "items": [], "checks": [check]}
+    candidates = []
+    if isinstance(final, dict) and final.get("kind") == kind:
+        candidates.append({key: value for key, value in final.items() if key not in ("label", "replaces", "dropped_by")})
+    candidates.append(_stand_in(kind, values))
+    for check in candidates:
+        if check is None:
+            continue
+        check = dict(check, id=check_id, kind=kind, refs=[])
+        left = list(values)
+        words = []
+        try:
+            for label, phrase in _phrases(check, reader):
+                if label in left:
+                    left.remove(label)
+                else:
+                    words.append(phrase)
+        except (KeyError, TypeError, ValueError):
+            continue
+        record = {"version": 1, "objective": {"text": "Replay", "quote": "We plan for %s." % "; ".join(words or ["it"])},
+                  "items": [], "checks": [check]}
+        if reader.validate_record(record) or not reader.evaluate_check(check)[0]:
+            continue
+        if sorted(label for label, _reading, _value in reader._unsourced(record, check)) == sorted(values):
+            return check_id, record
+    return None
 
 
 def _texts(entry):
@@ -137,8 +191,9 @@ def stops(transcript):
 
 
 def replay(reader, run_dirs, told=False):
-    """(blocks with check problems, assumption-only blocks, those read as stated, names of the passing ones)."""
-    total = assumed = passed = 0
+    """(blocks with check problems, assumption-only blocks rebuilt, those read as stated, names of the passing
+    ones, assumption-only blocks that could not be rebuilt)."""
+    total = assumed = passed = skipped = 0
     names = []
     for run_dir in run_dirs:
         with open(os.path.join(run_dir, "summary.json"), encoding="utf-8") as handle:
@@ -147,23 +202,31 @@ def replay(reader, run_dirs, told=False):
             if not row.get("blocks") or not row.get("transcript") or not os.path.isfile(row["transcript"]):
                 continue
             session_stops = stops(row["transcript"])
+            final = {}
+            record_path = os.path.join(os.path.dirname(row["transcript"]), "project", ".rumbo", "record.json")
+            try:
+                with open(record_path, encoding="utf-8") as handle:
+                    final = {check.get("id"): check for check in json.load(handle).get("checks") or []
+                             if isinstance(check, dict)}
+            except (OSError, ValueError, AttributeError):
+                pass
             block_stops = [n for n, (is_block, _reply) in enumerate(session_stops) if is_block]
             for index, block in enumerate(row["blocks"]):
                 problems = [line for line in block["reason"].splitlines() if re.match(r"^C\d+: ", line)]
                 if not problems or index >= len(block_stops):
                     continue
                 total += 1
-                rebuilt = [rebuild(line) for line in problems]
+                if not all(UNSOURCED.match(line) for line in problems):
+                    continue
+                rebuilt = [rebuild(line, reader, final.get(line.split(":")[0])) for line in problems]
                 if not all(rebuilt):
+                    skipped += 1
                     continue
                 assumed += 1
                 at = block_stops[index]
                 reply = session_stops[at][1]
                 ok = True
                 for check_id, record in rebuilt:
-                    if reader.validate_record(record):
-                        ok = False
-                        break
                     memory = {}
                     if told and hasattr(reader, "_stated"):
                         for _is_block_stop, earlier in session_stops[:at]:
@@ -178,7 +241,7 @@ def replay(reader, run_dirs, told=False):
                     names.append("%s %s run %d turn %d" % (os.path.basename(os.path.normpath(run_dir)),
                                                            os.path.basename(os.path.normpath(row["case"])),
                                                            row["run"], block["turn"]))
-    return total, assumed, passed, names
+    return total, assumed, passed, names, skipped
 
 
 def main(argv=None):
@@ -190,10 +253,11 @@ def main(argv=None):
     parser.add_argument("--told", action="store_true", help="count what earlier replies stated in full as told")
     args = parser.parse_args(argv)
     reader = load_reader(args.scripts)
-    total, assumed, passed, names = replay(reader, args.runs, args.told)
+    total, assumed, passed, names, skipped = replay(reader, args.runs, args.told)
     for name in names:
         print("read as stated: " + name)
-    print("blocks with check problems: %d; with only assumed values: %d; read as stated: %d" % (total, assumed, passed))
+    print("blocks with check problems: %d; with only assumed values: %d rebuilt, %d not; read as stated: %d"
+          % (total, assumed, skipped, passed))
     return 0
 
 
