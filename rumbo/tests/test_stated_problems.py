@@ -200,10 +200,13 @@ class StatementReadingTests(unittest.TestCase):
 
     def test_a_range_on_a_known_clock_rolls_over_a_whole_day(self):
         # Review of this change: every range rolled over 12 hours, so "6pm-9am"
-        # read as 180 minutes and could clear an assumed three-hour block.
+        # read as 180 minutes and could clear an assumed three-hour block. A
+        # second review found the same for a 24-hour end beside a meridiem.
         said = "We plan an overnight build."
         for line, minutes, expected in (("6pm\u20139am", 180, set()), ("6pm\u20139am", 900, {"C1"}),
                                         ("18:00\u201309:00", 180, set()), ("18:00\u201309:00", 900, {"C1"}),
+                                        ("18:00\u20139am", 180, set()), ("18:00\u20139am", 900, {"C1"}),
+                                        ("10pm\u201306:30", 510, {"C1"}),
                                         ("9:00 \u2013 10:15pm", 75, {"C1"}), ("12:50\u20131:05", 15, {"C1"})):
             with self.subTest(line=line, minutes=minutes):
                 block = check(kind="fits_window", start="00:00", segments_min=[minutes], end="23:59", end_next_day=False)

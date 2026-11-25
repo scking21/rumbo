@@ -2561,15 +2561,19 @@ def _range_spans(line):
         def at(hour, minute, half):
             return ((hour % 12 + (12 if half.lower() == "p" else 0)) if half else hour) * 60 + minute
 
-        if (half1 and half2) or (not half1 and not half2 and (
-                h1 > 12 or h2 > 12 or hour1.startswith("0") or hour2.startswith("0"))):
-            # Both ends on a known clock, by meridiems or a 24-hour time: an end
-            # earlier than the start is the next day ("6pm-9am" is 900 minutes).
+        # An end is on a known clock when it has a meridiem or is a 24-hour
+        # time ("18:00", "09:00"); a bare "9:00" could be either half of the day.
+        known1 = bool(half1) or h1 > 12 or hour1.startswith("0")
+        known2 = bool(half2) or h2 > 12 or hour2.startswith("0")
+        if (known1 and known2) or (not half1 and not half2 and (known1 or known2)):
+            # Both ends known, or a 24-hour time with no meridiem anywhere: an end
+            # earlier than the start is the next day ("6pm-9am", "18:00-09:00"
+            # and "18:00-9am" are 900 minutes).
             span = (at(h2, m2, half2) - at(h1, m1, half1)) % 1440
-        elif half1 or half2:
+        elif known1 or known2:
             # One meridiem: the bare end takes the half that gives the shorter
             # range, so "9:00-10:15pm" is 75 minutes and "9:00-1:00am" is 240.
-            if half2:
+            if known2:
                 options = [(at(h2, m2, half2) - at(h1, m1, half)) % 1440 for half in "ap"]
             else:
                 options = [(at(h2, m2, half) - at(h1, m1, half1)) % 1440 for half in "ap"]
