@@ -284,6 +284,14 @@ class StatementReadingTests(unittest.TestCase):
         self.assertEqual(stated("My $280 catering estimate stays.", budget, said), {"C1"})
         self.assertEqual(stated("$7 a head is my estimate.", budget, said), {"C1"})
         self.assertEqual(stated("Catering comes to $280.", budget, said), set())
+        # Review of this change: entries that share an assumed price each need
+        # their own total, so the $280 says nothing about the $70.
+        said = "40 attendees and 10 volunteers are coming. Our budget is $600."
+        shared = check(kind="within_budget", amounts=[{"unit": 7, "quantity": 40}, {"unit": 7, "quantity": 10}],
+                       total_cap=600)
+        self.assertEqual(stated("My $280 catering estimate for attendees stays.", shared, said), set())
+        self.assertEqual(stated("My estimates: $280 for attendees, $70 for volunteers.", shared, said), {"C1"})
+        self.assertEqual(stated("$7 a head is my estimate.", shared, said), {"C1"})
         # A total says nothing about an assumed head count.
         said = "Catering is $7 per person, Dr. Okafor's travel is $250 and our budget is $600."
         self.assertEqual(stated("My $280 catering estimate stays.", budget, said), set())

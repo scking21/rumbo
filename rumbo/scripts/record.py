@@ -2757,11 +2757,13 @@ def _stated(record, reply, told=None):
         if check["id"] in replaced:
             continue
         ways = _conflict_ways(check)
-        # An assumed price per unit is also named by the line's total for it:
-        # "my $280 catering estimate" for $7 a head for 40.
-        products = _unit_products(check)
-        unsourced = [(label, reading, value, products.get(label, ())) for label, reading, value
-                     in _unsourced(record, check)]
+        # An assumed price per unit is also named by its own entry's total:
+        # "my $280 catering estimate" for $7 a head for 40. Entries that share
+        # a price keep their own totals, in the order both lists walk amounts.
+        products, seen, unsourced = _unit_products(check), {}, []
+        for label, reading, value in _unsourced(record, check):
+            index = seen[label] = seen.get(label, -1) + 1
+            unsourced.append((label, reading, value, products.get(label, [])[index:index + 1]))
         if not ways and not unsourced:
             continue
         if not all(any(all(says(reading, value, index) for reading, value in alternative)
@@ -2800,7 +2802,8 @@ KIND_WORDS = {
 
 
 def _unit_products(check):
-    """For a within_budget check, the label of each price per unit ("amounts unit 7") -> its entries' totals."""
+    """For a within_budget check, the label of each price per unit ("amounts unit 7") -> its entries' totals,
+    in the order of amounts, as _unsourced lists the entries."""
     if check.get("kind") != "within_budget":
         return {}
     products = {}
