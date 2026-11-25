@@ -7,7 +7,7 @@ Every bundled eval case was run on the Claude adapter 0.3.15 with three models: 
 - `scripts/claude_multiturn_eval.py` drove each case's turns through `claude -p --resume` with the plugin loaded from a copy of the 0.3.15 tree, so every session ran the same version.
 - Cases `09-unit-price-budget`, `10-overnight-window` and `11-rejected-option` are new in `rumbo/evals`. They check a budget given as a price per person, a window that runs past midnight, and a "no" to one option that leaves another undecided.
 - Every grading was made, or made again, by a sonnet judge with three votes per grader. Each vote reasons in a few sentences and ends with a `VERDICT:` line, and a grader needs two matching votes. Of the 232 gradings a judge made, 8 had split votes: 6 on haiku's sessions, 2 on opus's, none on sonnet's. The other 16 gradings check files (no record created) and need no judge.
-- The tables below come from `python3 scripts/eval_summary.py LABEL=DIR ...` over the runs' directories.
+- The tables below come from `python3 scripts/eval_summary.py LABEL=DIR ...` over the runs' directories. The replays of saved Stop blocks come from `python3 scripts/replay_stop_blocks.py [--scripts DIR] [--told] RUN_DIR ...`, which asks a given version's reader whether each reply stated its block's assumed values.
 - Usage limits cut off two batches of sessions and two rounds of grading. Interrupted sessions were rerun, and `--regrade DIR --errors-only` asked the judge again only for the verdicts it had not given.
 
 ## Results
