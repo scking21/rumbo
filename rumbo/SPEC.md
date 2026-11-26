@@ -79,7 +79,7 @@ Per-session markers (`.nudged`, `.enforced`, `.prompts`, `.blocks`, `.ledger-blo
 
 ## Packaging
 
-- `.claude-plugin/plugin.json`: name `rumbo`, version `0.3.22`, MIT; `.claude-plugin/icon.svg` is the listing icon.
+- `.claude-plugin/plugin.json`: name `rumbo`, version `0.3.23`, MIT; `.claude-plugin/icon.svg` is the listing icon.
 - `hooks/hooks.json`: `UserPromptSubmit` runs `"${CLAUDE_PLUGIN_ROOT}"/scripts/show.sh`; `SessionStart` with matcher `compact` runs the same `show.sh`, so the record is back in context right after a compaction, even in the middle of a long autonomous turn when no new prompt arrives; `PreToolUse` with matcher `Write|Edit|MultiEdit|NotebookEdit` runs `"${CLAUDE_PLUGIN_ROOT}"/scripts/pre-write.sh`; `Stop` runs `"${CLAUDE_PLUGIN_ROOT}"/scripts/stop-gate.sh`. Each is a two-line shell script that runs `record.py` against `${CLAUDE_PROJECT_DIR}/.rumbo/record.json`; the hook command itself names only a literal path inside the plugin, as the directory validator requires.
 - `skills/commitments/SKILL.md`: when and how the agent maintains the record.
 - The repository root's `.claude-plugin/marketplace.json` lists `rumbo` with source `./rumbo`.
