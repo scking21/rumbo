@@ -56,9 +56,17 @@ class MoneyReadingTests(unittest.TestCase):
                               # A currency sign makes it money, whatever follows.
                               ("Budget $600. The trainer is $150 hour, or $60 hr for the assistant.", [150, 60]),
                               ("Budget £600. Rent is £500 pm and the van €20 day.", [500, 20]),
+                              # A date is never blanked out of a price (Codex review on 0.3.26).
+                              ("Budget $600. A $20.50 May fee, a $ 30 June fee.", [20.5, 30]),
+                              ("Budget $600. Due May 20.50 total.", [20.5]),
                               ("Budget 600 dollars, 250 for catering.", [250])):
             with self.subTest(said=said):
                 self.assertEqual(unsourced(budget(amounts, total_cap=1500 if "1.5k" in said else 600), said), [])
+
+    def test_a_price_is_not_cut_short_by_a_date_after_it(self):
+        # "$20.50 May fee" must not read as "$20." with "50 May" taken for a date.
+        self.assertEqual(unsourced(budget([20]), "Budget $600. A $20.50 May fee."), ["amounts 20"])
+        self.assertEqual(unsourced(budget([0.5]), "Budget $600. Due May 20.50 total."), ["amounts 0.5"])
 
     def test_a_cap_and_a_price_per_unit_are_money_but_a_quantity_can_be_hours(self):
         said = "The room is $150 an hour for 4 hours, and the whole budget is 600."

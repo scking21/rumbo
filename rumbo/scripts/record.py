@@ -381,8 +381,26 @@ MONEY_EXCLUDED_UNIT = re.compile(
 WHOLE_MONTH = (r"(?:(?i:january|february|march|april|june|july|august|september|october|november|december|"
                r"jan|feb|mar|apr|jun|jul|aug|sept|sep|oct|nov|dec)\b\.?|May\b)")
 DATE_TEXT = re.compile(r"\b" + WHOLE_MONTH + r"\s*\d{1,2}(?:st|nd|rd|th)?\b"
-                       r"|(?<![$€£])\b\d{1,2}(?:st|nd|rd|th)?\s+(?:of\s+)?" + WHOLE_MONTH +
+                       r"|\b\d{1,2}(?:st|nd|rd|th)?\s+(?:of\s+)?" + WHOLE_MONTH +
                        r"|(?<!\d)\d{4}-\d{1,2}-\d{1,2}(?!\d)")
+
+
+def _blank_dates(text):
+    """text with its dates blanked for the money reading, but never a piece of a
+    number or a price: "$20.50 May fee", "$ 20 May fee" and "May 20.50" keep theirs."""
+    def blank(match):
+        start, end = match.span()
+        before = start - 1
+        if before >= 0 and text[before] in "0123456789.,":
+            return match.group(0)
+        while before >= 0 and text[before].isspace():
+            before -= 1
+        if before >= 0 and text[before] in "$€£":
+            return match.group(0)
+        if end + 1 < len(text) and text[end] in ".," and text[end + 1].isdecimal():
+            return match.group(0)
+        return " "
+    return DATE_TEXT.sub(blank, text)
 
 
 def _is_money_sourced(num, source_text):
@@ -404,7 +422,7 @@ def _sourced_numbers(source_text, excluded_unit=None):
     found = _SOURCED_NUMBERS.get(key)
     if found is None:
         # Money is read with the text's dates blanked (see MONEY_EXCLUDED_UNIT).
-        text = DATE_TEXT.sub(" ", source_text) if excluded_unit is MONEY_EXCLUDED_UNIT else source_text
+        text = _blank_dates(source_text) if excluded_unit is MONEY_EXCLUDED_UNIT else source_text
         found = frozenset(_read_numbers(text, excluded_unit))
         if len(_SOURCED_NUMBERS) >= _SOURCED_NUMBERS_KEPT:
             _SOURCED_NUMBERS.clear()
