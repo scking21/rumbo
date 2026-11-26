@@ -32,7 +32,7 @@ The pre-write hook runs before a file is written. It shows the record's open pro
 - `rumbo/tests/test_drift_hooks.py` checks the hold's output and the context fallback without a session id.
 - A one-off session with a stand-in hook showed the mechanism on haiku before this change: the model read the deny's reason, wrote the line again as a proposal to confirm, and told the user why.
 
-**Live.** The cases where the hook has lines to show ran on this change, graded by the same sonnet judge as before: `11-rejected-option`, `01-workshop-full`, `02-launch-full` and `08-dropped-option` on all three models, and `05-draft-is-not-a-decision` on haiku. That is 24 haiku, 10 sonnet and 8 opus sessions, compared with the same cases on 0.3.18.
+**Live.** The cases where the hook has lines to show ran on this change, graded by the same sonnet judge as before: `11-rejected-option`, `01-workshop-full`, `02-launch-full` and `08-dropped-option` on all three models, and `05-draft-is-not-a-decision` on haiku. That is 24 haiku, 10 sonnet and 8 opus sessions, compared with the same cases on 0.3.18. Every other case ran on this version too; [the results across all cases](EVAL-RESULTS-2026-11-26.md) compare all 88 sessions with 0.3.18.
 
 - The first batch had haiku three times and sonnet and opus twice. It ran on the first version of this change, which keyed an undecided item's line by its text and held no write after a no-record block. A 5-hour usage limit cut ten of its sessions: `--rerun` ran them again from the start on that version, and `--regrade --errors-only` gave the verdicts the judge had missed.
 - Later batches ran on the final version: haiku on cases 11, 01 and 02 twice and on 08 and 05 three times, and sonnet on 01 twice.
