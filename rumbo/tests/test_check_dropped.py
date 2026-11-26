@@ -227,12 +227,15 @@ class DroppedCheckTests(unittest.TestCase):
         self.assertEqual(out.splitlines(),
                          ["C1: DROPPED before Dr. Okafor's slide approval before the workshop by I3"])
 
-    def test_without_dropped_by_the_check_reads_as_an_assumption(self):
+    def test_without_dropped_by_the_check_names_the_replaced_words_of_its_date(self):
         # The live failure: the date came from a replaced item, so it read as unsourced.
+        # Since 0.3.22 the line says whose words it was and how to resolve it.
         self.write([SLIDES])
         code, out, _err = self.run_record(["check"])
         self.assertEqual(code, 1)
-        self.assertIn("(also unsourced: first month-day 03-20)", out)
+        self.assertIn("(also unsourced: first month-day 03-20; only in the words of I2, which I3 replaced: "
+                      "if the user kept these values", out)
+        self.assertIn("or set its dropped_by)", out)
 
     def test_show_and_pre_write_leave_out_a_dropped_check(self):
         self.write([DROPPED])
