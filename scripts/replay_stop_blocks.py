@@ -34,11 +34,21 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 # tool results and hook feedback do not count as prompts here either.
 from claude_multiturn_eval import _is_user_turn  # noqa: E402
 
+# Since 0.3.22 an UNSOURCED line, and the also-unsourced list of a FAIL line, can end
+# with a note on values that only replaced items' words give.
 UNSOURCED = re.compile(r"^(C\d+): UNSOURCED (fits_window|within_budget|before)(?: .*?)?: "
-                       r"((?:start|end|segments_min|amounts|total_cap|item_cap|first|second) .*) "
-                       r"not in the user's quoted words$")
+                       r"((?:start|end|segments_min|amounts|total_cap|item_cap|first|second) .*?) "
+                       r"not in the user's quoted words(?: \(.*only in the words of .*\))?$")
 FAILING = re.compile(r"^(C\d+): FAIL (fits_window|within_budget|before)\b")
-ALSO_UNSOURCED = re.compile(r" \(also unsourced: (.*)\)$")
+ALSO_UNSOURCED = re.compile(r" \(also unsourced: (.*?)(?:; [^;]*?only in the words of .*)?\)$")
+# The note itself, which a rebuilt one-check record cannot give back: it has no items.
+NOTE_IN_ALSO = re.compile(r"; [^;]*?only in the words of .*(?=\)$)")
+NOTE_AT_END = re.compile(r" \([^()]*?only in the words of .*\)$")
+
+
+def _without_source_note(line):
+    """line without the note on values only replaced items' words give, so rebuilt lines compare."""
+    return NOTE_IN_ALSO.sub("", line, count=1) if FAILING.match(line) else NOTE_AT_END.sub("", line, count=1)
 # A repeat block names no problem lines, only the ids of the problems its
 # reply left unstated; their lines are the last full block's, unchanged.
 REPEAT = re.compile(r"rumbo: still open, unchanged since the last block: (.*?)\. Fix them, or if", re.DOTALL)
@@ -138,7 +148,7 @@ def _rebuild_failing(line, reader, final):
         return None
     record = {"version": 1, "objective": {"text": "Replay", "quote": "We plan for %s." % "; ".join(words or ["it"])},
               "items": [], "checks": [check]}
-    if reader.validate_record(record) or reader.record_problems(record)[0] != [line]:
+    if reader.validate_record(record) or reader.record_problems(record)[0] != [_without_source_note(line)]:
         return None
     return match.group(1), record
 

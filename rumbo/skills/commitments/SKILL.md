@@ -76,7 +76,13 @@ has already settled.
 
 List the supporting item ids in each check's `refs`. Only those items' quotes
 and the objective quote source the check; `done`, `rejected`, and replaced items
-cannot source it. Missing or null `refs` falls back to all active items for legacy
+cannot source it. So when the user chooses among options you recorded ("I want
+to do both"), record the choice as its own item and do not replace the items
+whose values the choice keeps, such as the prices or dates of the options chosen;
+replace an item only when the user's words change or drop it. A `SOURCE` line
+means a value is only in the words of an item you replaced: source it again
+from an item in `refs` that is not replaced if the user kept it, or update or
+drop the check if they did not. Never call such a value your assumption. Missing or null `refs` falls back to all active items for legacy
 records, while `refs: []` means only the objective. Include every supporting item
 explicitly so unrelated numbers cannot accidentally make an assumption look sourced.
 
@@ -136,8 +142,8 @@ the user never sees it.
 ## Before writing
 
 Before you write or edit a file, a hook may hold the write once to show you the
-record's open problems (`CONFLICT` and `ASSUMPTION` lines, each with the action
-to take) and the items the user has not decided (`NOT DECIDED` lines). Write
+record's open problems (`CONFLICT`, `ASSUMPTION` and `SOURCE` lines, each with
+the action to take) and the items the user has not decided (`NOT DECIDED` lines). Write
 again with them in view: fix the plan only as the user agrees, or say the
 problem plainly in what you write, and present each undecided item as open. The
 same lines do not hold a write again. In a planning session with no record, the

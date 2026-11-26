@@ -852,6 +852,87 @@ def unsourced_values(record, check):
     return [label for label, _reading, _value in _unsourced(record, check)]
 
 
+# A replacement takes an item's words out of every check's sources. In a live
+# 0.3.21 session the user said "I want to do both marketing options", the agent
+# recorded that as a commitment replacing the items that quoted the $650 and
+# $300 prices, and every hook then called the user's prices the agent's own
+# assumption. A replacement that drops an option should take its values away
+# (see dropped_by); one that only chooses it should not, and only the agent
+# knows which it was. So the problem lines name the replaced words instead.
+def replaced_sources(record, check, unsourced):
+    """(labels, old ids, newer ids) for the unsourced values only replaced items' words give.
+
+    An item counts when the check's refs list it or an item that replaced it
+    (without refs, every item); a done or rejected item never does. Each list
+    keeps record order, and labels keeps the order and repeats of unsourced.
+    Empty lists when no replaced item gives one of them.
+    """
+    if not unsourced:
+        return [], [], []
+    items = record.get("items") or []
+    newer_of = {}
+    for item in items:
+        for ref in item.get("replaces") or []:
+            newer_of.setdefault(ref, []).append(item["id"])
+    refs = check.get("refs")
+    base = _source_text(record, check)
+    given, olds = set(), []
+    for item in items:
+        newer = newer_of.get(item["id"])
+        if not newer or item["status"] in ("done", "rejected"):
+            continue
+        if refs is not None and item["id"] not in refs and not any(new in refs for new in newer):
+            continue
+        still = {label for label, _reading, _value in _unsourced(record, check, source=base + "\n" + item["quote"])}
+        found = {label for label in unsourced if label not in still}
+        if found:
+            given |= found
+            olds.append(item["id"])
+    labels = [label for label in unsourced if label in given]
+    newer_ids = {new for old in olds for new in newer_of[old]}
+    return labels, olds, [item["id"] for item in items if item["id"] in newer_ids]
+
+
+def _id_list(ids):
+    return ids[0] if len(ids) == 1 else ", ".join(ids[:-1]) + " and " + ids[-1]
+
+
+SOURCE_ACTION = ("if the user kept these values, they are not your assumption: source them from an item in this "
+                 "check's refs that is not replaced (take %s out of %s, or quote the user's words that keep them); "
+                 "if the user dropped them, update the check without them, or set its dropped_by")
+
+
+def _replaced_words(olds, newer):
+    """'I2 and I7, which I10 replaced', and SOURCE_ACTION for them."""
+    where = "%s's replaces" % newer[0] if len(newer) == 1 else "the replaces of %s" % _id_list(newer)
+    return "%s, which %s replaced" % (_id_list(olds), _id_list(newer)), SOURCE_ACTION % (_id_list(olds), where)
+
+
+def replaced_source_note(record, check, unsourced):
+    """(labels, note): what replaced items' words give of unsourced, and what to do; ([], None) if nothing."""
+    labels, olds, newer = replaced_sources(record, check, unsourced)
+    if not labels:
+        return [], None
+    words, action = _replaced_words(olds, newer)
+    return labels, "only in the words of %s: %s" % (words, action)
+
+
+def problem_line(record, check, passed, unsourced):
+    """The FAIL or UNSOURCED line `check` prints and the Stop gate shows, or None for a clean check."""
+    labels, note = replaced_source_note(record, check, unsourced)
+    note = "" if note is None else (note if labels == unsourced else "%s %s" % (", ".join(labels), note))
+    if not passed:
+        line = status_line(check)
+        if unsourced:
+            line += " (also unsourced: %s%s)" % (", ".join(unsourced), "; " + note if note else "")
+        return line
+    if unsourced:
+        return "%s: UNSOURCED %s%s: %s not in the user's quoted words%s" % (
+            check["id"], check["kind"], " " + check["label"] if check.get("label") else "",
+            ", ".join(unsourced), " (%s)" % note if note else "")
+    return None
+
+
 def _unsourced(record, check, source=None):
     """(label, reading, value) for each unsourced value in check; reading names
     the matcher that reads the value in text (see _says). source replaces the
@@ -1951,7 +2032,12 @@ def undecided_item_lines(record):
 
 
 def open_problem_lines(record):
-    """One line per failing or unsourced check, each naming the action to take."""
+    """One line per failing or unsourced check, each naming the action to take.
+
+    Values that only replaced items' words give get a SOURCE line instead of an
+    ASSUMPTION line: they are the user's words, which a replacement took out of
+    the sources (see replaced_sources).
+    """
     lines = []
     for check, detail in failing_checks(record):
         lines.append("CONFLICT %s: %s -> %s" % (check["id"], detail, CONFLICT_ACTIONS[check["kind"]]))
@@ -1960,11 +2046,16 @@ def open_problem_lines(record):
         if check["id"] in replaced:
             continue
         passed, _ = evaluate_check(check)
-        if passed:
-            unsourced = unsourced_values(record, check)
-            if unsourced:
-                lines.append("ASSUMPTION %s: %s not in the user's quoted words -> %s" % (
-                    check["id"], ", ".join(unsourced), ASSUMPTION_ACTION))
+        unsourced = unsourced_values(record, check)
+        labels, olds, newer = replaced_sources(record, check, unsourced)
+        own = [label for label in unsourced if label not in labels]
+        if passed and own:
+            lines.append("ASSUMPTION %s: %s not in the user's quoted words -> %s" % (
+                check["id"], ", ".join(own), ASSUMPTION_ACTION))
+        if labels:
+            words, action = _replaced_words(olds, newer)
+            lines.append("SOURCE %s: %s %s only in the words of %s -> %s" % (
+                check["id"], ", ".join(labels), "is" if len(labels) == 1 else "are", words, action))
     return lines
 
 
@@ -2013,27 +2104,12 @@ def cmd_check(args):
             continue
         passed, detail = evaluate_check(check)
         unsourced = unsourced_values(record, check)
-
+        line = problem_line(record, check, passed, unsourced)
         if not passed:
-            # Check failed
-            line = status_line(check)
-            if unsourced:
-                line += " (also unsourced: %s)" % ", ".join(unsourced)
             failed = True
-            print(line)
         elif unsourced:
-            # Check passed but has unsourced values
-            line = "%s: UNSOURCED %s%s: %s not in the user's quoted words" % (
-                check["id"], check["kind"],
-                (" " + check["label"]) if check.get("label") else "",
-                ", ".join(unsourced)
-            )
-            print(line)
             unsourced_found = True
-        else:
-            # Check passed and clean
-            line = status_line(check)
-            print(line)
+        print(line if line is not None else status_line(check))
 
     # Handle transcript verification if --transcript is provided
     if hasattr(args, 'transcript') and args.transcript:
@@ -2651,17 +2727,8 @@ def record_problems(record):
         if check["id"] in replaced:
             continue
         passed, _detail = evaluate_check(check)
-        unsourced = unsourced_values(record, check)
-        if not passed:
-            line = status_line(check)
-            if unsourced:
-                line += " (also unsourced: %s)" % ", ".join(unsourced)
-        elif unsourced:
-            line = "%s: UNSOURCED %s%s: %s not in the user's quoted words" % (
-                check["id"], check["kind"],
-                " " + check["label"] if check.get("label") else "",
-                ", ".join(unsourced))
-        else:
+        line = problem_line(record, check, passed, unsourced_values(record, check))
+        if line is None:
             continue
         parts.append(line)
         ids.append(check["id"])
