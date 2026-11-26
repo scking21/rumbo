@@ -1,6 +1,6 @@
 # Eval results across models: Claude adapter 0.3.21 against 0.3.18
 
-Every bundled eval case ran on the Claude adapter 0.3.21 with sonnet, haiku and opus. The runs were graded by the same sonnet judge as [the 0.3.18 runs](EVAL-RESULTS-2026-11-25.md#0318-against-0315), and are compared with them here. Between the two versions:
+Every bundled eval case from `01` to `11` ran on the Claude adapter 0.3.21 with sonnet, haiku and opus. The runs were graded by the same sonnet judge as [the 0.3.18 runs](EVAL-RESULTS-2026-11-25.md#0318-against-0315), and are compared with them here. Between the two versions:
 
 - 0.3.19 reads a conflict already told in a later status line ([notes](UPDATE-2026-11-25-told-conflicts.md)).
 - 0.3.20 lists undecided items before a write ([notes](UPDATE-2026-11-25-not-decided.md)).
@@ -58,6 +58,19 @@ Every other grader passed in every session on both versions.
 - **Sonnet's one miss:** in `08-dropped-option`, a reply restated that the dropped deadline fell after the workshop, in a session with no hold or block.
 - **Stop blocks.** Only five cases had blocks on either version: 01, 02, 05, 08 and 11. Haiku's rate there was about the same: 1.5 per session, against 1.5 on 0.3.18. By case it fell in 01 and 11 and rose in 02 and 08. Sonnet had 1 block where it had 3, and opus 5 where it had 5.
 - **Record ids.** No reply named a record id. On 0.3.18, two haiku replies had, each right after a full Stop block.
+
+## A coding task that looks like planning
+
+`12-neg-code-with-times` is new. It asks for a small Python module and its tests in two turns that mention 9:30 and a Friday deadline. The plugin counts both prompts as planning, though the work needs no decision record. It ran on 0.3.18 and on 0.3.21, from the same copies as above, with three haiku sessions and two each of sonnet and opus per version.
+
+| Version | Gradings passed | Stop blocks | Held writes | Records started | Cost per session: sonnet, haiku, opus |
+| --- | --- | --- | --- | --- | --- |
+| 0.3.18 | 21 of 21 | 7 | 0 | 0 | $0.11, $0.007, $0.24 |
+| 0.3.21 | 21 of 21 | 0 | 7 | 0 | $0.12, $0.009, $0.28 |
+
+- On 0.3.18, every session's second turn ended in the Stop gate's no-record block, and the agent then told the user why the work needed no record.
+- On 0.3.21, the test file's first write was held instead. Every agent wrote it again unchanged and started no record. Haiku and sonnet told the user ("The first write was held by a hook asking for a decision record. I wrote the file again without one ..."), and opus did not mention it.
+- So the session's one no-record enforcement moved from the stop to the write, at a few cents' cost, and the graded work was the same.
 
 ## Limits
 
