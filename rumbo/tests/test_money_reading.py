@@ -68,6 +68,19 @@ class MoneyReadingTests(unittest.TestCase):
         self.assertEqual(unsourced(budget([20]), "Budget $600. A $20.50 May fee."), ["amounts 20"])
         self.assertEqual(unsourced(budget([0.5]), "Budget $600. Due May 20.50 total."), ["amounts 0.5"])
 
+    def test_a_date_does_not_run_from_one_quote_into_the_next(self):
+        # Codex review on 0.3.26: a check's sources are its quotes joined by line
+        # breaks, so "launch in May" then "20 for printing" must not read as May 20.
+        for said, quote in (("Our budget is 600; launch in May", "20 for printing"),
+                            ("Our budget is 600 and printing is 20", "May we add flyers?")):
+            with self.subTest(said=said, quote=quote):
+                check = budget([20], refs=["I1"])
+                document = {"version": 1, "objective": {"text": "Plan", "quote": said},
+                            "items": [{"id": "I1", "text": "t", "quote": quote, "status": "commitment"}],
+                            "checks": [check]}
+                self.assertEqual(record.unsourced_values(document, check), [])
+        self.assertEqual(unsourced(budget([20]), "Budget $600, launch in May 20."), ["amounts 20"])
+
     def test_a_cap_and_a_price_per_unit_are_money_but_a_quantity_can_be_hours(self):
         said = "The room is $150 an hour for 4 hours, and the whole budget is 600."
         self.assertEqual(unsourced(budget([{"unit": 150, "quantity": 4}]), said), [])

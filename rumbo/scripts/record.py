@@ -380,8 +380,10 @@ MONEY_EXCLUDED_UNIT = re.compile(
 # that starts like one, and "marketing 50" is money.
 WHOLE_MONTH = (r"(?:(?i:january|february|march|april|june|july|august|september|october|november|december|"
                r"jan|feb|mar|apr|jun|jul|aug|sept|sep|oct|nov|dec)\b\.?|May\b)")
-DATE_TEXT = re.compile(r"\b" + WHOLE_MONTH + r"\s*\d{1,2}(?:st|nd|rd|th)?\b"
-                       r"|\b\d{1,2}(?:st|nd|rd|th)?\s+(?:of\s+)?" + WHOLE_MONTH +
+# A date stays on one line: a check's sources are its quotes joined by line
+# breaks, and "launch in May" then "20 for printing" is no May 20.
+DATE_TEXT = re.compile(r"\b" + WHOLE_MONTH + r"[^\S\n]*\d{1,2}(?:st|nd|rd|th)?\b"
+                       r"|\b\d{1,2}(?:st|nd|rd|th)?[^\S\n]+(?:of[^\S\n]+)?" + WHOLE_MONTH +
                        r"|(?<!\d)\d{4}-\d{1,2}-\d{1,2}(?!\d)")
 
 
