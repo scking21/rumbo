@@ -132,6 +132,8 @@ Those commands access the revision actually on the remote; verify its branch/ver
 
 In 0.3, missing or unreadable transcripts now trigger the existing bounded Stop provenance warning/block behavior rather than silently skipping verification. Source checks respect `refs` and exclude done/rejected/replaced items. Missing/null refs use active items plus the objective; explicit `[]` uses only the objective. Historical records may need corrected refs. Read [migration details](docs/MIGRATION.md) and the [legacy specification](rumbo/SPEC.md).
 
+Since 0.3.21 the hook that runs before a file write can hold that write once. Claude Code shows it as a `PreToolUse` hook error whose text starts with `rumbo:`. It lists the record's open problems and the items the user has not decided, or, in a planning session with no record, asks the agent to start one; the agent then writes again. A session's writes are held at most three times for the record's lines, and once for a missing record ([details](docs/UPDATE-2026-11-26-write-hold.md)).
+
 ## Verify
 
 ```sh
