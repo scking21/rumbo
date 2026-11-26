@@ -24,6 +24,14 @@ QUOTE = "Budget is $600 and close 12:30."
 SCALARS = [None, True, False, 0, -1, 1.5, 1e308, -1e308, 10 ** 30, "", "x", "09:45", "12:30", "24:00", "03-20",
            "2026-02-29", "02-29", "C1", "I1", "$600", "−", [], {}, ["C1"], ["I1"], {"unit": 5, "quantity": 2},
            {"label": "a", "amount": 3}, float("nan"), float("inf")]
+# Pieces of quotes the number, time and date readers must survive. "$1e999999k"
+# raised decimal.Overflow until a fuzz run in 0.3.23 found it.
+QUOTE_PIECES = ["$1.5k", "1e3", "1e999999", "$1e999999k", "1e999999 thousand", "9" * 400, "1,000,000", "½", "¾ of",
+                "twenty-five", "a thousand", "one point five million", "9:45", "12:30pm", "noon", "midnight",
+                "March 20", "20th", "2026-03-12", "−5", "-5", "١٢٣", "0.00", "zero", "fifteen hundred", "€300",
+                "£2.5M", "50%", "1/2", "9am-5pm", "18:00–09:00", "6pm–9am", "1 hour and a half", "half an hour",
+                "quarter past nine", "45 min", "Sept 31", "Feb 30", "13:61", "24:00", "the 3rd", "2nd of May",
+                "1e-999999", "$-0", "1.2.3", ".5", "one", "We need one."]
 REPLIES = [None, "", 42, "Ends 12:35, after the 12:30 close.", "## Budget (my estimate)\n| x | $350 |", "?" * 100,
            "March 20, 2026 is after March 12, 2026.", "$0 budget, $350 over", "\x00 weird", "x" * 30000]
 COMMANDS = (("validate", record.cmd_validate), ("check", record.cmd_check), ("show", record.cmd_show),
@@ -38,10 +46,14 @@ class Generator:
         r = self.random
         return r.choice(SCALARS) if r.random() < 0.8 else [r.choice(SCALARS) for _ in range(r.randint(0, 3))]
 
+    def quote(self):
+        r = self.random
+        return " ".join(r.choice(QUOTE_PIECES + ["and", "the", "budget"]) for _ in range(r.randint(1, 8)))
+
     def item(self, i):
         r = self.random
         item = {"id": r.choice(["I%d" % i, "I%d" % (i % 2), 5, None]), "text": r.choice(["t", "", None, 3]),
-                "quote": r.choice([QUOTE, "", None, "no", "We start 9:45 on March 20, 2026."]),
+                "quote": r.choice([QUOTE, "", None, "no", "We start 9:45 on March 20, 2026.", self.quote(), self.quote()]),
                 "status": r.choice(record.STATUSES + ["nope", None])}
         for key in ("replaces", "scope", "ref"):
             if r.random() < 0.3:
@@ -71,7 +83,8 @@ class Generator:
         if r.random() < 0.05:
             return r.choice([[], 3, "x", None, {"objective": 1}])
         document = {"version": r.choice([1, 2, None]),
-                    "objective": r.choice([{"text": "Plan", "quote": QUOTE}, {"text": "", "quote": ""}, None, "x"]),
+                    "objective": r.choice([{"text": "Plan", "quote": QUOTE}, {"text": "", "quote": ""}, None, "x",
+                                           {"text": "Plan", "quote": QUOTE + " " + self.quote()}]),
                     "items": [self.item(i) for i in range(r.randint(0, 4))],
                     "checks": [self.check(i) for i in range(r.randint(0, 5))]}
         for key in ("items", "checks"):
@@ -108,6 +121,49 @@ def run(command, args, stdin_text):
     return code, out.getvalue()
 
 
+class ValidGenerator:
+    """Records that validate, so every reader runs on quotes made of QUOTE_PIECES."""
+
+    def __init__(self, seed):
+        self.random = random.Random(seed)
+
+    def quote(self):
+        r = self.random
+        return " ".join(r.choice(QUOTE_PIECES + ["and", "the", "budget", "$600", "9:00", "March 12"])
+                        for _ in range(r.randint(1, 10)))
+
+    def document(self):
+        r = self.random
+        items = []
+        for n in range(1, r.randint(1, 6) + 1):
+            item = {"id": "I%d" % n, "text": "t", "quote": self.quote(),
+                    "status": r.choice(["commitment", "draft", "uncertain", "rejected", "deferred", "preference"])}
+            if n > 1 and r.random() < 0.4:
+                item["replaces"] = ["I%d" % r.randint(1, n - 1)]
+            items.append(item)
+        checks = []
+        for k in range(1, r.randint(1, 4) + 1):
+            refs = r.choice([None, [], ["I1"], ["I%d" % r.randint(1, len(items))]])
+            kind = r.choice(["within_budget", "fits_window", "before"])
+            check = {"id": "C%d" % k, "kind": kind}
+            if refs is not None:
+                check["refs"] = refs
+            if kind == "within_budget":
+                check.update(amounts=r.sample([0, 1, 5, 50, 300, 1500, 1000000, {"unit": 7, "quantity": 40}],
+                                              r.randint(0, 4)), total_cap=r.choice([0, 600, 1200, 10 ** 30]))
+            elif kind == "fits_window":
+                start, end, next_day = r.choice([("09:00", "12:30", False), ("00:00", "23:59", False),
+                                                 ("18:00", "09:00", True), ("21:00", "01:00", True)])
+                check.update(start=start, end=end, segments_min=[r.choice([15, 45, 60, 90]) for _ in range(r.randint(1, 4))])
+                if next_day:
+                    check["end_next_day"] = True
+            else:
+                check.update(r.choice([{"first": "03-20", "second": "03-12"}, {"first": "05-02", "second": "05-09"},
+                                       {"first": "2026-03-12", "second": "2027-03-20"}]))
+            checks.append(check)
+        return {"version": 1, "objective": {"text": "Plan", "quote": self.quote()}, "items": items, "checks": checks}
+
+
 class HookFuzzTests(unittest.TestCase):
     def test_no_command_crashes_on_malformed_records_and_hook_input(self):
         generator = Generator(20261124)
@@ -136,6 +192,42 @@ class HookFuzzTests(unittest.TestCase):
                                 decision = json.loads(out)
                                 self.assertEqual(decision["decision"], "block")
                                 self.assertIsInstance(decision["reason"], str)
+            finally:
+                if previous is None:
+                    os.environ.pop("RUMBO_STATE_DIR", None)
+                else:
+                    os.environ["RUMBO_STATE_DIR"] = previous
+
+    def test_no_command_crashes_on_valid_records_with_awkward_quotes(self):
+        generator = ValidGenerator(20261126)
+        with tempfile.TemporaryDirectory() as tmp:
+            previous = os.environ.get("RUMBO_STATE_DIR")
+            os.environ["RUMBO_STATE_DIR"] = os.path.join(tmp, "state")
+            try:
+                path = os.path.join(tmp, ".rumbo", "record.json")
+                os.makedirs(os.path.dirname(path))
+                transcript = os.path.join(tmp, "t.jsonl")
+                checked = 0
+                for case in range(200):
+                    document = generator.document()
+                    if record.validate_record(document):
+                        continue
+                    checked += 1
+                    with open(path, "w", encoding="utf-8") as handle:
+                        json.dump(document, handle)
+                    with open(transcript, "w", encoding="utf-8") as handle:
+                        for quote in [document["objective"]["quote"]] + [item["quote"] for item in document["items"]]:
+                            handle.write(json.dumps({"type": "user", "origin": {"kind": "human"},
+                                                     "message": {"role": "user", "content": quote}}) + "\n")
+                    hook = json.dumps({"session_id": "s%d" % case, "transcript_path": transcript, "cwd": tmp,
+                                       "last_assistant_message": generator.quote(), "prompt": generator.quote(),
+                                       "tool_input": {"file_path": os.path.join(tmp, "plan.md")}})
+                    for name, command in COMMANDS:
+                        with self.subTest(case=case, command=name):
+                            code, out = run(command, record.build_parser().parse_args([name, "--record", path]), hook)
+                            self.assertNotIn("GATE_ERROR", out, json.dumps(document))
+                            self.assertNotIn("Traceback", out)
+                self.assertGreater(checked, 150)
             finally:
                 if previous is None:
                     os.environ.pop("RUMBO_STATE_DIR", None)

@@ -46,5 +46,35 @@ class NumericBoundaryTests(unittest.TestCase):
                 self.assertEqual(record.validate_record(budget(value, 'total_cap')), [])
 
 
+class QuoteExponentTests(unittest.TestCase):
+    """A fuzz run found that "$1e999999k" in a quote raised decimal.Overflow while reading it."""
+
+    def test_a_scaled_number_past_what_a_decimal_holds_is_read_as_no_amount(self):
+        for text in ('$1e999999k', '1e999999 thousand', '£2.5e999999M'):
+            with self.subTest(text=text):
+                self.assertFalse(record._is_number_sourced(5, text))
+                self.assertEqual(record._sourced_numbers(text), frozenset())
+        self.assertTrue(record._is_number_sourced(1500, '$1.5k'))
+
+    def test_check_and_the_stop_gate_read_such_a_quote_without_an_error(self):
+        document = budget(1, 'total_cap')
+        document['objective']['quote'] = 'Budget 1 and 2, maybe $1e999999k.'
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'record.json'
+            path.write_text(json.dumps(document))
+            result = subprocess.run([sys.executable, str(SCRIPT), 'check', '--record', str(path)],
+                                    capture_output=True, text=True, timeout=10)
+            self.assertEqual((result.returncode, result.stderr), (0, ''), result.stdout)
+            transcript = Path(directory) / 't.jsonl'
+            transcript.write_text(json.dumps({'type': 'user', 'origin': {'kind': 'human'},
+                                              'message': {'role': 'user', 'content': document['objective']['quote']}}) + '\n')
+            gate = subprocess.run([sys.executable, str(SCRIPT), 'stop-gate', '--record', str(path)],
+                                  input=json.dumps({'session_id': 's1', 'transcript_path': str(transcript),
+                                                    'last_assistant_message': 'Done.'}),
+                                  capture_output=True, text=True, timeout=10)
+            self.assertNotIn('GATE_ERROR', gate.stdout)
+            self.assertEqual(gate.stdout.strip(), '')
+
+
 if __name__ == '__main__':
     unittest.main()
