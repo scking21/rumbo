@@ -51,6 +51,7 @@ class HoldOutcomeTests(unittest.TestCase):
             write("t3", "/p/notes.md", "x"),
             result("t3", "PreToolUse:Write hook error: " + UNDECIDED),
             write("t4", "/p/notes.md", "x"),
+            result("t4", "File created", error=False),
         ])
         self.session("01-b-1", [
             prompt("Plan it."),
@@ -67,6 +68,32 @@ class HoldOutcomeTests(unittest.TestCase):
         self.assertIn("u-haiku 01-b-1 turn 1: plan.md held (undecided), not written again", lines)
         self.assertIn("u-haiku 11-a-1 turn 2: plan.md held (no record), changed", lines)
         self.assertIn("u-haiku 11-a-1 turn 2: notes.md held (undecided), unchanged", lines)
+        self.assertEqual(lines[-1], "u-haiku: 3 held writes, 1 changed, 1 unchanged, 1 not written again")
+
+    def test_only_a_write_that_went_through_counts_as_written_again(self):
+        # After a no-record hold the agent starts a record, and its next write is held for that record's lines.
+        self.session("11-a-2", [
+            prompt("Plan the offsite."), prompt("Write plan.md."),
+            write("t1", "/p/plan.md", "Venue: community center"),
+            result("t1", "PreToolUse:Write hook error: " + NO_RECORD),
+            write("t2", "/p/plan.md", "Venue: community center, to confirm"),
+            result("t2", "PreToolUse:Write hook error: " + UNDECIDED),
+            write("t3", "/p/plan.md", "Venue: community center, to confirm"),
+            result("t3", "File created", error=False),
+        ])
+        self.session("11-a-3", [
+            prompt("Write plan.md."),
+            write("t1", "/p/plan.md", "a"),
+            result("t1", "PreToolUse:Write hook error: " + NO_RECORD),
+            write("t2", "/p/plan.md", "b"),
+            result("t2", "Error writing file: disk full"),
+        ])
+        done = subprocess.run([sys.executable, SCRIPT, self.run_dir], capture_output=True, text=True, timeout=30)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        lines = done.stdout.splitlines()
+        self.assertIn("u-haiku 11-a-2 turn 2: plan.md held (no record), changed", lines)
+        self.assertIn("u-haiku 11-a-2 turn 2: plan.md held (undecided), unchanged", lines)
+        self.assertIn("u-haiku 11-a-3 turn 1: plan.md held (no record), not written again", lines)
         self.assertEqual(lines[-1], "u-haiku: 3 held writes, 1 changed, 1 unchanged, 1 not written again")
 
     def test_usage(self):

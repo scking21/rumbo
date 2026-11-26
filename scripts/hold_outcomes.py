@@ -9,7 +9,9 @@ tool result is an error starting "PreToolUse:" with the plugin's "rumbo:" text.
 For each one this prints its turn, what the hold showed (no record, problems,
 undecided items, or both) and what came next in that turn: the same file
 written again with changed content, written again unchanged, or not written
-again. Then one line per RUN_DIR with the counts.
+again. Only a write whose tool result is not an error counts as written; an
+attempt that is held again or fails is passed over. Then one line per RUN_DIR
+with the counts.
 """
 import collections
 import json
@@ -44,7 +46,7 @@ def holds(transcript):
         for line in handle:
             if line.strip():
                 entries.append(json.loads(line))
-    tools, turns, turn = {}, [], 0
+    tools, turns, turn, failed = {}, [], 0, {}
     for entry in entries:
         turn += _is_user_turn(entry)
         turns.append(turn)
@@ -52,6 +54,10 @@ def holds(transcript):
             for block in entry.get("message", {}).get("content") or []:
                 if isinstance(block, dict) and block.get("type") == "tool_use":
                     tools[block.get("id")] = block
+        content = entry.get("message", {}).get("content") if entry.get("type") == "user" else None
+        for block in content if isinstance(content, list) else []:
+            if isinstance(block, dict) and block.get("type") == "tool_result":
+                failed[block.get("tool_use_id")] = bool(block.get("is_error"))
     found = []
     for index, entry in enumerate(entries):
         content = entry.get("message", {}).get("content") if entry.get("type") == "user" else None
@@ -65,6 +71,8 @@ def holds(transcript):
                 continue
             held = tools.get(block.get("tool_use_id")) or {}
             path = (held.get("input") or {}).get("file_path") or (held.get("input") or {}).get("notebook_path")
+            # Only a write that went through counts: the next attempt can be held again,
+            # for instance once the agent has started the record a no-record hold asked for.
             outcome = "not written again"
             for later in entries[index + 1:]:
                 if _is_user_turn(later):
@@ -73,7 +81,8 @@ def holds(transcript):
                     continue
                 again = [b for b in later.get("message", {}).get("content") or [] if isinstance(b, dict)
                          and b.get("type") == "tool_use" and b.get("name") in WRITES
-                         and ((b.get("input") or {}).get("file_path") or (b.get("input") or {}).get("notebook_path")) == path]
+                         and ((b.get("input") or {}).get("file_path") or (b.get("input") or {}).get("notebook_path")) == path
+                         and failed.get(b.get("id")) is False]
                 if again:
                     outcome = "unchanged" if _body(again[0]) == _body(held) else "changed"
                     break
