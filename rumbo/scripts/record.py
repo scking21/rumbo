@@ -2776,8 +2776,11 @@ ORDER_WORDS = re.compile(r"\b(?:after|later|past|but|conflicts?|conflicting|too 
 OVER_WORDS = re.compile(r"\b(?:over|overruns?|overages?|exceeds?|exceeded|exceeding|past|after|late|later|longer|"
                         r"too long|too much|more than|above|beyond|short|conflicts?|conflicting)\b", re.IGNORECASE)
 # Words that call a value the agent's own. A section (see _sections) that has
-# one covers the values in it; a question mark covers only its own line.
+# one covers the values in it; a question mark covers only its own line. A value
+# worked out from the user's words is the agent's too (live: "By my calculation,
+# 10 days before October 3 is September 23"); "calculator" does not count.
 ASSUMPTION_WORDS = re.compile(r"\b(?:assum\w*|estimat\w*|est\.|guess\w*|propos\w*|suggest\w*|placeholders?|"
+                              r"calculat(?:e[ds]?|ing|ions?)\b|"
                               r"unconfirmed|not (?:yet )?confirmed|please confirm|to be confirmed|tb[cd]\b|still open|"
                               r"not yours)", re.IGNORECASE)
 # After "you" or "your" and at most two more words, those words give the value
@@ -2941,7 +2944,7 @@ def stated_checks(record, reply, told=None):
     with a word such as "over" (and the same for an amount over item_cap). An
     unsourced value is stated when a line names it and either asks about it
     with a question mark, or sits in a section that calls something an
-    assumption or estimate, or the reply's preamble does. An assumed price per
+    assumption, estimate or calculation, or the reply's preamble does. An assumed price per
     unit is also named by its entry's total.
 
     told maps a check id to the labels of assumed values ("start 09:00") that

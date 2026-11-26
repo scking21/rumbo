@@ -58,7 +58,7 @@ ask them to decide it again.
 
 ## Sourced values
 
-A check's values must come from the user's quoted words. If you must assume a value (a start time, a shortened break), leave it visible (`check` shows it as UNSOURCED) and tell the user plainly that it is your assumption. Never change a value to make a check pass.
+A check's values must come from the user's quoted words. If you must assume a value (a start time, a shortened break), leave it visible (`check` shows it as UNSOURCED) and tell the user plainly that it is your assumption. A value you work out from the user's words (a deadline 10 days before their event) is not in their words either: say it is your calculation. Never change a value to make a check pass.
 
 When the user later gives a value you assumed, or their own plan replaces the
 one a check was about, add an item with their words and a check with their
@@ -177,7 +177,7 @@ minutes past the close"), both dates with a word that orders them ("the March
 20 deadline is after the March 12 workshop", with the years when they differ),
 or the total and its cap ("$550, over the $500 budget", or "$50 over the
 budget"). An assumed value is stated when its line, its section or the opening
-of the reply calls it your assumption, estimate or proposal, or its line asks
+of the reply calls it your assumption, estimate, calculation or proposal, or its line asks
 the user about it; a block written as a time range ("9:20–10:35") names its
 minutes. Once a reply has stated every assumed value of a check, a later
 reply in the session states them with one line that calls one of them, or the

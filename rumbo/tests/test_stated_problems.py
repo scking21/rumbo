@@ -310,6 +310,31 @@ class StatementReadingTests(unittest.TestCase):
             with self.subTest(reply=reply):
                 self.assertEqual(stated(reply, launch, said), expected)
 
+    def test_a_value_called_the_agents_calculation_is_its_own(self):
+        # Live, blocked on 0.3.21 (opus): "By my calculation, 10 days before
+        # October 3 is September 23"; on 0.3.19 (haiku): "The 45-minute arrival
+        # window is my calculation from 9:00 to 9:45".
+        deadline = check(kind="before", first="09-23", second="10-03")
+        said = "Proof of insurance must reach the hall at least 10 days before the October 3 event."
+        for reply, expected in (("By my calculation, 10 days before October 3 is September 23.", {"C1"}),
+                                ("I calculated September 23 as the latest day for the proof.", {"C1"}),
+                                ("September 23 is the deadline (calculated from October 3).", {"C1"}),
+                                ("## Deadlines (my calculations)\n- Insurance proof: September 23", {"C1"}),
+                                ("September 23 is the deadline, as your calculation says.", set()),
+                                ("With the hall's calculator, September 23 is the deadline.", set()),
+                                ("September 23 is the deadline.", set())):
+            with self.subTest(reply=reply):
+                self.assertEqual(stated(reply, deadline, said), expected)
+        # Told in full once, the date is still open with a line that calls it a calculation.
+        told = {"C1": ["first month-day 09-23"]}
+        self.assertEqual(stated("The insurance deadline is still my calculation.", deadline, said, told), {"C1"})
+        self.assertEqual(stated("The insurance deadline is still my calculation.", deadline, said), set())
+        arrival = check(kind="fits_window", start="09:00", segments_min=[45], end="09:45")
+        said = "Doors open at 9:00 and the first session starts at 9:45."
+        self.assertEqual(stated("The 45-minute arrival window is my calculation from 9:00 to 9:45.", arrival, said),
+                         {"C1"})
+        self.assertEqual(stated("The 45-minute arrival window runs from 9:00 to 9:45.", arrival, said), set())
+
     def test_an_overage_is_an_overrun(self):
         # Live (haiku, 0.3.15): "The 5-minute overage goes away" stated the overrun.
         late = check(kind="fits_window", start="09:45", segments_min=[75, 20, 75], end="12:30")
