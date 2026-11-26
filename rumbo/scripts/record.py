@@ -2350,21 +2350,33 @@ def _take_hold(session_id):
 
 
 def _hold_without_record(session_id):
-    """True to hold this write: a planning session with no record, not yet held or blocked for it.
+    """True to hold this write: the first write of a planning session that has no record.
 
-    This is the Stop gate's one no-record block of a session, taken at the first
-    write instead, so the plan is written after the record and not before it.
+    The session counts as planning once the prompt hook nudged it and it had two
+    planning-looking prompts, as for the Stop gate's one no-record block. A hold
+    that comes first takes that block's place (the plan is then written after the
+    record, not before it). One that comes after the block still holds once:
+    "nothing is decided yet" may answer a block, and the user decides later.
     """
     nudged = _marker_path(session_id, ".nudged")
     enforced = _marker_path(session_id, ".enforced")
-    if not nudged or _planning_prompts(session_id) < 2:
+    held = _marker_path(session_id, ".norecord-held")
+    if not held or _planning_prompts(session_id) < 2:
         return False
     try:
-        if os.path.exists(enforced) or not os.path.exists(nudged):
+        if os.path.exists(held) or not (os.path.exists(nudged) or os.path.exists(enforced)):
             return False
-        os.rename(nudged, enforced)
+        # Saved first: without it every write would be held.
+        with _open_marker(held, "w") as handle:
+            handle.write("1")
     except OSError:
         return False
+    try:
+        # A hold that comes first is the session's no-record enforcement: the Stop gate then does not block for it.
+        if os.path.exists(nudged) and not os.path.exists(enforced):
+            os.rename(nudged, enforced)
+    except OSError:
+        pass
     return True
 
 

@@ -174,11 +174,35 @@ class WriteHoldTests(unittest.TestCase):
         self.prompt(WRITE_PLAN, session="s2")
         self.assertEqual(self.pre_write(session="s2")["permissionDecision"], "deny")
 
-    def test_a_session_the_stop_gate_already_blocked_is_not_held(self):
+    def test_a_session_the_stop_gate_already_blocked_is_held_once_at_its_first_write(self):
+        # Live 0.3.21 run: haiku answered the block with "nothing has been decided yet, so there's
+        # no decision record to keep", the user then chose, and the plan came without a record.
         self.prompt(GOAL)
         self.prompt(WRITE_PLAN)
         self.assertIn("there is no decision record", self.stop())
+        self.prompt("I think we should go with just the community center.")
+        self.assertEqual(self.pre_write()["permissionDecisionReason"], record.PRE_WRITE_NO_RECORD)
         self.assertIsNone(self.pre_write())
+        self.assertIsNone(self.stop(), "the Stop gate's block was the session's one")
+
+    def test_a_write_is_not_held_for_a_missing_record_when_its_marker_cannot_be_saved(self):
+        self.prompt(GOAL)
+        self.prompt(WRITE_PLAN)
+        # A link where the marker goes: markers are never written through one, so the hold is not kept.
+        previous = os.environ.get("RUMBO_STATE_DIR")
+        os.environ["RUMBO_STATE_DIR"] = self.env["RUMBO_STATE_DIR"]
+        try:
+            held = record._marker_path("s1", ".norecord-held")
+        finally:
+            if previous is None:
+                del os.environ["RUMBO_STATE_DIR"]
+            else:
+                os.environ["RUMBO_STATE_DIR"] = previous
+        os.symlink(os.path.join(self.tmp.name, "elsewhere"), held)
+        for _ in range(2):
+            self.assertIsNone(self.pre_write())
+        self.assertFalse(os.path.exists(os.path.join(self.tmp.name, "elsewhere")))
+        self.assertIn("there is no decision record", self.stop(), "the Stop gate still enforces it")
 
     def test_without_a_session_a_write_is_never_held_for_a_missing_record(self):
         self.prompt(GOAL, session=None)
