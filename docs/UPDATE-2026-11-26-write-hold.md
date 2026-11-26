@@ -1,6 +1,6 @@
 # November 26 Claude adapter 0.3.21: a write is held once, so its lines come first
 
-This builds on [Claude adapter 0.3.20](UPDATE-2026-11-25-not-decided.md). It changes how the pre-write hook shows its lines, and moves the one no-record enforcement of a session from the Stop gate to the first write when that comes first. What the hooks check is unchanged.
+This builds on [Claude adapter 0.3.20](UPDATE-2026-11-25-not-decided.md). It changes how the pre-write hook shows its lines, and holds the first write of a planning session that has no record. What the hooks check is unchanged.
 
 ## Distribution identities
 
