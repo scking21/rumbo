@@ -20,8 +20,9 @@ run without --allow-shell; run it in a container or VM you can discard.
     python3 scripts/claude_multiturn_eval.py --allow-shell --out /tmp/mt --runs 2 \\
         rumbo/evals/01-workshop-full rumbo/evals/02-launch-full
 
-The summary counts the Stop hook's blocks, the replies that named a record id
-such as C5 to the user, and each session's cost. --grade also runs the case's
+The summary counts the Stop hook's blocks, the writes the pre-write hook held
+once, the replies that named a record id such as C5 to the user, and each
+session's cost. --grade also runs the case's
 graders: an llm grader judges the file it focuses on (plan.md), or for
 `focus: trace` the assistant's replies, with a judge model and the majority
 of three votes; a file_exists grader globs its path in the project. An
@@ -122,19 +123,30 @@ def replies(transcript):
 
 
 def read_session(transcript):
-    """(blocks, turns whose replies name a record id): blocks are (turn, reason)."""
-    turn, blocks, naming = 0, [], set()
+    """(blocks, turns whose replies name a record id, holds): blocks and holds are (turn, reason).
+
+    A hold is a write the plugin's pre-write hook denied once so the agent reads
+    its lines first: the tool result is an error that starts "PreToolUse:".
+    """
+    turn, blocks, naming, holds = 0, [], set(), []
     for line in open(transcript, encoding="utf-8"):
         entry = json.loads(line)
         attachment = entry.get("attachment") if isinstance(entry.get("attachment"), dict) else {}
         turn += _is_user_turn(entry)
         if attachment.get("hookEvent") == "Stop" and attachment.get("type") == "hook_blocking_error":
             blocks.append((turn, attachment.get("blockingError", {}).get("blockingError", "")))
+        content = entry.get("message", {}).get("content") if entry.get("type") == "user" else None
+        for block in content if isinstance(content, list) else []:
+            text = block.get("content") if isinstance(block, dict) and block.get("type") == "tool_result" else None
+            if isinstance(text, list):
+                text = " ".join(part.get("text", "") for part in text if isinstance(part, dict))
+            if block.get("is_error") and isinstance(text, str) and text.startswith("PreToolUse:") and "rumbo:" in text:
+                holds.append((turn, text.split(": ", 1)[-1] if ": " in text else text))
         if entry.get("type") == "assistant":
             for block in entry.get("message", {}).get("content") or []:
                 if block.get("type") == "text" and RECORD_ID.search(block.get("text", "")):
                     naming.add(turn)
-    return blocks, sorted(naming)
+    return blocks, sorted(naming), holds
 
 
 def grade(case, project, transcript, judge, only=None):
@@ -273,9 +285,11 @@ def regrade(folder, judge, errors_only=False):
 def report(rows):
     for row in rows:
         graded = row.get("graders")
-        print("%s run %d: %d turns, $%.3f, %d Stop blocks at turns %s, record ids named at turns %s%s%s" % (
+        print("%s run %d: %d turns, $%.3f, %d Stop blocks at turns %s, %d write holds at turns %s, "
+              "record ids named at turns %s%s%s" % (
             os.path.basename(os.path.normpath(row["case"])), row["run"], row["turns"], row["cost"] or 0,
-            len(row["blocks"]), [b["turn"] for b in row["blocks"]], row["naming_ids"],
+            len(row["blocks"]), [b["turn"] for b in row["blocks"]],
+            len(row.get("holds") or []), [h["turn"] for h in row.get("holds") or []], row["naming_ids"],
             "" if graded is None else ", graders %d/%d" % (
                 list(graded.values()).count("PASS"), len([v for v in graded.values() if v != "SKIPPED"])),
             "" if not row["failure"] else ", INCOMPLETE (%s)" % row["failure"]))
@@ -285,13 +299,14 @@ def run_one(case, n, root, plugin, model, turn_timeout, judge=None):
     """Run of case number n under root, as a summary row; with judge, a complete session is graded."""
     out = os.path.join(root, "%s-%d" % (os.path.basename(os.path.normpath(case)), n))
     row = dict(case=case, run=n, session=None, turns=0, cost=None, transcript=None, failure=None,
-               blocks=[], naming_ids=[])
+               blocks=[], naming_ids=[], holds=[])
     # One broken session, transcript or judge must not lose the others' results.
     try:
         row.update(run_session(case, plugin, model, out, turn_timeout))
         if row["transcript"]:
-            blocks, row["naming_ids"] = read_session(row["transcript"])
+            blocks, row["naming_ids"], holds = read_session(row["transcript"])
             row["blocks"] = [{"turn": turn, "reason": reason} for turn, reason in blocks]
+            row["holds"] = [{"turn": turn, "reason": reason} for turn, reason in holds]
         # An incomplete session has no final artifact to judge, and judging a
         # partial one would mix unfinished cases into the comparison.
         if judge and not row["failure"]:
