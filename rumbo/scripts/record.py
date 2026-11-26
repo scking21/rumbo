@@ -417,7 +417,12 @@ def _read_numbers(source_text, excluded_unit=None):
         scale = SCALE_SUFFIX.match(no_commas, match.end())
         if scale and (scale.group(1) or scale.group(2) or currency):
             word = (scale.group(1) or scale.group(2) or scale.group(3)).lower()
-            value *= {"k": 1000, "m": 10 ** 6, "bn": 10 ** 9}.get(word) or SCALE_WORDS[word]
+            try:
+                value *= {"k": 1000, "m": 10 ** 6, "bn": 10 ** 9}.get(word) or SCALE_WORDS[word]
+            except decimal.DecimalException:
+                # "$1e999999k" is past what a Decimal holds: no amount anyone means, and
+                # an error here would block every stop of the session as a gate error.
+                continue
             # "1 thousand and a half" is 1500 and "1 million 500 thousand" 1500000, not
             # 1000 or 1000000: check again after the scale.
             if AMOUNT_CONTINUED.match(no_commas, scale.end()) or SCALED_CONTINUED.match(no_commas, scale.end()):
