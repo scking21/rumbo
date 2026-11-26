@@ -367,6 +367,29 @@ def _is_number_sourced(num, source_text, excluded_unit=None):
     return decimal.Decimal(str(num)) in _sourced_numbers(source_text, excluded_unit)
 
 
+# Money is not written as a length of time, an ordinal, a clock time or a date, so
+# none of those sources a budget's amount, price per unit or cap: "he can only do a
+# 60-minute session" does not source $60, nor "Today is August 20" $20 (in saved
+# live records, 6 of 304 budget checks had an estimate that looked sourced so). A
+# quantity can be a length of time ("$150 an hour for 4 hours"): it reads as a number.
+MONEY_EXCLUDED_UNIT = re.compile(
+    r"(?:[\s-]*(?:minutes?|mins?|hours?|hrs?|h|seconds?|secs?|days?|weeks?|months?|years?|nights?)"
+    r"|st|nd|rd|th|\s*[ap]\.?\s*m)\b", re.IGNORECASE)
+# Only whole month names and their usual abbreviations: MONTH_NAME takes any word
+# that starts like one, and "marketing 50" is money.
+WHOLE_MONTH = (r"(?:(?i:january|february|march|april|june|july|august|september|october|november|december|"
+               r"jan|feb|mar|apr|jun|jul|aug|sept|sep|oct|nov|dec)\b\.?|May\b)")
+DATE_TEXT = re.compile(r"\b" + WHOLE_MONTH + r"\s*\d{1,2}(?:st|nd|rd|th)?\b"
+                       r"|(?<![$€£])\b\d{1,2}(?:st|nd|rd|th)?\s+(?:of\s+)?" + WHOLE_MONTH +
+                       r"|(?<!\d)\d{4}-\d{1,2}-\d{1,2}(?!\d)")
+
+
+def _is_money_sourced(num, source_text):
+    """True when a budget's amount, price per unit or cap is sourced in source_text:
+    as a number, but not one that is a length of time, an ordinal, a clock time or part of a date."""
+    return _is_number_sourced(num, source_text, excluded_unit=MONEY_EXCLUDED_UNIT)
+
+
 # Which numbers a text states does not depend on the number looked for, so each
 # text is read once: a check reads the same quotes for every value it has, and a
 # hook reads them for every check. Reading a 12 KB quote took 25 ms per value.
@@ -379,7 +402,9 @@ def _sourced_numbers(source_text, excluded_unit=None):
     key = (source_text, excluded_unit)
     found = _SOURCED_NUMBERS.get(key)
     if found is None:
-        found = frozenset(_read_numbers(source_text, excluded_unit))
+        # Money is read with the text's dates blanked (see MONEY_EXCLUDED_UNIT).
+        text = DATE_TEXT.sub(" ", source_text) if excluded_unit is MONEY_EXCLUDED_UNIT else source_text
+        found = frozenset(_read_numbers(text, excluded_unit))
         if len(_SOURCED_NUMBERS) >= _SOURCED_NUMBERS_KEPT:
             _SOURCED_NUMBERS.clear()
         _SOURCED_NUMBERS[key] = found
@@ -997,20 +1022,22 @@ def _unsourced(record, check, source=None):
         # amounts N for each amount
         for amt in check["amounts"]:
             if isinstance(amt, dict):
-                # The script multiplies; the user must have said both factors.
-                for key in ("unit", "quantity"):
-                    if not _is_number_sourced(amt[key], source):
-                        unsourced.append((f"amounts {key} {fmt_num(amt[key])}", "number", amt[key]))
-            elif not _is_number_sourced(amt, source):
-                unsourced.append((f"amounts {fmt_num(amt)}", "number", amt))
+                # The script multiplies; the user must have said both factors. A
+                # price per unit is money; a quantity can be hours or days.
+                if not _is_money_sourced(amt["unit"], source):
+                    unsourced.append((f"amounts unit {fmt_num(amt['unit'])}", "money", amt["unit"]))
+                if not _is_number_sourced(amt["quantity"], source):
+                    unsourced.append((f"amounts quantity {fmt_num(amt['quantity'])}", "number", amt["quantity"]))
+            elif not _is_money_sourced(amt, source):
+                unsourced.append((f"amounts {fmt_num(amt)}", "money", amt))
         # total_cap N
         cap = check["total_cap"]
-        if not _is_number_sourced(cap, source):
-            unsourced.append((f"total_cap {fmt_num(cap)}", "number", cap))
+        if not _is_money_sourced(cap, source):
+            unsourced.append((f"total_cap {fmt_num(cap)}", "money", cap))
         # item_cap N if present
         item_cap = check.get("item_cap")
-        if item_cap is not None and not _is_number_sourced(item_cap, source):
-            unsourced.append((f"item_cap {fmt_num(item_cap)}", "number", item_cap))
+        if item_cap is not None and not _is_money_sourced(item_cap, source):
+            unsourced.append((f"item_cap {fmt_num(item_cap)}", "money", item_cap))
 
     return unsourced
 
@@ -2878,6 +2905,8 @@ def _says(reading, value, line):
         return _minutes_phrase(value, line)
     if reading == "number":
         return EXPLICIT_ZERO.search(line) is not None if value == 0 else _is_number_sourced(value, line)
+    if reading == "money":
+        return EXPLICIT_ZERO.search(line) is not None if value == 0 else _is_money_sourced(value, line)
     if reading == "order":
         return ORDER_WORDS.search(line) is not None
     if reading == "over":
@@ -2916,12 +2945,12 @@ def _conflict_ways(check):
     amounts, _labels, total, cap, item_cap, excess = _budget(check)
     ways = []
     if total > cap:
-        ways.append([[("number", total), ("number", cap)], [("number", excess), ("over", None)]])
+        ways.append([[("money", total), ("money", cap)], [("money", excess), ("over", None)]])
     if item_cap is not None:
         for amount in amounts:
             if amount > item_cap:
-                ways.append([[("number", amount), ("number", item_cap)],
-                             [("number", amount), ("number", amount - item_cap), ("over", None)]])
+                ways.append([[("money", amount), ("money", item_cap)],
+                             [("money", amount), ("money", amount - item_cap), ("over", None)]])
     return ways
 
 
@@ -2985,7 +3014,7 @@ def _stated(record, reply, told=None):
                    for index in range(len(lines)))
 
     def named_value(reading, value, totals):
-        return named(reading, value) or any(named("number", total) for total in totals)
+        return named(reading, value) or any(named("money", total) for total in totals)
 
     in_full, stated = {}, set()
     replaced = retired_checks(record)
