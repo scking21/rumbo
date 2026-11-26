@@ -142,5 +142,27 @@ class ReplayTests(unittest.TestCase):
         also = late + " (also unsourced: start 09:00)"
         self.assertEqual(reader.record_problems(replay.rebuild(also, reader, final_late)[1])[0], [also])
 
+    def test_lines_with_a_note_on_replaced_words_are_rebuilt_like_the_rest(self):
+        # Review: since 0.3.22 a line can name values that only replaced items' words give;
+        # a rebuilt one-check record has no items, so the note is left out of the comparison.
+        reader = replay.load_reader(os.path.join(ROOT, "rumbo", "scripts"))
+        said = ("The launch budget is $1,200 total.", "Social media ads are $300 and the newsletter is $650.",
+                "I want to do both marketing options.")
+        doc = {"version": 1, "objective": {"text": "Launch", "quote": said[0]}, "items": [
+            {"id": "I1", "text": "Prices", "quote": said[1], "status": "uncertain"},
+            {"id": "I2", "text": "Both", "quote": said[2], "status": "commitment", "replaces": ["I1"]}],
+            "checks": []}
+        failing = {"id": "C3", "kind": "within_budget", "label": "both marketing options",
+                   "amounts": [650, 300, 180, 100], "total_cap": 1200, "refs": ["I2"]}
+        passing = dict(failing, amounts=[650, 300])
+        for final in (failing, passing):
+            with self.subTest(amounts=final["amounts"]):
+                line = reader.record_problems(dict(doc, checks=[final]))[0][0]
+                self.assertIn("only in the words of I1, which I2 replaced", line)
+                check_id, record = replay.rebuild(line, reader, final)
+                self.assertEqual(check_id, "C3")
+                self.assertEqual(reader.validate_record(record), [])
+
+
 if __name__ == "__main__":
     unittest.main()
