@@ -42,7 +42,19 @@ In the saved runs on 0.3.15 to 0.3.21, 9 of the 93 live checks with unsourced va
 - a dropped check;
 - `check` output, the write hold, and the Stop block.
 
-`rumbo/tests/test_check_dropped.py` checks the new note on a dropped option's date.
+`rumbo/tests/test_check_dropped.py` checks the new note on a dropped option's date, and `tests/test_replay_stop_blocks.py` checks that the replay still rebuilds lines that carry it.
+
+**Live.** On this version, haiku ran `02-launch-full` six times and `08-dropped-option` three times, and sonnet ran `02-launch-full` once, graded by the same sonnet judge as before. Three more haiku sessions of `02-launch-full` ran on 0.3.21 alongside the second three, to compare like with like.
+
+- **No `SOURCE` line appeared.** No session had a check whose values only replaced items' words gave. One haiku session recorded "I want to do both marketing options" as a commitment that replaced an item, as in the 0.3.21 session above, but it kept no budget check. So the line is shown live only where the tests show it.
+
+| | Haiku, `02-launch-full` | committed total | Haiku, `08-dropped-option` | Sonnet, `02-launch-full` |
+| --- | --- | --- | --- | --- |
+| 0.3.22, first three | 13 of 18 | 0 of 3 | 11 of 12 | 6 of 6 |
+| 0.3.22, second three | 17 of 18 | 2 of 3 | - | - |
+| 0.3.21, beside the second three | 15 of 18 | 2 of 3 | - | - |
+
+- **The committed total.** Every haiku session that missed it, on either version, added its own estimate of event costs ($460 to $650) to the user's $1,130 and called the plan over budget. Two of them, one on each version, also proposed dropping the newsletter the user had chosen. The second three show no difference between the versions, so the first three's 0 of 3 is how much haiku varies here, not the skill's new text. Haiku had 3 of 5 on 0.3.21 before, and 2 of 3 on 0.3.18.
 
 ## Verification and rollback
 
