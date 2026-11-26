@@ -54,6 +54,24 @@ class ReplayTests(unittest.TestCase):
         self.assertEqual(done.returncode, 0, done.stderr)
         self.assertIn("with only assumed values: 1, rebuilt 1, read as stated 1", done.stdout)
 
+    def test_a_session_listed_in_two_folders_is_replayed_once(self):
+        # A run graded again into another folder lists the same transcripts; the
+        # 0.3.25 notes first counted one sonnet run three times that way.
+        regraded = os.path.join(self.tmp.name, "run-regraded")
+        os.makedirs(regraded)
+        with open(os.path.join(self.run, "summary.json"), encoding="utf-8") as handle:
+            summary = handle.read()
+        with open(os.path.join(regraded, "summary.json"), "w", encoding="utf-8") as handle:
+            handle.write(summary)
+        reader = replay.load_reader(os.path.join(ROOT, "rumbo", "scripts"))
+        counts, _names = replay.replay(reader, [self.run, regraded], told=True)
+        self.assertEqual((counts["blocks"], counts["assumed stated"], counts["copies"]), (1, 1, 1))
+        done = subprocess.run([sys.executable, SCRIPT, "--told", self.run, regraded], capture_output=True, text=True,
+                              timeout=60)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertIn("blocks with check problems: 1 (", done.stdout)
+        self.assertIn("sessions listed again in another folder, replayed once: 1", done.stdout)
+
     def test_skill_text_and_hook_feedback_are_not_prompts(self):
         # Review: an injected message after an intermediate reply was taken for
         # a prompt, so that reply counted as told although no Stop read it.

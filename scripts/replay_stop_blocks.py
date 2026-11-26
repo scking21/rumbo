@@ -19,7 +19,9 @@ way, such as a price per unit whose head count no record holds, is counted
 apart rather than judged on a different check.
 
 This measures a change to the reader against real replies; it does not rerun
-sessions. A block passes when every one of its problems is read as stated.
+sessions. A block passes when every one of its problems is read as stated. A
+session that more than one RUN_DIR lists, such as a run graded again into
+another folder, is replayed once.
 """
 import argparse
 import collections
@@ -233,18 +235,25 @@ def replay(reader, run_dirs, told=False):
     """(counts, names of the blocks read as stated) over the saved runs.
 
     counts has "blocks" (with check problems, a repeat counting with the
-    problems it names), "repeats", "repeats not recovered" (a repeat that names
+    problems it names), "copies" (sessions with blocks that another folder
+    already listed), "repeats", "repeats not recovered" (a repeat that names
     a check its last full block did not show), and for "assumed" (only UNSOURCED problems)
     and "conflict" (at least one FAIL) the blocks, those rebuilt and those
     read as stated, as KIND, KIND + " rebuilt" and KIND + " stated".
     """
-    counts, names = collections.Counter(), []
+    counts, names, seen = collections.Counter(), [], set()
     for run_dir in run_dirs:
         with open(os.path.join(run_dir, "summary.json"), encoding="utf-8") as handle:
             sessions = json.load(handle)["sessions"]
         for row in sessions:
             if not row.get("blocks") or not row.get("transcript") or not os.path.isfile(row["transcript"]):
                 continue
+            # A run graded again into another folder lists the same sessions: count each once.
+            transcript = os.path.realpath(row["transcript"])
+            if transcript in seen:
+                counts["copies"] += 1
+                continue
+            seen.add(transcript)
             session_stops = stops(row["transcript"])
             final = {}
             record_path = os.path.join(os.path.dirname(row["transcript"]), "project", ".rumbo", "record.json")
@@ -315,6 +324,8 @@ def main(argv=None):
         print("read as stated: " + name)
     print("blocks with check problems: %d (%d repeats, %d of them not recovered)"
           % (counts["blocks"], counts["repeats"], counts["repeats not recovered"]))
+    if counts["copies"]:
+        print("  sessions listed again in another folder, replayed once: %d" % counts["copies"])
     for kind, title in (("assumed", "only assumed values"), ("conflict", "a conflict")):
         print("  with %s: %d, rebuilt %d, read as stated %d" % (title, counts[kind], counts[kind + " rebuilt"],
                                                              counts[kind + " stated"]))
