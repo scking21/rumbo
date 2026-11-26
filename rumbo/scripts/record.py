@@ -370,7 +370,8 @@ def _is_number_sourced(num, source_text, excluded_unit=None):
 # Money is not written as a length of time, an ordinal, a clock time or a date, so
 # none of those sources a budget's amount, price per unit or cap: "he can only do a
 # 60-minute session" does not source $60, nor "Today is August 20" $20 (in saved
-# live records, 6 of 304 budget checks had an estimate that looked sourced so). A
+# live records, 6 of 254 budget checks had an estimate that looked sourced so). A
+# number with a currency sign stays money ("$150 hour"; see _read_numbers). A
 # quantity can be a length of time ("$150 an hour for 4 hours"): it reads as a number.
 MONEY_EXCLUDED_UNIT = re.compile(
     r"(?:[\s-]*(?:minutes?|mins?|hours?|hrs?|h|seconds?|secs?|days?|weeks?|months?|years?|nights?)"
@@ -419,14 +420,6 @@ def _read_numbers(source_text, excluded_unit=None):
     # rounding. Digits next to ":" belong to a time, so "9:45" does not source 45; an
     # exponent stays part of its number, so "1e3" sources 1000, not 1 or 3.
     for match in re.finditer(r"(?<![\d.:])(\d+(?:\.\d+)?(?:[eE][-+]?\d+)?)(?![\d:]|\.\d)", no_commas):
-        if excluded_unit is not None and excluded_unit.match(no_commas, match.end()):
-            continue
-        value = decimal.Decimal(match.group(1))
-        if (_after_fraction_prefix(no_commas, match.start())
-                or AMOUNT_CONTINUED.match(no_commas, match.end())
-                or _after_decimal_word(no_commas, match.start())
-                or AFTER_SCALE.search(no_commas[max(0, match.start() - 16):match.start()])):
-            continue
         # Scan only adjacent whitespace/currency, preserving signs and currency
         # scales without copying or rescanning the entire preceding quote.
         pos = match.start() - 1
@@ -437,6 +430,17 @@ def _read_numbers(source_text, excluded_unit=None):
             pos -= 1
             while pos >= 0 and no_commas[pos].isspace():
                 pos -= 1
+        # A number written with a currency sign is money whatever follows it:
+        # "$150 hour", "$60 hr", "£500 pm" (a month).
+        excluded = excluded_unit is not None and not (currency and excluded_unit is MONEY_EXCLUDED_UNIT)
+        if excluded and excluded_unit.match(no_commas, match.end()):
+            continue
+        value = decimal.Decimal(match.group(1))
+        if (_after_fraction_prefix(no_commas, match.start())
+                or AMOUNT_CONTINUED.match(no_commas, match.end())
+                or _after_decimal_word(no_commas, match.start())
+                or AFTER_SCALE.search(no_commas[max(0, match.start() - 16):match.start()])):
+            continue
         # "$1.5k" is 1500 and "1.8 million" is 1800000, never 1.5 or 1.8. A bare "M"
         # scales only after a currency sign: "$2.5M" is money, "5m" is a length.
         scale = SCALE_SUFFIX.match(no_commas, match.end())
@@ -452,7 +456,7 @@ def _read_numbers(source_text, excluded_unit=None):
             # 1000 or 1000000: check again after the scale.
             if AMOUNT_CONTINUED.match(no_commas, scale.end()) or SCALED_CONTINUED.match(no_commas, scale.end()):
                 continue
-            if excluded_unit is not None and excluded_unit.match(no_commas, scale.end()):
+            if excluded and excluded_unit.match(no_commas, scale.end()):
                 continue
         # A minus not preceded by a digit negates; "30-50" stays a range.
         before_sign = pos - 1

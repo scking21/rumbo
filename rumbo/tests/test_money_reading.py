@@ -1,6 +1,6 @@
 """A budget's money is read as money: not a length of time, an ordinal, a clock time or a date.
 
-In saved live records, 6 of 304 budget checks had an estimate that looked
+In saved live records, 6 of 254 budget checks had an estimate that looked
 sourced because a cited quote held the same number as something else: "he can
 only do a 60-minute session" for $60 (four checks), "Today is August 20" for
 $20 (two checks).
@@ -53,6 +53,9 @@ class MoneyReadingTests(unittest.TestCase):
                               ("Budget $600. Sept 12: $300 ads, due March 1.", [300]),
                               ("Budget $600. The room is $45/hour, or $150 a day.", [45, 150]),
                               ("Budget $1.5k.", [1500]),
+                              # A currency sign makes it money, whatever follows.
+                              ("Budget $600. The trainer is $150 hour, or $60 hr for the assistant.", [150, 60]),
+                              ("Budget £600. Rent is £500 pm and the van €20 day.", [500, 20]),
                               ("Budget 600 dollars, 250 for catering.", [250])):
             with self.subTest(said=said):
                 self.assertEqual(unsourced(budget(amounts, total_cap=1500 if "1.5k" in said else 600), said), [])
