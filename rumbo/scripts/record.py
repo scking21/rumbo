@@ -2273,7 +2273,7 @@ def _pre_write(args):
                 pass
         return
     lines = problems + undecided
-    keys = [hashlib.sha256(line.encode("utf-8")).hexdigest()[:16] for line in lines]
+    keys = [key for key in map(_pre_write_key, lines) if key]
     shown = set()
     if marker:
         try:
@@ -2281,8 +2281,15 @@ def _pre_write(args):
                 shown = set(handle.read().split())
         except OSError:
             pass
-    # Lines already shown this session are not news; one that changed or came back is.
+    # Lines in the last set are not news; one that is new, changed or back is.
     if all(key in shown for key in keys):
+        if marker and set(keys) != shown:
+            # Keep the set current, so a line that leaves and comes back is news again.
+            try:
+                with _open_marker(marker, "w") as handle:
+                    handle.write("\n".join(keys))
+            except OSError:
+                pass
         return
     saved = False
     if marker:
@@ -2300,6 +2307,20 @@ def _pre_write(args):
         _print_hold(context + "\n" + PRE_WRITE_AGAIN)
         return
     print(json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse", "additionalContext": context}}))
+
+
+def _pre_write_key(line):
+    """A short hash naming what a pre-write line is news about, or None for the overflow line.
+
+    An undecided item is keyed by its id: while it stays undecided it is written
+    as open, whatever its status or wording, so a change among those is no news.
+    A problem line is keyed by its text, since a changed conflict changes what to say.
+    """
+    if line.startswith("... and "):
+        return None
+    match = re.match(r"NOT DECIDED (\S+) \[", line)
+    text = "undecided " + match.group(1) if match else line
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
 
 
 def _print_hold(reason):

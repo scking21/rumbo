@@ -16,7 +16,7 @@ The pre-write hook runs before a file is written. It shows the record's open pro
 
 ## What changed
 
-- **A held write.** When the record has a line the session has not been shown (a problem or an undecided item that is new, changed or back), the hook denies the write once. The deny's reason carries all the lines, under the same introductions as before, and ends: "This write was held once so you see these lines before you write. Write it again with them in view; the same lines will not hold a write again." The agent reads the reason before it writes again.
+- **A held write.** When the record has news for the session, the hook denies the write once. News is a problem that is new, changed or back, or an item that has become undecided or come into view; an item that stays undecided is not news when its status or wording changes. The deny's reason carries all the lines, under the same introductions as before, and ends: "This write was held once so you see these lines before you write. Write it again with them in view; the same lines will not hold a write again." The agent reads the reason before it writes again.
 - **Bounded.** A session's writes are held at most 3 times. After that, new lines are added as context, as before. Lines already shown are not shown again, so a set that only lost lines is silent. A write is held only once its marker is saved, so without a `session_id` or a usable state directory the lines are always added as context and no write is ever held.
 - **No record yet.** A planning session that the prompt hook nudged, with at least two planning-looking prompts and no record, has its first write held once: "rumbo: this session looks like planning work (times, dates, money or decisions) and there is no decision record. This write was held once so you see this first. Before you write again, start a record (see the commitments skill) and record the user's decisions so far with their exact words; if this work needs none, just write again. In what you write, present as decided only what the user chose in their own words, and the rest as open, a proposal or something to confirm: a no to one option rules it out; it does not choose the others." This is the same once-per-session enforcement the Stop gate makes under the same conditions. Taken at the write, it comes before the plan, so the Stop gate does not block for it again.
 - **Skill.** "Before writing" says a write may be held once to show the lines, and that the first write of a planning session without a record is held so the record can come first.
@@ -25,8 +25,8 @@ The pre-write hook runs before a file is written. It shows the record's open pro
 ## Evidence
 
 - `rumbo/tests/test_write_hold.py` covers the rule:
-  - A write is held for lines not yet shown, not for the same lines again, and at most 3 times per session; then the lines are context.
-  - Lines that come back hold again, and fewer lines do not.
+  - A write is held for news, not for the same lines again, and at most 3 times per session; then the lines are context.
+  - Lines that come back hold again, and fewer lines do not. An undecided item's new status or wording holds nothing, a conflict's new values do, and an item past the 8 shown holds nothing until it comes into view.
   - No write is held when the session's marker cannot be saved.
   - The no-record hold comes only after two planning prompts and only once. It is not taken for a write to the record itself, or without a session id. The Stop gate does not block for it afterwards, and a session the Stop gate already blocked is not held.
 - `rumbo/tests/test_drift_hooks.py` checks the hold's output and the context fallback without a session id.

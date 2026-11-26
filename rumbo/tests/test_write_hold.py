@@ -104,10 +104,43 @@ class WriteHoldTests(unittest.TestCase):
         self.assertEqual(self.pre_write()["permissionDecision"], "deny")
         self.write([item(1), item(2, "commitment")])
         self.assertIsNone(self.pre_write())
+        # The item the user reopens is news again.
+        self.write([item(1), item(2)])
+        self.assertEqual(self.pre_write()["permissionDecision"], "deny")
         self.write([item(1, "commitment"), item(2, "commitment")])
         self.assertIsNone(self.pre_write())
         self.write([item(1)])
         self.assertEqual(self.pre_write()["permissionDecision"], "deny")
+
+    def test_an_item_that_stays_undecided_is_not_news_when_its_status_or_wording_changes(self):
+        # Live 0.3.21 run: sonnet was held again only because an item went from uncertain to deferred.
+        self.write([item(1, "uncertain")])
+        self.assertEqual(self.pre_write()["permissionDecision"], "deny")
+        changed = dict(item(1, "deferred"), text="Option 1, waiting on lower travel costs")
+        self.write([changed])
+        self.assertIsNone(self.pre_write())
+        # A problem line is news when its values change.
+        check = {"id": "C1", "kind": "fits_window", "start": "09:00", "end": "10:00", "segments_min": [75],
+                 "refs": []}
+        with open(self.record, "w", encoding="utf-8") as handle:
+            json.dump({"version": 1, "objective": {"text": "Offsite", "quote": "Doors 9:00, 75 minutes, close 10:00"},
+                       "items": [changed], "checks": [check]}, handle)
+        held = self.pre_write()
+        self.assertIn("CONFLICT C1", held["permissionDecisionReason"])
+        check["segments_min"] = [80]
+        with open(self.record, "w", encoding="utf-8") as handle:
+            json.dump({"version": 1, "objective": {"text": "Offsite", "quote": "Doors 9:00, 80 minutes, close 10:00"},
+                       "items": [changed], "checks": [check]}, handle)
+        self.assertIn("ends 10:20, 20 min after 10:00", self.pre_write()["permissionDecisionReason"])
+
+    def test_undecided_items_past_the_cap_are_not_news_until_shown(self):
+        self.write([item(n) for n in range(1, 10)])
+        held = self.pre_write()["permissionDecisionReason"]
+        self.assertIn("... and 1 more items not decided", held)
+        self.write([item(n) for n in range(1, 11)])
+        self.assertIsNone(self.pre_write(), "a tenth item is not shown, so it holds nothing")
+        self.write([item(n) for n in range(2, 11)])
+        self.assertIn("NOT DECIDED I9 ", self.pre_write()["permissionDecisionReason"])
 
     def test_a_write_is_never_held_when_the_session_marker_cannot_be_kept(self):
         # Without its marker every write would be held again: the lines go in as context instead.
