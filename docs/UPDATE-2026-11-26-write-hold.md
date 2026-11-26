@@ -32,6 +32,37 @@ The pre-write hook runs before a file is written. It shows the record's open pro
 - `rumbo/tests/test_drift_hooks.py` checks the hold's output and the context fallback without a session id.
 - A one-off session with a stand-in hook showed the mechanism on haiku before this change: the model read the deny's reason, wrote the line again as a proposal to confirm, and told the user why.
 
+**Live.** The cases where the hook has lines to show ran on this change, graded by the same sonnet judge as before: `11-rejected-option`, `01-workshop-full`, `02-launch-full` and `08-dropped-option` on all three models, and `05-draft-is-not-a-decision` on haiku. That is 24 haiku, 10 sonnet and 8 opus sessions, compared with the same cases on 0.3.18.
+
+- The first batch had haiku three times and sonnet and opus twice. It ran on the first version of this change, which keyed an undecided item's line by its text and held no write after a no-record block. A 5-hour usage limit cut ten of its sessions: `--rerun` ran them again from the start on that version, and `--regrade --errors-only` gave the verdicts the judge had missed.
+- Later batches ran on the final version: haiku on cases 11, 01 and 02 twice and on 08 and 05 three times, and sonnet on 01 twice.
+
+| Model | "A no is not a choice", 0.3.15 | 0.3.18 | 0.3.20 | 0.3.21 |
+| --- | --- | --- | --- | --- |
+| haiku | 0/3 | 0/3 | 0/3 | 5/5 |
+| sonnet | 3/3 | 3/3 | - | 2/2 |
+| opus | 1/2 | 2/2 | - | 2/2 |
+
+- **Case 11.** As before, every haiku session wrote its plan before it had a record. Now each of those first writes was held. Each session then started a record and wrote again, and each plan kept the venue open: "The community center ($900) is the proposed option ... It's not confirmed yet", "the remaining option. It has not been chosen yet", "Community center at $900 (my proposal, since the ballroom is out). Please confirm."
+
+| Model | Held writes | Next write changed | Unchanged | Gradings passed, 0.3.18 | 0.3.21 | Cost per session, 0.3.18 | 0.3.21 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| haiku | 17 | 16 | 1 | 59 of 63 | 97 of 103 | $0.03 | $0.05 |
+| sonnet | 15 | 6 | 9 | 54 of 54 | 47 of 48 | $0.55 | $0.66 |
+| opus | 12 | 6 | 6 | 39 of 40 | 40 of 40 | $1.27 | $1.47 |
+
+- **What agents did after a hold** (`scripts/hold_outcomes.py`). Haiku changed the file after 16 of its 17 holds. Its changes included writing the venue as a proposal, adding a draft schedule with its conflict, and marking the presenter open. Sonnet and opus changed it after 12 of 27. When they did not, they said so in a line and wrote the same content again: "My draft already lists the community center as open, so I'll write it again unchanged." Their changes were mostly labels ("This is a proposal to confirm, not a decided schedule", "(draft)"); once, opus added the 12:35 schedule conflict and the open speaker question to its plan. Six sonnet and opus sessions of `01-workshop-full` and `02-launch-full` reached the cap of 3 holds.
+- **Cost.** A held write is written again in full, and sessions cost more per session in these cases. The table gives the totals; by case, sonnet's `11-rejected-option` went from $0.20 to $0.31 per session and its `01-workshop-full` from $0.84 to $0.88. The other changes since 0.3.18 add text to the context too, and with 2 or 3 sessions per case these costs vary.
+- **Haiku's other gradings.** Haiku missed 6 of the other 93 gradings on this change, against 1 of 57 on 0.3.18:
+  - the launch plan's committed total, twice; once the plan gave $1,130 "if all three go ahead";
+  - the flyers that do not fit, and the insurance condition, in one launch session;
+  - the accessibility note in one workshop session;
+  - a dropped deadline left open in one `08-dropped-option` session.
+
+  Each was already in the version of the plan the hold stopped, or came in a session with no hold, so no rewrite after a hold caused it. That last session had told the user at turn 2, when the Stop gate asked for a record, that "nothing has been decided yet, so there's no decision record to keep". It then wrote its plan after the user's choice with no record and no hold. The final version holds that write. In the later batches every session the Stop gate had blocked for a missing record started one before its first write, so that hold was not exercised live.
+- **Sonnet's one miss:** in `08-dropped-option`, a reply restated that the dropped deadline fell after the workshop, in a session with no hold or block.
+- **Stop blocks** per session were about the same: haiku 36 in 24 sessions (23 in 15 on 0.3.18), sonnet 1 in 10 (3 in 12) and opus 5 in 8 (4 in 8). No reply named a record id.
+
 ## Verification and rollback
 
 ```sh
