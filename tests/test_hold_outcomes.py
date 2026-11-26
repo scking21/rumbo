@@ -100,6 +100,18 @@ class HoldOutcomeTests(unittest.TestCase):
         done = subprocess.run([sys.executable, SCRIPT], capture_output=True, text=True, timeout=30)
         self.assertEqual(done.returncode, 2)
         self.assertIn("usage: python3 scripts/hold_outcomes.py RUN_DIR", done.stderr)
+        for flag in ("-h", "--help"):
+            done = subprocess.run([sys.executable, SCRIPT, flag], capture_output=True, text=True, timeout=30)
+            self.assertEqual((done.returncode, done.stderr), (0, ""))
+            self.assertIn("usage: python3 scripts/hold_outcomes.py RUN_DIR", done.stdout)
+
+    def test_a_missing_folder_is_reported_without_a_traceback(self):
+        missing = os.path.join(self.tmp.name, "nope")
+        done = subprocess.run([sys.executable, SCRIPT, self.tmp.name, missing], capture_output=True, text=True,
+                              timeout=30)
+        self.assertEqual(done.returncode, 2)
+        self.assertEqual(done.stderr.strip(), "hold_outcomes.py: not a folder: " + missing)
+        self.assertEqual(done.stdout, "")
 
 
 if __name__ == "__main__":
