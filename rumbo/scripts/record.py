@@ -364,12 +364,35 @@ def _is_number_sourced(num, source_text, excluded_unit=None):
     """
     if num == 0:
         return True
+    return decimal.Decimal(str(num)) in _sourced_numbers(source_text, excluded_unit)
+
+
+# Which numbers a text states does not depend on the number looked for, so each
+# text is read once: a check reads the same quotes for every value it has, and a
+# hook reads them for every check. Reading a 12 KB quote took 25 ms per value.
+_SOURCED_NUMBERS = {}
+_SOURCED_NUMBERS_KEPT = 256
+
+
+def _sourced_numbers(source_text, excluded_unit=None):
+    """The set of numbers source_text states, read as _is_number_sourced reads them."""
+    key = (source_text, excluded_unit)
+    found = _SOURCED_NUMBERS.get(key)
+    if found is None:
+        found = frozenset(_read_numbers(source_text, excluded_unit))
+        if len(_SOURCED_NUMBERS) >= _SOURCED_NUMBERS_KEPT:
+            _SOURCED_NUMBERS.clear()
+        _SOURCED_NUMBERS[key] = found
+    return found
+
+
+def _read_numbers(source_text, excluded_unit=None):
+    """Yield, as a Decimal, each number that source_text states on its own."""
     # Remove commas from source text for number matching
     no_commas = source_text.replace(",", "")
     # Compare values, not text: sign kept, trailing zeros equal ("$1.50" is 1.5), no
     # rounding. Digits next to ":" belong to a time, so "9:45" does not source 45; an
     # exponent stays part of its number, so "1e3" sources 1000, not 1 or 3.
-    target = decimal.Decimal(str(num))
     for match in re.finditer(r"(?<![\d.:])(\d+(?:\.\d+)?(?:[eE][-+]?\d+)?)(?![\d:]|\.\d)", no_commas):
         if excluded_unit is not None and excluded_unit.match(no_commas, match.end()):
             continue
@@ -408,8 +431,7 @@ def _is_number_sourced(num, source_text, excluded_unit=None):
         if (pos >= 0 and no_commas[pos] in "-−"
                 and (before_sign < 0 or not no_commas[before_sign].isdecimal())):
             value = -value
-        if value == target:
-            return True
+        yield value
     # Spelled numbers: "twelve", "four hundred fifty dollars", "five thousand".
     for start, end, value in _word_numbers(source_text):
         if value is None or excluded_unit is not None and excluded_unit.match(source_text, end):
@@ -440,9 +462,7 @@ def _is_number_sourced(num, source_text, excluded_unit=None):
                            and source_text[pos - 1].isascii() and source_text[pos - 1].isalpha())
         if negative and not hyphenated_word:
             value = -value
-        if value == target:
-            return True
-    return False
+        yield value
 
 
 HOUR_UNIT = r"(?:hours?\b|hrs?\b\.?|h(?=\d{2}(?:m\b|\b))|h\b\.?)"
@@ -875,7 +895,7 @@ def replaced_sources(record, check, unsourced):
         for ref in item.get("replaces") or []:
             newer_of.setdefault(ref, []).append(item["id"])
     refs = check.get("refs")
-    base = _source_text(record, check)
+    names_value = SOURCES_VALUE[check["kind"]]
     given, olds = set(), []
     for item in items:
         newer = newer_of.get(item["id"])
@@ -883,7 +903,12 @@ def replaced_sources(record, check, unsourced):
             continue
         if refs is not None and item["id"] not in refs and not any(new in refs for new in newer):
             continue
-        still = {label for label, _reading, _value in _unsourced(record, check, source=base + "\n" + item["quote"])}
+        # Words that name no value of this kind source none, and each value is read
+        # within one text, so the item's own quote is all there is to read: reading the
+        # check's sources again with each quote made a large record time out the hooks.
+        if not names_value.search(item["quote"]):
+            continue
+        still = {label for label, _reading, _value in _unsourced(record, check, source=item["quote"])}
         found = {label for label in unsourced if label not in still}
         if found:
             given |= found
@@ -1650,6 +1675,9 @@ NAMES_VALUE = {kind: re.compile(r"\d|[$€£¥]|\b(?:%s|%s)\b" % ("|".join(VALUE
                                 r"\d|\b(?:%s|%s)\b" % ("|".join(VALUE_NUMBER_WORDS.split()), words),
                                 re.IGNORECASE)
                for kind, words in VALUE_WORDS.items()}
+# Words that can source a value. A decision's "one" is left out above, being as
+# often a pronoun, but the source check reads "one" as 1: "We need one."
+SOURCES_VALUE = {kind: re.compile(r"\bone\b|" + pattern.pattern, re.IGNORECASE) for kind, pattern in NAMES_VALUE.items()}
 
 
 def _validate_check_dropped(record, checks):

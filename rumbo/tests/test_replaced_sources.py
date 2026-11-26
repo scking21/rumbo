@@ -14,6 +14,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -104,6 +105,16 @@ class ReplacedSourcesTests(unittest.TestCase):
         self.assertEqual([line.split(" -> ")[0] for line in lines],
                          ["SOURCE C3: amounts 650, amounts 300 are only in the words of I2 and I7, which I10 replaced"])
 
+    def test_a_replaced_quote_that_says_one_is_read(self):
+        # Review: the skip for quotes that name no value must not skip "one", which the source check reads as 1.
+        doc = {"version": 1, "objective": {"text": "Tickets", "quote": "Tickets are $50 each, and the cap is $100."},
+               "items": [item("I1", "We need one."), item("I2", "Let's go ahead.", "commitment", replaces=["I1"])],
+               "checks": [{"id": "C1", "kind": "within_budget", "amounts": [{"unit": 50, "quantity": 1}],
+                           "total_cap": 100, "refs": ["I2"]}]}
+        self.assertEqual(record.validate_record(doc), [])
+        self.assertEqual([line.split(" -> ")[0] for line in record.open_problem_lines(doc)],
+                         ["SOURCE C1: amounts quantity 1 is only in the words of I1, which I2 replaced"])
+
     def test_a_dropped_check_needs_nothing(self):
         dropped = check(amounts=(500,), refs=("I1", "I2"), dropped_by="I10")
         doc = document([dropped], [item("I1", BUDGET, "commitment"), item("I2", OPTIONS),
@@ -158,3 +169,65 @@ class ReplacedSourcesHookTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ReplacedSourcesSpeedTests(unittest.TestCase):
+    """0.3.22 read a check's sources again with each replaced item's quote, for every check.
+
+    On a record whose replaced items held long quotes that took 42 seconds,
+    against the hooks' 10 second timeout. Each quote is now read once, and only
+    when it names a value of the check's kind.
+    """
+    FILLER = " ".join("We discussed option %d at $%d with %d people on March %d." % (i, 100 + i, 10 + i, 1 + i % 28)
+                      for i in range(200))
+
+    def large_record(self):
+        items = []
+        for n in range(1, 41):
+            # Every fourth item is replaced and holds a long quote.
+            quote = "Option %d costs $%d. %s" % (n, 1000 + n, self.FILLER if n % 4 == 1 else "")
+            entry = item("I%d" % n, quote)
+            if n % 2 == 0:
+                entry.update(status="commitment", replaces=["I%d" % (n - 1)])
+            items.append(entry)
+        checks = [check("C%d" % k, amounts=[1000 + j for j in range(1, 21, 2)] + [7777],
+                        refs=["I%d" % m for m in range(1, 41, 3)]) for k in range(1, 11)]
+        for each in checks:
+            each["total_cap"] = 10 ** 7
+        return document(checks, items)
+
+    def test_problem_lines_stay_fast_when_replaced_items_hold_long_quotes(self):
+        doc = self.large_record()
+        self.assertEqual(record.validate_record(doc), [])
+        started = time.monotonic()
+        lines = record.open_problem_lines(doc)
+        parts = record.record_problems(doc)[0]
+        self.assertLess(time.monotonic() - started, 2)
+        self.assertTrue(any(line.startswith("SOURCE C1: ") for line in lines), lines[:3])
+        self.assertEqual(len(parts), 10)
+
+    def test_the_hooks_stay_fast_on_that_record(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        path = os.path.join(tmp.name, ".rumbo", "record.json")
+        os.makedirs(os.path.dirname(path))
+        with open(path, "w", encoding="utf-8") as handle:
+            json.dump(self.large_record(), handle)
+        env = dict(os.environ, RUMBO_STATE_DIR=os.path.join(tmp.name, "state"))
+        for command, payload in (("check", None), ("pre-write", {"session_id": "s1", "cwd": tmp.name,
+                                                                 "tool_input": {"file_path": os.path.join(tmp.name, "plan.md")}})):
+            with self.subTest(command=command):
+                started = time.monotonic()
+                subprocess.run([sys.executable, SCRIPT, command, "--record", path], capture_output=True, text=True,
+                               input=None if payload is None else json.dumps(payload), env=env, timeout=30)
+                self.assertLess(time.monotonic() - started, 5)
+
+    def test_numbers_read_from_a_text_are_kept_for_a_bounded_number_of_texts(self):
+        self.assertTrue(record._is_number_sourced(650, "The rate went up to $650."))
+        self.assertFalse(record._is_number_sourced(500, "The rate went up to $650."))
+        # Minutes are read without an hour unit's numbers; the two readings are kept apart.
+        self.assertTrue(record._is_number_sourced(2, "2 hours"))
+        self.assertFalse(record._is_number_sourced(2, "2 hours", excluded_unit=record.NON_MINUTE_TIME_UNIT))
+        for n in range(record._SOURCED_NUMBERS_KEPT + 10):
+            record._is_number_sourced(n + 1, "We have %d chairs." % n)
+        self.assertLessEqual(len(record._SOURCED_NUMBERS), record._SOURCED_NUMBERS_KEPT)
