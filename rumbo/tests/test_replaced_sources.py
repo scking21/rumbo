@@ -105,6 +105,16 @@ class ReplacedSourcesTests(unittest.TestCase):
         self.assertEqual([line.split(" -> ")[0] for line in lines],
                          ["SOURCE C3: amounts 650, amounts 300 are only in the words of I2 and I7, which I10 replaced"])
 
+    def test_a_replaced_quote_that_says_one_is_read(self):
+        # Review: the skip for quotes that name no value must not skip "one", which the source check reads as 1.
+        doc = {"version": 1, "objective": {"text": "Tickets", "quote": "Tickets are $50 each, and the cap is $100."},
+               "items": [item("I1", "We need one."), item("I2", "Let's go ahead.", "commitment", replaces=["I1"])],
+               "checks": [{"id": "C1", "kind": "within_budget", "amounts": [{"unit": 50, "quantity": 1}],
+                           "total_cap": 100, "refs": ["I2"]}]}
+        self.assertEqual(record.validate_record(doc), [])
+        self.assertEqual([line.split(" -> ")[0] for line in record.open_problem_lines(doc)],
+                         ["SOURCE C1: amounts quantity 1 is only in the words of I1, which I2 replaced"])
+
     def test_a_dropped_check_needs_nothing(self):
         dropped = check(amounts=(500,), refs=("I1", "I2"), dropped_by="I10")
         doc = document([dropped], [item("I1", BUDGET, "commitment"), item("I2", OPTIONS),

@@ -895,7 +895,7 @@ def replaced_sources(record, check, unsourced):
         for ref in item.get("replaces") or []:
             newer_of.setdefault(ref, []).append(item["id"])
     refs = check.get("refs")
-    names_value = NAMES_VALUE[check["kind"]]
+    names_value = SOURCES_VALUE[check["kind"]]
     given, olds = set(), []
     for item in items:
         newer = newer_of.get(item["id"])
@@ -1675,6 +1675,9 @@ NAMES_VALUE = {kind: re.compile(r"\d|[$€£¥]|\b(?:%s|%s)\b" % ("|".join(VALUE
                                 r"\d|\b(?:%s|%s)\b" % ("|".join(VALUE_NUMBER_WORDS.split()), words),
                                 re.IGNORECASE)
                for kind, words in VALUE_WORDS.items()}
+# Words that can source a value. A decision's "one" is left out above, being as
+# often a pronoun, but the source check reads "one" as 1: "We need one."
+SOURCES_VALUE = {kind: re.compile(r"\bone\b|" + pattern.pattern, re.IGNORECASE) for kind, pattern in NAMES_VALUE.items()}
 
 
 def _validate_check_dropped(record, checks):
