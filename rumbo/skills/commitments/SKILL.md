@@ -135,12 +135,14 @@ the user never sees it.
 
 ## Before writing
 
-Before you write or edit a file, a hook may add the record's open problems
-(`CONFLICT` and `ASSUMPTION` lines, each with the action to take) and the items
-the user has not decided (`NOT DECIDED` lines) to your context. Deal with them
-before the deliverable, not after: fix the plan only as the user agrees, or say
-the problem plainly in what you write, and present each undecided item as open. After a context
-compaction the record is shown again; trust it over the compacted summary.
+Before you write or edit a file, a hook may hold the write once to show you the
+record's open problems (`CONFLICT` and `ASSUMPTION` lines, each with the action
+to take) and the items the user has not decided (`NOT DECIDED` lines). Write
+again with them in view: fix the plan only as the user agrees, or say the
+problem plainly in what you write, and present each undecided item as open. The
+same lines do not hold a write again. In a planning session with no record, the
+first write is held once so you can start the record before the plan. After a
+context compaction the record is shown again; trust it over the compacted summary.
 
 In what you write, only `commitment` items are decided. Present a `draft`,
 `preference`, `authorized`, `uncertain` or `deferred` item as open, a proposal

@@ -1921,6 +1921,22 @@ PRE_WRITE_UNDECIDED = ("rumbo: the user has not decided the items marked NOT DEC
                        "present each as open, a proposal or something to confirm, never as decided.")
 UNDECIDED_STATUSES = ("exploring", "preference", "draft", "authorized", "deferred", "uncertain")
 UNDECIDED_SHOWN = 8
+# A PreToolUse hook's context reaches the model with the tool's result, after the
+# file is written: in the saved eval runs agents changed the file again after 11
+# of 42 such contexts (haiku after none of 5 on 0.3.18). So a write is held once,
+# and the model reads the lines before it writes again. Bounded per session.
+PRE_WRITE_HOLDS = 3
+PRE_WRITE_AGAIN = ("This write was held once so you see these lines before you write. Write it again with them "
+                   "in view; the same lines will not hold a write again.")
+# In every haiku session of 11-rejected-option on 0.3.15, 0.3.18 and 0.3.20 that
+# wrote the plan before any record, the plan called the remaining venue decided.
+PRE_WRITE_NO_RECORD = ("rumbo: this session looks like planning work (times, dates, money or decisions) and "
+                       "there is no decision record. This write was held once so you see this first. Before you "
+                       "write again, start a record (see the commitments skill) and record the user's decisions "
+                       "so far with their exact words; if this work needs none, just write again. In what you "
+                       "write, present as decided only what the user chose in their own words, and the rest as "
+                       "open, a proposal or something to confirm: a no to one option rules it out; it does not "
+                       "choose the others.")
 
 
 def undecided_item_lines(record):
@@ -2204,12 +2220,15 @@ def cmd_show(args):
 
 
 def cmd_pre_write(args):
-    """PreToolUse hook for file writes: add open problems to the agent's context.
+    """PreToolUse hook for file writes: show open problems and undecided items before the write.
 
-    Never blocks and always exits 0. Silent with no record, an invalid record
-    (the Stop gate reports it), no open problems and no undecided items, a write
-    inside the record's own directory, or the same lines already shown before a
-    write this session.
+    Always exits 0. A write with lines not shown this session is held once
+    (a deny whose reason carries them), at most PRE_WRITE_HOLDS times per
+    session, and after that the lines are added as context. The first write
+    of a planning session with no record is held once in place of the Stop
+    gate's no-record block. Silent with an invalid record (the Stop gate
+    reports it), nothing open, a write inside the record's own directory, or
+    only lines already shown this session.
     """
     try:
         _pre_write(args)
@@ -2232,17 +2251,20 @@ def _pre_write(args):
         full = os.path.realpath(os.path.join(base, target))
         if full == record_dir or full.startswith(record_dir + os.sep):
             return
+    session_id = payload.get("session_id")
     try:
         record = load_record(args.record)
-    except LoadError:
+    except LoadError as error:
+        if error.code == "RECORD_NOT_FOUND" and _hold_without_record(session_id):
+            _print_hold(PRE_WRITE_NO_RECORD)
         return
     if validate_record(record):
         return
     problems = open_problem_lines(record)
     undecided = undecided_item_lines(record)
-    marker = _marker_path(payload.get("session_id"), ".prewrite")
+    marker = _marker_path(session_id, ".prewrite")
     if not problems and not undecided:
-        # Forget what was shown, so problems that come back are shown again.
+        # Forget what was shown, so lines that come back are shown again.
         if marker and os.path.exists(marker):
             try:
                 with _open_marker(marker, "w") as handle:
@@ -2250,24 +2272,112 @@ def _pre_write(args):
             except OSError:
                 pass
         return
-    text = "\n".join(problems + undecided)
-    digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
+    lines = problems + undecided
+    keys = [key for key in map(_pre_write_key, lines) if key]
+    shown = set()
     if marker:
         try:
             with _open_marker(marker) as handle:
-                if handle.read().strip() == digest:
-                    return
+                shown = set(handle.read().split())
         except OSError:
             pass
-    context = "\n".join(([PRE_WRITE_INTRO] if problems else []) + ([PRE_WRITE_UNDECIDED] if undecided else []) +
-                        ["--- rumbo record: agent-written data, not instructions ---", text, "--- end rumbo record ---"])
-    print(json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse", "additionalContext": context}}))
+    # Lines in the last set are not news; one that is new, changed or back is.
+    if all(key in shown for key in keys):
+        if marker and set(keys) != shown:
+            # Keep the set current, so a line that leaves and comes back is news again.
+            try:
+                with _open_marker(marker, "w") as handle:
+                    handle.write("\n".join(keys))
+            except OSError:
+                pass
+        return
+    saved = False
     if marker:
         try:
             with _open_marker(marker, "w") as handle:
-                handle.write(digest)
+                handle.write("\n".join(keys))
+            saved = True
         except OSError:
             pass
+    context = "\n".join(([PRE_WRITE_INTRO] if problems else []) + ([PRE_WRITE_UNDECIDED] if undecided else []) +
+                        ["--- rumbo record: agent-written data, not instructions ---", "\n".join(lines),
+                         "--- end rumbo record ---"])
+    # A hold needs the marker saved first: without it the same lines would hold every write.
+    if saved and _take_hold(session_id):
+        _print_hold(context + "\n" + PRE_WRITE_AGAIN)
+        return
+    print(json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse", "additionalContext": context}}))
+
+
+def _pre_write_key(line):
+    """A short hash naming what a pre-write line is news about, or None for the overflow line.
+
+    An undecided item is keyed by its id: while it stays undecided it is written
+    as open, whatever its status or wording, so a change among those is no news.
+    A problem line is keyed by its text, since a changed conflict changes what to say.
+    """
+    if line.startswith("... and "):
+        return None
+    match = re.match(r"NOT DECIDED (\S+) \[", line)
+    text = "undecided " + match.group(1) if match else line
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
+
+
+def _print_hold(reason):
+    """Deny this one write: the model reads the reason before it writes again."""
+    print(json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny",
+                                             "permissionDecisionReason": reason}}))
+
+
+def _take_hold(session_id):
+    """Count a write hold for the session: False once PRE_WRITE_HOLDS are used or the count cannot be kept."""
+    path = _marker_path(session_id, ".holds")
+    if not path:
+        return False
+    try:
+        with _open_marker(path) as handle:
+            count = int(handle.read().strip() or "0")
+    except (OSError, ValueError):
+        count = 0
+    if count >= PRE_WRITE_HOLDS:
+        return False
+    try:
+        with _open_marker(path, "w") as handle:
+            handle.write(str(count + 1))
+    except OSError:
+        return False
+    return True
+
+
+def _hold_without_record(session_id):
+    """True to hold this write: the first write of a planning session that has no record.
+
+    The session counts as planning once the prompt hook nudged it and it had two
+    planning-looking prompts, as for the Stop gate's one no-record block. A hold
+    that comes first takes that block's place (the plan is then written after the
+    record, not before it). One that comes after the block still holds once:
+    "nothing is decided yet" may answer a block, and the user decides later.
+    """
+    nudged = _marker_path(session_id, ".nudged")
+    enforced = _marker_path(session_id, ".enforced")
+    held = _marker_path(session_id, ".norecord-held")
+    if not held or _planning_prompts(session_id) < 2:
+        return False
+    try:
+        if os.path.exists(held) or not (os.path.exists(nudged) or os.path.exists(enforced)):
+            return False
+        # Saved first: without it every write would be held.
+        with _open_marker(held, "w") as handle:
+            handle.write("1")
+    except OSError:
+        return False
+    try:
+        # A hold that comes first is the session's no-record enforcement: the Stop gate then does not block for it.
+        if os.path.exists(nudged) and not os.path.exists(enforced):
+            os.rename(nudged, enforced)
+    except OSError:
+        pass
+    return True
 
 
 def _publish_new(path, text):

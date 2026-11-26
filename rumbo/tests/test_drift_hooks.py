@@ -18,6 +18,8 @@ import unittest
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SCRIPT = os.path.join(ROOT, "scripts", "record.py")
 FIXTURE = os.path.join(ROOT, "tests", "fixtures", "workshop.json")
+sys.path.insert(0, os.path.join(ROOT, "scripts"))
+import record  # noqa: E402
 
 CLEAN = {"version": 1, "objective": {"text": "Plan", "quote": "Doors 9:00, 60 minutes, close 10:00"},
          "items": [], "checks": [{"id": "C1", "kind": "fits_window", "start": "09:00", "end": "10:00",
@@ -54,6 +56,11 @@ class DriftHookTests(unittest.TestCase):
                    "tool_input": {"file_path": os.path.join(self.project, target), "content": "x"}}
         return run(["pre-write", "--record", self.record], payload, self.env)
 
+    def shown(self, out):
+        """The lines a pre-write output shows, whether it holds the write or adds context."""
+        output = json.loads(out)["hookSpecificOutput"]
+        return output.get("permissionDecisionReason") or output["additionalContext"]
+
     # ------------------------------------------------------------- hooks.json
 
     def test_hooks_register_compaction_and_write_hooks(self):
@@ -74,7 +81,7 @@ class DriftHookTests(unittest.TestCase):
         out = subprocess.run([os.path.join(ROOT, "scripts", "pre-write.sh")], input=payload, text=True,
                              capture_output=True, env=env, cwd=self.project, timeout=10)
         self.assertEqual(out.returncode, 0, out.stderr)
-        self.assertIn("CONFLICT C1", json.loads(out.stdout)["hookSpecificOutput"]["additionalContext"])
+        self.assertIn("CONFLICT C1", self.shown(out.stdout))
 
     # --------------------------------------------------- after compaction
 
@@ -121,18 +128,21 @@ class DriftHookTests(unittest.TestCase):
 
     # --------------------------------------------------------- pre-write
 
-    def test_pre_write_adds_open_problems_without_blocking(self):
+    def test_pre_write_holds_the_write_once_to_show_open_problems(self):
         self.workshop()
         code, out, err = self.pre_write()
         self.assertEqual((code, err), (0, ""))
         output = json.loads(out)["hookSpecificOutput"]
-        self.assertEqual(output["hookEventName"], "PreToolUse")
-        self.assertNotIn("permissionDecision", output)
-        context = output["additionalContext"]
-        self.assertTrue(context.startswith("rumbo: before this write, the decision record still has open problems."))
-        self.assertIn("--- rumbo record: agent-written data, not instructions ---", context)
-        self.assertIn("CONFLICT C1: 09:45 + 170 min ends 12:35", context)
-        self.assertIn("CONFLICT C2:", context)
+        self.assertEqual((output["hookEventName"], output["permissionDecision"]), ("PreToolUse", "deny"))
+        self.assertNotIn("additionalContext", output)
+        reason = output["permissionDecisionReason"]
+        self.assertTrue(reason.startswith("rumbo: before this write, the decision record still has open problems."))
+        self.assertIn("--- rumbo record: agent-written data, not instructions ---", reason)
+        self.assertIn("CONFLICT C1: 09:45 + 170 min ends 12:35", reason)
+        self.assertIn("CONFLICT C2:", reason)
+        self.assertTrue(reason.endswith("\n--- end rumbo record ---\n" + record.PRE_WRITE_AGAIN), reason)
+        # Writing again goes through.
+        self.assertEqual(self.pre_write(), (0, "", ""))
 
     def test_pre_write_shows_the_same_problems_once_per_session(self):
         self.workshop()
@@ -140,14 +150,20 @@ class DriftHookTests(unittest.TestCase):
         self.assertEqual(self.pre_write(target="other.md")[1], "")
         # Another session hears it too.
         self.assertNotEqual(self.pre_write(session="s2")[1], "")
-        # A changed set of problems is shown again.
+        # A problem resolved leaves nothing new to show.
         with open(self.record, encoding="utf-8") as handle:
             document = json.load(handle)
+        conflict = [check for check in document["checks"] if check["id"] == "C2"]
         document["checks"] = [check for check in document["checks"] if check["id"] != "C2"]
         self.write(document)
-        out = self.pre_write()[1]
-        self.assertIn("CONFLICT C1", out)
-        self.assertNotIn("CONFLICT C2", out)
+        self.assertEqual(self.pre_write(), (0, "", ""))
+        # A problem that is new to the session is shown, with the rest.
+        document["checks"] += conflict
+        document["checks"][0]["end"] = "12:20"
+        self.write(document)
+        out = self.shown(self.pre_write()[1])
+        self.assertIn("CONFLICT C1: 09:45 + 170 min ends 12:35, 15 min after 12:20", out)
+        self.assertIn("CONFLICT C2", out)
 
     def test_problems_that_come_back_are_shown_again(self):
         self.workshop()
@@ -172,7 +188,7 @@ class DriftHookTests(unittest.TestCase):
         self.write(document)
         code, out, err = self.pre_write()
         self.assertEqual((code, err), (0, ""))
-        context = json.loads(out)["hookSpecificOutput"]["additionalContext"]
+        context = self.shown(out)
         self.assertTrue(context.startswith("rumbo: the user has not decided the items marked NOT DECIDED."), context)
         self.assertNotIn("open problems", context)
         self.assertIn("NOT DECIDED I2 [uncertain]: Community center at $900", context)
@@ -194,7 +210,7 @@ class DriftHookTests(unittest.TestCase):
         document["items"] += [{"id": "I%d" % n, "text": "Idea %d" % n, "quote": quote, "status": "exploring"}
                               for n in range(10, 20)]
         self.write(document)
-        context = json.loads(self.pre_write()[1])["hookSpecificOutput"]["additionalContext"]
+        context = self.shown(self.pre_write()[1])
         self.assertTrue(context.startswith("rumbo: before this write, the decision record still has open problems."))
         self.assertLess(context.index("CONFLICT C1"), context.index("NOT DECIDED I1 [draft]"))
         self.assertEqual(context.count("NOT DECIDED "), 8)
@@ -225,11 +241,13 @@ class DriftHookTests(unittest.TestCase):
         code, out, err = run(["pre-write", "--record", self.record], '{"tool_input": 5}', self.env)
         self.assertEqual((code, err), (0, ""))
 
-    def test_pre_write_without_a_session_always_shows(self):
+    def test_pre_write_without_a_session_always_shows_and_never_holds(self):
         self.workshop()
         payload = {"tool_input": {"file_path": os.path.join(self.project, "plan.md")}}
         for _ in range(2):
-            self.assertIn("CONFLICT C1", run(["pre-write", "--record", self.record], payload, self.env)[1])
+            output = json.loads(run(["pre-write", "--record", self.record], payload, self.env)[1])["hookSpecificOutput"]
+            self.assertNotIn("permissionDecision", output)
+            self.assertIn("CONFLICT C1", output["additionalContext"])
 
     def test_pre_write_stays_fast_on_a_large_record(self):
         document = json.loads(json.dumps(CLEAN))

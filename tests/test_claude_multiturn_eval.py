@@ -154,6 +154,33 @@ class RunnerTests(unittest.TestCase):
             done = self.runner(*args)
             self.assertEqual(done.returncode, 2)
 
+    def test_a_write_held_by_the_pre_write_hook_is_counted_with_its_turn(self):
+        sys.path.insert(0, os.path.join(ROOT, "scripts"))
+        import claude_multiturn_eval
+        transcript = os.path.join(self.tmp.name, "held.jsonl")
+        reason = "rumbo: this session looks like planning work and there is no decision record."
+        entries = [
+            {"type": "user", "message": {"role": "user", "content": "Plan the offsite."}},
+            {"type": "user", "message": {"role": "user", "content": "Write plan.md."}},
+            {"type": "assistant", "message": {"role": "assistant", "content": [
+                {"type": "tool_use", "id": "t1", "name": "Write", "input": {"file_path": "plan.md"}}]}},
+            {"type": "user", "toolUseResult": "Error", "message": {"role": "user", "content": [
+                {"type": "tool_result", "tool_use_id": "t1", "is_error": True,
+                 "content": "PreToolUse:Write hook error: " + reason}]}},
+            # Another hook's denial, or a failed write, is not the plugin's hold.
+            {"type": "user", "toolUseResult": "Error", "message": {"role": "user", "content": [
+                {"type": "tool_result", "tool_use_id": "t2", "is_error": True,
+                 "content": "PreToolUse:Write hook error: not allowed here"}]}},
+            {"type": "user", "toolUseResult": "Error", "message": {"role": "user", "content": [
+                {"type": "tool_result", "tool_use_id": "t3", "is_error": True, "content": "rumbo: no such file"}]}},
+        ]
+        with open(transcript, "w", encoding="utf-8") as handle:
+            for entry in entries:
+                handle.write(json.dumps(entry) + "\n")
+        blocks, naming, holds = claude_multiturn_eval.read_session(transcript)
+        self.assertEqual((blocks, naming), ([], []))
+        self.assertEqual(holds, [(2, reason)])
+
     def test_regrade_takes_only_the_run_directory(self):
         for args in (["--regrade", self.out, self.case], ["--regrade", self.out, "--out", self.out]):
             done = self.runner(*args)

@@ -1,4 +1,4 @@
-"""Tabulate multi-turn eval runs: grader pass counts, Stop blocks, record ids named and cost per arm.
+"""Tabulate multi-turn eval runs: grader pass counts, Stop blocks, write holds, record ids named and cost per arm.
 
 usage: python3 scripts/eval_summary.py LABEL=DIR [LABEL=DIR ...]
 
@@ -29,7 +29,7 @@ def tabulate(arms):
             case = os.path.basename(os.path.normpath(row["case"]))
             entry = table.setdefault(case, {}).setdefault(label, {
                 "runs": 0, "complete": 0, "passed": collections.Counter(), "graded": collections.Counter(),
-                "blocks": 0, "naming": 0})
+                "blocks": 0, "holds": 0, "naming": 0})
             entry["runs"] += 1
             costs[label] += row.get("cost") or 0
             if row.get("failure"):
@@ -37,6 +37,7 @@ def tabulate(arms):
                 continue
             entry["complete"] += 1
             entry["blocks"] += len(row.get("blocks") or [])
+            entry["holds"] += len(row.get("holds") or [])
             entry["naming"] += bool(row.get("naming_ids"))
             for name, verdict in (row.get("graders") or {}).items():
                 # ERROR, MISSING and SKIPPED are not verdicts on the session.
@@ -60,7 +61,7 @@ def render(arms):
     out += ["", "| Case | Measure | " + " | ".join(labels) + " |", "| --- | --- | " + " | ".join("---" for _ in labels) + " |"]
     for case, by_arm in table.items():
         for measure, title in (("complete", "complete sessions"), ("blocks", "Stop blocks"),
-                               ("naming", "sessions naming a record id")):
+                               ("holds", "write holds"), ("naming", "sessions naming a record id")):
             cells = []
             for label in labels:
                 entry = by_arm.get(label)
