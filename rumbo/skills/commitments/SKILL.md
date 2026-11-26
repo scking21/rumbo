@@ -136,9 +136,10 @@ the user never sees it.
 ## Before writing
 
 Before you write or edit a file, a hook may add the record's open problems
-(`CONFLICT` and `ASSUMPTION` lines, each with the action to take) to your
-context. Deal with them before the deliverable, not after: fix the plan only as
-the user agrees, or say the problem plainly in what you write. After a context
+(`CONFLICT` and `ASSUMPTION` lines, each with the action to take) and the items
+the user has not decided (`NOT DECIDED` lines) to your context. Deal with them
+before the deliverable, not after: fix the plan only as the user agrees, or say
+the problem plainly in what you write, and present each undecided item as open. After a context
 compaction the record is shown again; trust it over the compacted summary.
 
 In what you write, only `commitment` items are decided. Present a `draft`,

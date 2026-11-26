@@ -1363,6 +1363,8 @@ class RecordTest(unittest.TestCase):
                 self.assertEqual((code, err), (0, ""))
                 outs.append(out.strip())
             self.assertIn("do not delete or weaken a check to pass", json.loads(outs[0])["reason"])
+            # Eval runs on 0.3.18: both replies that named record ids to the user came right after this block.
+            self.assertIn("in the user's terms, never by the record's ids", json.loads(outs[0])["reason"])
             # The agent already answered this exact block in this stop, so the unchanged repeat passes.
             self.assertEqual(outs[1], "")
             self.assertIn("do not delete or weaken a check to pass", json.loads(outs[2])["reason"])

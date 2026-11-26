@@ -51,6 +51,17 @@ The blocks whose problems are all assumed values are unchanged: 15 of 15 and 0 o
 
 Four conflict blocks are still not read as stated. In one, no reply had stated the conflict in full. In the other three the conflict now counts as stated. The same block also holds assumed values, told earlier, that the reply did not mention again with a word that calls them assumptions: the $60 handouts, a 45-minute arrival block, and the 30- and 10-minute slots. The replay assumes each check had the same values at the session's earlier stops.
 
+**Live.** The two cases with most of the later-turn blocks ran on this version, graded by the same sonnet judge: `01-workshop-full` on all three models (three sonnet, three haiku, two opus sessions) and `05-draft-is-not-a-decision` on haiku (three) and opus (two). The same sessions on 0.3.18 are the comparison:
+
+| Model | Stop blocks, 0.3.18 | 0.3.19 | Gradings passed, 0.3.18 | 0.3.19 |
+| --- | --- | --- | --- | --- |
+| sonnet | 1 | 1 | 18 of 18 | 18 of 18 |
+| haiku | 15 | 12 | 27 of 27 | 25 of 27 |
+| opus | 2 | 1 | 18 of 18 | 18 of 18 |
+
+- Haiku's short repeat blocks fell from 3 to 1. Replayed, none of the 0.3.19 blocks with check problems is read as stated: each left an assumed value or a conflict unsaid.
+- Haiku's two failed gradings are `05-draft-is-not-a-decision`'s "draft and idea stay open". One of those sessions kept no record. The other recorded the lodging and the two caterers but not the agenda draft or the ropes-course idea that the grader looks for. That case had varied on haiku before (2 of 3 on 0.3.15); this release changes only how the gate reads a told conflict.
+
 ## Verification and rollback
 
 ```sh

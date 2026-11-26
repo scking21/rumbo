@@ -159,6 +159,47 @@ class DriftHookTests(unittest.TestCase):
         self.write(broken)
         self.assertNotEqual(self.pre_write()[1], "")
 
+    def test_pre_write_lists_the_items_the_user_has_not_decided(self):
+        # Eval runs on 0.3.15 and 0.3.18: haiku's plan for 11-rejected-option
+        # listed the community center as decided while its record held it as uncertain.
+        said = "Two venues: the hotel ballroom at $1,800 or the community center at $900. No, don't use the ballroom."
+        document = {"version": 1, "objective": {"text": "Offsite", "quote": said}, "checks": [], "items": [
+            {"id": "I1", "text": "Hotel ballroom ruled out", "quote": said, "status": "rejected"},
+            {"id": "I2", "text": "Community center at $900", "quote": said, "status": "uncertain"},
+            {"id": "I3", "text": "Budget $3,000", "quote": said, "status": "commitment"},
+            {"id": "I4", "text": "Old draft agenda", "quote": said, "status": "draft"},
+            {"id": "I5", "text": "Draft agenda", "quote": said, "status": "draft", "replaces": ["I4"]}]}
+        self.write(document)
+        code, out, err = self.pre_write()
+        self.assertEqual((code, err), (0, ""))
+        context = json.loads(out)["hookSpecificOutput"]["additionalContext"]
+        self.assertTrue(context.startswith("rumbo: the user has not decided the items marked NOT DECIDED."), context)
+        self.assertNotIn("open problems", context)
+        self.assertIn("NOT DECIDED I2 [uncertain]: Community center at $900", context)
+        self.assertIn("NOT DECIDED I5 [draft]: Draft agenda", context)
+        for absent in ("I1", "I3", "I4"):
+            self.assertNotIn("NOT DECIDED %s " % absent, context)
+        # Shown once while unchanged; nothing left undecided is silent.
+        self.assertEqual(self.pre_write(target="other.md")[1], "")
+        for item in document["items"][1:]:
+            item["status"] = "commitment"
+        self.write(document)
+        self.assertEqual(self.pre_write(), (0, "", ""))
+
+    def test_pre_write_shows_problems_first_and_caps_the_undecided_items(self):
+        self.workshop()
+        with open(self.record, encoding="utf-8") as handle:
+            document = json.load(handle)
+        quote = document["items"][0]["quote"]
+        document["items"] += [{"id": "I%d" % n, "text": "Idea %d" % n, "quote": quote, "status": "exploring"}
+                              for n in range(10, 20)]
+        self.write(document)
+        context = json.loads(self.pre_write()[1])["hookSpecificOutput"]["additionalContext"]
+        self.assertTrue(context.startswith("rumbo: before this write, the decision record still has open problems."))
+        self.assertLess(context.index("CONFLICT C1"), context.index("NOT DECIDED I1 [draft]"))
+        self.assertEqual(context.count("NOT DECIDED "), 8)
+        self.assertIn("... and 3 more items not decided", context)
+
     def test_pre_write_is_silent_when_nothing_is_open(self):
         self.write(CLEAN)
         self.assertEqual(self.pre_write(), (0, "", ""))

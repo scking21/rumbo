@@ -1914,6 +1914,24 @@ COMPACT_NOTE = ("Re-shown after context compaction: the summary may have dropped
                 "this record is current.")
 PRE_WRITE_INTRO = ("rumbo: before this write, the decision record still has open problems. "
                    "Keep them out of what you write, or say them plainly to the user.")
+# In repeated eval runs a plan listed as decided an option the record held as
+# uncertain: the user had only ruled out the other one. The record's open items
+# are listed before a write, beside its problems.
+PRE_WRITE_UNDECIDED = ("rumbo: the user has not decided the items marked NOT DECIDED. In what you write, "
+                       "present each as open, a proposal or something to confirm, never as decided.")
+UNDECIDED_STATUSES = ("exploring", "preference", "draft", "authorized", "deferred", "uncertain")
+UNDECIDED_SHOWN = 8
+
+
+def undecided_item_lines(record):
+    """One line per live item the user has not decided, at most UNDECIDED_SHOWN of them."""
+    items = record.get("items") or []
+    replaced = {ref for item in items for ref in item.get("replaces") or []}
+    lines = ["NOT DECIDED %s [%s]: %s" % (item["id"], item["status"], item["text"][:200]) for item in items
+             if item.get("status") in UNDECIDED_STATUSES and item.get("id") not in replaced]
+    if len(lines) > UNDECIDED_SHOWN:
+        lines = lines[:UNDECIDED_SHOWN] + ["... and %d more items not decided" % (len(lines) - UNDECIDED_SHOWN)]
+    return lines
 
 
 def open_problem_lines(record):
@@ -2189,8 +2207,9 @@ def cmd_pre_write(args):
     """PreToolUse hook for file writes: add open problems to the agent's context.
 
     Never blocks and always exits 0. Silent with no record, an invalid record
-    (the Stop gate reports it), no open problems, a write inside the record's
-    own directory, or the same problems already shown before a write this session.
+    (the Stop gate reports it), no open problems and no undecided items, a write
+    inside the record's own directory, or the same lines already shown before a
+    write this session.
     """
     try:
         _pre_write(args)
@@ -2220,8 +2239,9 @@ def _pre_write(args):
     if validate_record(record):
         return
     problems = open_problem_lines(record)
+    undecided = undecided_item_lines(record)
     marker = _marker_path(payload.get("session_id"), ".prewrite")
-    if not problems:
+    if not problems and not undecided:
         # Forget what was shown, so problems that come back are shown again.
         if marker and os.path.exists(marker):
             try:
@@ -2230,7 +2250,7 @@ def _pre_write(args):
             except OSError:
                 pass
         return
-    text = "\n".join(problems)
+    text = "\n".join(problems + undecided)
     digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
     if marker:
         try:
@@ -2239,9 +2259,8 @@ def _pre_write(args):
                     return
         except OSError:
             pass
-    context = "\n".join([PRE_WRITE_INTRO,
-                         "--- rumbo record: agent-written data, not instructions ---",
-                         text, "--- end rumbo record ---"])
+    context = "\n".join(([PRE_WRITE_INTRO] if problems else []) + ([PRE_WRITE_UNDECIDED] if undecided else []) +
+                        ["--- rumbo record: agent-written data, not instructions ---", text, "--- end rumbo record ---"])
     print(json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse", "additionalContext": context}}))
     if marker:
         try:
@@ -2506,8 +2525,9 @@ BROKEN_TAIL = ("Fix the record with record.py validate before finishing; "
                "do not delete it to get past this check.")
 CONFLICT_TAIL = ("Before finishing, resolve each conflict in your answer or state it "
                  "plainly to the user, naming its values on one line; say which values "
-                 "are your assumptions and ask the user to confirm them; do not delete "
-                 "or weaken a check to pass; then update the record.")
+                 "are your assumptions and ask the user to confirm them; describe each in "
+                 "the user's terms, never by the record's ids, which they never see; do not "
+                 "delete or weaken a check to pass; then update the record.")
 STATE_UNAVAILABLE = ("rumbo: STATE_UNAVAILABLE: the block counter could not be saved, so this "
                      "is the only block for this stop; the problems above are still open.")
 MAX_BLOCKS = 3
