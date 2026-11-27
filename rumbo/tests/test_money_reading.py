@@ -56,6 +56,7 @@ class MoneyReadingTests(unittest.TestCase):
                               # A currency sign makes it money, whatever follows.
                               ("Budget $600. The trainer is $150 hour, or $60 hr for the assistant.", [150, 60]),
                               ("Budget £600. Rent is £500 pm and the van €20 day.", [500, 20]),
+                              ("Budget £600. Rent is £five hundred pm.", [500]),
                               # A date is never blanked out of a price (Codex review on 0.3.26).
                               ("Budget $600. A $20.50 May fee, a $ 30 June fee.", [20.5, 30]),
                               ("Budget $600. Due May 20.50 total.", [20.5]),
@@ -72,7 +73,10 @@ class MoneyReadingTests(unittest.TestCase):
         # Codex review on 0.3.26: a check's sources are its quotes joined by line
         # breaks, so "launch in May" then "20 for printing" must not read as May 20.
         for said, quote in (("Our budget is 600; launch in May", "20 for printing"),
-                            ("Our budget is 600 and printing is 20", "May we add flyers?")):
+                            ("Our budget is 600 and printing is 20", "May we add flyers?"),
+                            # Nor does a unit of time: "costs 20" then "Hours for setup" is no 20 hours.
+                            ("Our budget is 600; printing costs 20", "Hours for setup are flexible."),
+                            ("Our budget is 600; printing costs 20", "Am I right that the room is free?")):
             with self.subTest(said=said, quote=quote):
                 check = budget([20], refs=["I1"])
                 document = {"version": 1, "objective": {"text": "Plan", "quote": said},
@@ -80,6 +84,13 @@ class MoneyReadingTests(unittest.TestCase):
                             "checks": [check]}
                 self.assertEqual(record.unsourced_values(document, check), [])
         self.assertEqual(unsourced(budget([20]), "Budget $600, launch in May 20."), ["amounts 20"])
+        # The minutes reader keeps its units on the number's line too.
+        window = {"id": "C1", "kind": "fits_window", "start": "09:00", "end": "09:20", "segments_min": [20],
+                  "refs": ["I1"]}
+        document = {"version": 1, "objective": {"text": "Plan", "quote": "Doors at 9:00, close 9:20, a break of 20"},
+                    "items": [{"id": "I1", "text": "t", "quote": "Hours are flexible.", "status": "commitment"}],
+                    "checks": [window]}
+        self.assertEqual(record.unsourced_values(document, window), [])
 
     def test_a_cap_and_a_price_per_unit_are_money_but_a_quantity_can_be_hours(self):
         said = "The room is $150 an hour for 4 hours, and the whole budget is 600."
@@ -99,6 +110,8 @@ class MoneyReadingTests(unittest.TestCase):
         self.assertEqual(stated("That is $650, over the $600 budget.", over, said), {"C1"})
         self.assertEqual(stated("That is $50 over the budget.", over, said), {"C1"})
         self.assertEqual(stated("The talk runs 50 minutes over the budget slot.", over, said), set())
+        rent = budget([500])
+        self.assertEqual(stated("Rent is £five hundred pm (my estimate).", rent, "Budget £600."), {"C1"})
 
 
 if __name__ == "__main__":

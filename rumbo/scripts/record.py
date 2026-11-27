@@ -373,9 +373,12 @@ def _is_number_sourced(num, source_text, excluded_unit=None):
 # live records, 6 of 254 budget checks had an estimate that looked sourced so). A
 # number with a currency sign stays money ("$150 hour"; see _read_numbers). A
 # quantity can be a length of time ("$150 an hour for 4 hours"): it reads as a number.
+# Like a date (see DATE_TEXT), a unit stays on the number's line: a check's sources
+# are its quotes joined by line breaks, and "costs 20" then "Hours for setup" is no
+# 20 hours.
 MONEY_EXCLUDED_UNIT = re.compile(
-    r"(?:[\s-]*(?:minutes?|mins?|hours?|hrs?|h|seconds?|secs?|days?|weeks?|months?|years?|nights?)"
-    r"|st|nd|rd|th|\s*[ap]\.?\s*m)\b", re.IGNORECASE)
+    r"(?:(?:[^\S\n]|-)*(?:minutes?|mins?|hours?|hrs?|h|seconds?|secs?|days?|weeks?|months?|years?|nights?)"
+    r"|st|nd|rd|th|[^\S\n]*[ap]\.?[^\S\n]*m)\b", re.IGNORECASE)
 # Only whole month names and their usual abbreviations: MONTH_NAME takes any word
 # that starts like one, and "marketing 50" is money.
 WHOLE_MONTH = (r"(?:(?i:january|february|march|april|june|july|august|september|october|november|december|"
@@ -488,14 +491,7 @@ def _read_numbers(source_text, excluded_unit=None):
         yield value
     # Spelled numbers: "twelve", "four hundred fifty dollars", "five thousand".
     for start, end, value in _word_numbers(source_text):
-        if value is None or excluded_unit is not None and excluded_unit.match(source_text, end):
-            continue
-        ends_scaled = re.search(r"(?:hundred|thousand|million|billion)$", source_text[start:end], re.IGNORECASE)
-        if (_after_fraction_prefix(source_text, start)
-                or AMOUNT_CONTINUED.match(source_text, end)
-                or _after_decimal_word(source_text, start)
-                or AFTER_SCALE.search(source_text[max(0, start - 16):start])
-                or (ends_scaled and SCALED_CONTINUED.match(source_text, end))):
+        if value is None:
             continue
         # Walk only the adjacent sign/currency prefix, not the complete quote:
         # rescanning the full prefix for every word makes long quotes quadratic.
@@ -507,6 +503,17 @@ def _read_numbers(source_text, excluded_unit=None):
             pos -= 1
             while pos >= 0 and source_text[pos].isspace():
                 pos -= 1
+        # As with digits, a currency sign makes it money whatever follows: "£five hundred pm".
+        if (excluded_unit is not None and not (currency and excluded_unit is MONEY_EXCLUDED_UNIT)
+                and excluded_unit.match(source_text, end)):
+            continue
+        ends_scaled = re.search(r"(?:hundred|thousand|million|billion)$", source_text[start:end], re.IGNORECASE)
+        if (_after_fraction_prefix(source_text, start)
+                or AMOUNT_CONTINUED.match(source_text, end)
+                or _after_decimal_word(source_text, start)
+                or AFTER_SCALE.search(source_text[max(0, start - 16):start])
+                or (ends_scaled and SCALED_CONTINUED.match(source_text, end))):
+            continue
         before_sign = pos - 1
         while before_sign >= 0 and source_text[before_sign].isspace():
             before_sign -= 1
@@ -781,7 +788,7 @@ def _stated_minutes(source_text):
 
 
 NON_MINUTE_TIME_UNIT = re.compile(
-    r"[\s-]*(?:hours?|hrs?|h|seconds?|secs?|days?|weeks?|months?|years?|nights?)\b", re.IGNORECASE)
+    r"(?:[^\S\n]|-)*(?:hours?|hrs?|h|seconds?|secs?|days?|weeks?|months?|years?|nights?)\b", re.IGNORECASE)
 
 
 def _is_minutes_sourced(minutes, source_text):
