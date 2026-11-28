@@ -373,7 +373,7 @@ def _is_number_sourced(num, source_text, excluded_unit=None):
 # live records, 6 of 254 budget checks had an estimate that looked sourced so). A
 # number with a currency sign stays money ("$150 hour"; see _read_numbers). A
 # quantity can be a length of time ("$150 an hour for 4 hours"): it reads as a number.
-# Like a date (see DATE_TEXT), a unit stays on the number's line: a check's sources
+# Like a date (see DAY_NUMBER), a unit stays on the number's line: a check's sources
 # are its quotes joined by line breaks, and "costs 20" then "Hours for setup" is no
 # 20 hours. It follows the number after spaces or one attached hyphen ("2-hour"), so
 # "costs 20 - hours" and "costs 20, hours" are not lengths of time either.
@@ -392,39 +392,29 @@ def _clock_time(value, text, end):
 # that starts like one, and "marketing 50" is money.
 WHOLE_MONTH = (r"(?:(?i:january|february|march|april|june|july|august|september|october|november|december|"
                r"jan|feb|mar|apr|jun|jul|aug|sept|sep|oct|nov|dec)\b\.?|May\b)")
-# A date stays on one line: a check's sources are its quotes joined by line
-# breaks, and "launch in May" then "20 for printing" is no May 20. Its day is 1 to
-# 31, so "Monthly costs: May 50, June 40" stays money; "May 20" reads as a date.
-DAY = r"(?:3[01]|[12]\d|0?[1-9])"
-DATE_TEXT = re.compile(r"\b" + WHOLE_MONTH + r"[^\S\n]*" + DAY + r"(?:st|nd|rd|th)?\b"
-                       r"|\b" + DAY + r"(?:st|nd|rd|th)?[^\S\n]+(?:of[^\S\n]+)?" + WHOLE_MONTH +
-                       r"|(?<!\d)\d{4}-(?:1[0-2]|0?[1-9])-" + DAY + r"(?!\d)")
-
-
+# A day of a date is no money: a whole number from 1 to 31 with no currency sign,
+# scale or currency word, right after a month name ("August 20", "Mar. 12") or
+# right before one ("20 May", "the 20 of May") on the same line, or a part of a
+# YYYY-MM-DD date. The number reader decides it on each whole number it reads, so
+# "$20.50 May fee", "May 20.50", "May 2 thousand dollars", "June 25 euros" and
+# "Monthly costs: May 50" stay money, and "launch in May" ending one quote and "20
+# for printing" starting the next are no May 20.
+DAY_NUMBER = re.compile(r"(?:3[01]|[12]\d|0?[1-9])\Z")
+MONTH_BEFORE = re.compile(r"(?<![A-Za-z])" + WHOLE_MONTH + r"[^\S\n]*\Z")
+MONTH_AFTER = re.compile(r"(?:st|nd|rd|th)?[^\S\n]+(?:of[^\S\n]+)?" + WHOLE_MONTH)
+ISO_DATE = re.compile(r"(?<!\d)\d{4}-(?:1[0-2]|0?[1-9])-(?:3[01]|[12]\d|0?[1-9])(?!\d)")
 CURRENCY_WORD = re.compile(r"[^\S\n]*(?:dollars?|bucks|euros?|pounds?|quid|usd|eur|gbp|cad|aud)\b", re.IGNORECASE)
-# A number with a scale word after it is an amount: "May 2 thousand dollars" is 2000.
-SCALE_WORD_AFTER = re.compile(r"[^\S\n]+(?:thousand|million|billion)\b", re.IGNORECASE)
 
 
-def _blank_dates(text):
-    """text with its dates blanked for the money reading, but never a piece of a
-    number or a price: "$20.50 May fee", "$ 20 May fee", "May 20.50", "June 25
-    euros" and "May 2 thousand dollars" keep theirs."""
-    def blank(match):
-        start, end = match.span()
-        before = start - 1
-        if before >= 0 and text[before] in "0123456789.,":
-            return match.group(0)
-        while before >= 0 and text[before].isspace():
-            before -= 1
-        if before >= 0 and text[before] in "$€£":
-            return match.group(0)
-        if end + 1 < len(text) and text[end] in ".," and text[end + 1].isdecimal():
-            return match.group(0)
-        if CURRENCY_WORD.match(text, end) or SCALE_WORD_AFTER.match(text, end):
-            return match.group(0)
-        return " "
-    return DATE_TEXT.sub(blank, text)
+def _day_of_date(text, match, iso_spans):
+    """True when the number match reads in text is a day of a date or a part of an ISO date (see DAY_NUMBER)."""
+    start, end = match.span(1)
+    if any(first <= start < last for first, last in iso_spans):
+        return True
+    if not DAY_NUMBER.match(match.group(1)) or CURRENCY_WORD.match(text, end):
+        return False
+    return (MONTH_BEFORE.search(text, max(0, start - 16), start) is not None
+            or MONTH_AFTER.match(text, end) is not None)
 
 
 def _is_money_sourced(num, source_text):
@@ -445,9 +435,7 @@ def _sourced_numbers(source_text, excluded_unit=None):
     key = (source_text, excluded_unit)
     found = _SOURCED_NUMBERS.get(key)
     if found is None:
-        # Money is read with the text's dates blanked (see MONEY_EXCLUDED_UNIT).
-        text = _blank_dates(source_text) if excluded_unit is MONEY_EXCLUDED_UNIT else source_text
-        found = frozenset(_read_numbers(text, excluded_unit))
+        found = frozenset(_read_numbers(source_text, excluded_unit))
         if len(_SOURCED_NUMBERS) >= _SOURCED_NUMBERS_KEPT:
             _SOURCED_NUMBERS.clear()
         _SOURCED_NUMBERS[key] = found
@@ -462,6 +450,8 @@ def _read_numbers(source_text, excluded_unit=None):
     # Remove the commas inside numbers ("1,200"), not those between words: in
     # "Printing costs 20, hours for setup are flexible" 20 is no length of time.
     no_commas = NUMBER_COMMA.sub("", source_text)
+    money = excluded_unit is MONEY_EXCLUDED_UNIT
+    iso_spans = [found.span() for found in ISO_DATE.finditer(no_commas)] if money else []
     # Compare values, not text: sign kept, trailing zeros equal ("$1.50" is 1.5), no
     # rounding. Digits next to ":" belong to a time, so "9:45" does not source 45; an
     # exponent stays part of its number, so "1e3" sources 1000, not 1 or 3.
@@ -492,7 +482,8 @@ def _read_numbers(source_text, excluded_unit=None):
         # "$1.5k" is 1500 and "1.8 million" is 1800000, never 1.5 or 1.8. A bare "M"
         # scales only after a currency sign: "$2.5M" is money, "5m" is a length.
         scale = SCALE_SUFFIX.match(no_commas, match.end())
-        if scale and (scale.group(1) or scale.group(2) or currency):
+        scaled = bool(scale and (scale.group(1) or scale.group(2) or currency))
+        if scaled:
             word = (scale.group(1) or scale.group(2) or scale.group(3)).lower()
             try:
                 value *= {"k": 1000, "m": 10 ** 6, "bn": 10 ** 9}.get(word) or SCALE_WORDS[word]
@@ -506,6 +497,8 @@ def _read_numbers(source_text, excluded_unit=None):
                 continue
             if excluded and excluded_unit.match(no_commas, scale.end()):
                 continue
+        if money and not currency and not scaled and _day_of_date(no_commas, match, iso_spans):
+            continue
         # A minus not preceded by a digit negates; "30-50" stays a range.
         before_sign = pos - 1
         while before_sign >= 0 and no_commas[before_sign].isspace():
