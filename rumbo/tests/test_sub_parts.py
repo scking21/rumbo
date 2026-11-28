@@ -74,8 +74,12 @@ class ZeroFactorTests(unittest.TestCase):
                 self.assertIn("amounts quantity 0", unsourced(budget(none_sold), "Budget $600. " + said))
 
     def test_count_stems(self):
-        self.assertEqual([record._count_stem(word) for word in ("people", "parties", "seats", "class", "Attendees")],
-                         ["person", "party", "seat", "class", "attendee"])
+        for word, singular in (("people", "person"), ("parties", "party"), ("seats", "seat"), ("class", "class"),
+                               ("Attendees", "attendee"), ("cookies", "cookie"), ("classes", "class"), ("boxes", "box"),
+                               ("pies", "pie"), ("buses", "bus")):
+            with self.subTest(word=word):
+                self.assertIn(singular, record._count_stems(word))
+                self.assertTrue(record._count_stems(word) & record._count_stems(singular))
 
 
 class ClockTimeTests(unittest.TestCase):
