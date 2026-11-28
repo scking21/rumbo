@@ -82,8 +82,11 @@ class OutcomeHandoffTests(unittest.TestCase):
             json.dump(document, handle, indent=2)
 
     def run_cli(self, *args, payload=None, env=None):
+        # Always give the child a closed stdin: show reads hook JSON from stdin, and
+        # inheriting the test runner's stdin made it wait out the timeout when that
+        # stdin was an open pipe.
         return subprocess.run(
-            [sys.executable, SCRIPT, *args], input=payload, text=True,
+            [sys.executable, SCRIPT, *args], input="" if payload is None else payload, text=True,
             capture_output=True, env=env or self.env, timeout=10,
         )
 

@@ -293,15 +293,19 @@ AMOUNT_CONTINUED = re.compile(
 AMOUNT_AFTER_POINT = re.compile(r"\b(?:point|dot)[\s-]+$", re.IGNORECASE)
 
 
+DECIMAL_WORD_BEFORE = re.compile(r"\b(?:point|dot)$", re.IGNORECASE)
+
+
 def _after_decimal_word(text, start):
     # Scan only adjacent separators, then a bounded marker. A character window
     # alone loses point/dot when the user adds whitespace.
     pos = start
     while pos > 0 and (text[pos - 1].isspace() or text[pos - 1] == "-"):
         pos -= 1
-    if pos == start:
+    # "point" and "dot" end in a letter: anything else before the number is neither.
+    if pos == start or not text[pos - 1].isalpha():
         return False
-    return re.search(r"\b(?:point|dot)$", text[max(0, pos - 6):pos], re.IGNORECASE) is not None
+    return DECIMAL_WORD_BEFORE.search(text[max(0, pos - 6):pos]) is not None
 
 # A scaled amount that runs into another number is one amount, "1 million 500 thousand"
 # (1500000), "1 million five hundred thousand", "2 thousand 500 dollars" (2500) or
@@ -399,7 +403,7 @@ MERIDIEM_AFTER = re.compile(r"[^\S\n]*[ap]\.?[^\S\n]*m\b", re.IGNORECASE)
 
 def _clock_time(value, text, end):
     """True when value, ending at end in text, reads as an hour with am or pm after it."""
-    return 0 < value < 13 and MERIDIEM_AFTER.match(text, end) is not None
+    return 0 < value < 13 and _next_letter(text, end) and MERIDIEM_AFTER.match(text, end) is not None
 # Only whole month names and their usual abbreviations: MONTH_NAME takes any word
 # that starts like one, and "marketing 50" is money.
 WHOLE_MONTH = (r"(?:(?i:january|february|march|april|june|july|august|september|october|november|december|"
@@ -418,13 +422,30 @@ ISO_DATE = re.compile(r"(?<!\d)\d{4}-(?:1[0-2]|0?[1-9])-(?:3[01]|[12]\d|0?[1-9])
 CURRENCY_WORD = re.compile(r"[^\S\n]*(?:dollars?|bucks|euros?|pounds?|quid|usd|eur|gbp|cad|aud)\b", re.IGNORECASE)
 
 
+def _next_letter(text, end):
+    """True when the first character after end, past spaces on the same line, is a letter."""
+    while end < len(text) and text[end] in " \t":
+        end += 1
+    return end < len(text) and text[end].isalpha()
+
+
 def _day_of_date(text, match):
     """True when the number match reads in text is a day of a date with a month name (see DAY_NUMBER)."""
     start, end = match.span(1)
-    if not DAY_NUMBER.match(match.group(1)) or CURRENCY_WORD.match(text, end):
+    if not DAY_NUMBER.match(match.group(1)):
         return False
-    return (MONTH_BEFORE.search(text, max(0, start - 16), start) is not None
-            or MONTH_AFTER.match(text, end) is not None)
+    # A month and a currency word are words: without a letter beside the number
+    # neither regex can match, and most numbers have none, so skip them cheaply.
+    letter_after = _next_letter(text, end)
+    if letter_after and CURRENCY_WORD.match(text, end):
+        return False
+    before = start - 1
+    while before >= 0 and text[before] in " \t":
+        before -= 1
+    if before >= 0 and (text[before].isalpha() or text[before] == ".") and \
+            MONTH_BEFORE.search(text, max(0, start - 16), start) is not None:
+        return True
+    return letter_after and MONTH_AFTER.match(text, end) is not None
 
 
 def _is_money_sourced(num, source_text):
@@ -562,6 +583,9 @@ def _currency_before(text, start):
     if pos >= 0 and text[pos] in "$€£":
         pos -= 1
     else:
+        # A code is letters: skip the search when no letter comes before the number.
+        if pos < 0 or not text[pos].isascii() or not text[pos].isalpha():
+            return False, pos
         code = CURRENCY_CODE_BEFORE.search(text, max(0, start - 12), start)
         if code is None:
             return False, pos

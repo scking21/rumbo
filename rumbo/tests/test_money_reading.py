@@ -171,6 +171,20 @@ class MoneyReadingSpeedTests(unittest.TestCase):
         self.assertLess(time.perf_counter() - started, 3)
         self.assertEqual(unsourced(budget([20]), "Budget 600. " + "2026-03-20: event. " * 3), ["amounts 20"])
 
+    def test_money_costs_about_as_much_to_read_as_plain_numbers(self):
+        # 0.3.26 ran a currency-code search, a month check and an am/pm check on every
+        # number, and reading money took twice as long as reading numbers: a 1.2 MB
+        # quote of numbers took 6.3 s to check against 2.8 s before. Cheap letter
+        # checks now skip those regexes for numbers with no word beside them.
+        quote = "Budget 600. " + "1 " * 100000
+        timings = []
+        for unit in (None, record.MONEY_EXCLUDED_UNIT):
+            record._SOURCED_NUMBERS.clear()
+            started = time.perf_counter()
+            record._sourced_numbers(quote, unit)
+            timings.append(time.perf_counter() - started)
+        self.assertLess(timings[1], 1.8 * timings[0], timings)
+
 
 if __name__ == "__main__":
     unittest.main()
