@@ -997,12 +997,14 @@ HALF_OF_DAY = re.compile(r"[AaPp](?![A-Za-z])|\s+[AaPp](?=\s*(?:[^\w\s$€£]|$)
 # after it on the same line, as MERIDIEM_AFTER reads it for money.
 DOT_TIME = re.compile(r"(?<![0-9:.$€£])([0-9]{1,2})\.([0-9]{2})(?![0-9])[^\S\n]*([AaPp])\.?[^\S\n]*[Mm]\b")
 # A range's start is a bare hour that the end's time tells how to read: "2-4pm",
-# "9 to 11am", "9-10:30". An end with neither minutes nor am/pm ("June 3-5", "9 to
-# 5") makes no time.
+# "9 to 11am", "9-10:30". The end is read as the time reader reads it alone: as a
+# TIME_TOKEN with its seconds and am or pm, as a DOT_TIME, or as an hour with am or
+# pm. An end with neither minutes nor am/pm ("June 3-5", "9 to 5") makes no time.
 BARE_HOUR_RANGE = re.compile(
     r"(?<![0-9:.$€£])([0-9]{1,2})(?:[^\S\n]*[-\u2013\u2014][^\S\n]*|[^\S\n]+(?:to|until|till)[^\S\n]+)([0-9]{1,2})"
-    r"(?::([0-9]{2})(?![0-9])(?:[^\S\n]*([AaPp])\.?[^\S\n]*[Mm]\b)?"
-    r"|(?:\.([0-9]{2}))?(?![0-9])[^\S\n]*([AaPp])\.?[^\S\n]*[Mm]\b)", re.IGNORECASE)
+    r"(?::([0-9]{2})(?::([0-9]{2}))?(?![0-9]|:[0-9])(?:\s*([AaPp])\.?\s*[Mm]\b)?"
+    r"|\.([0-9]{2})(?![0-9])[^\S\n]*([AaPp])\.?[^\S\n]*[Mm]\b"
+    r"|(?![0-9])\s*([AaPp])\.?\s*[Mm]\b)", re.IGNORECASE)
 
 
 def _range_starts(text):
@@ -1014,8 +1016,12 @@ def _range_starts(text):
     """
     for match in BARE_HOUR_RANGE.finditer(text):
         start, end_hour = int(match.group(1)), int(match.group(2))
-        end_minute = int(match.group(3) or match.group(5) or 0)
-        meridiem = match.group(4) or match.group(6)
+        seconds = match.group(4)
+        # As for any time token, an end with seconds other than 00 states no time.
+        if seconds is not None and seconds != "00":
+            continue
+        end_minute = int(match.group(3) or match.group(6) or 0)
+        meridiem = match.group(5) or match.group(7) or match.group(8)
         if end_minute > 59:
             continue
         if meridiem:
@@ -1024,7 +1030,9 @@ def _range_starts(text):
             end = (end_hour % 12 + (12 if meridiem.lower() == "p" else 0)) * 60 + end_minute
             yield {hour for hour in (start % 12, start % 12 + 12) if 0 < (end - hour * 60) % 1440 <= 720}
         elif start <= 23 and end_hour <= 23:
-            other = (start + 12) % 24 if 1 <= start <= 12 and match.group(1)[0] != "0" and \
+            # The start takes the other half of the day only where the end could:
+            # not after a leading zero, seconds or "in the morning" (see TIME_TOKEN).
+            other = (start + 12) % 24 if 1 <= start <= 12 and match.group(1)[0] != "0" and seconds is None and \
                 not HALF_OF_DAY.match(text, match.end()) else start
             yield {start, other}
 
@@ -3471,8 +3479,11 @@ def _says(reading, value, line):
     """
     if reading == "time":
         hours, minutes = value.split(":")
+        # A whole hour can be stated without its minutes: "9am", "noon", or the start
+        # of a range in either clock ("2-4pm", "14-16:30").
         if ":" + minutes not in line and "." + minutes not in line and not (minutes == "00" and (
-                str(int(hours) % 12 or 12) in line or re.search(r"noon|midnight", line, re.IGNORECASE))):
+                str(int(hours) % 12 or 12) in line or str(int(hours)) in line
+                or re.search(r"noon|midnight", line, re.IGNORECASE))):
             return False
         return _is_time_sourced(value, line)
     if reading == "date":

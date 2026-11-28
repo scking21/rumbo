@@ -95,10 +95,33 @@ class ClockTimeTests(unittest.TestCase):
                                     ("Runs 9 to 11am.", "09:00", True), ("Runs 9 to 11am.", "21:00", False),
                                     ("Runs 11-1pm.", "11:00", True), ("Runs 8-1am.", "20:00", True),
                                     ("Runs 12-2pm.", "12:00", True), ("Runs from 9 until 5pm.", "09:00", True),
-                                    ("Runs 2-4.30pm.", "14:00", True), ("Runs 2-4\npm.", "14:00", False),
-                                    ("Runs 2-13pm.", "14:00", False), ("Runs 0-2pm.", "12:00", False)):
+                                    ("Runs 2-4.30pm.", "14:00", True), ("Runs 2-13pm.", "14:00", False),
+                                    ("Runs 0-2pm.", "12:00", False)):
             with self.subTest(said=said, time=time):
                 self.assertEqual(record._is_time_sourced(time, said), sourced)
+
+    def test_a_range_s_end_is_read_as_the_time_reader_reads_it_alone(self):
+        # Codex review on 0.3.29: the end "4:00:00pm" lost its pm after the seconds, so
+        # the start read in both halves and an invented 02:00 passed.
+        for said, time, sourced in (("Ours 2-4:00:00pm.", "02:00", False), ("Ours 2-4:00:00pm.", "14:00", True),
+                                    ("Ours 2-4:00:30pm.", "14:00", False), ("Ours 9-10:00:00.", "09:00", True),
+                                    ("Ours 9-10:00:00.", "21:00", False), ("Ours 2-4\npm.", "14:00", True),
+                                    ("Ours 2-4\npm.", "16:00", True)):
+            with self.subTest(said=said, time=time):
+                self.assertEqual(record._is_time_sourced(time, said), sourced)
+        window = {"id": "W", "kind": "fits_window", "start": "02:00", "end": "16:00", "segments_min": [120]}
+        self.assertEqual(unsourced(window, "The room is ours 2-4:00:00pm for a 120-minute workshop."), ["start 02:00"])
+
+    def test_the_reply_reader_finds_a_24_hour_range_start(self):
+        # Codex review on 0.3.29: the reply reader's quick test looked only for the
+        # 12-hour digits of a whole hour, so "14-16:30" did not state 14:00.
+        line = "I propose 14-16:30; please confirm."
+        self.assertTrue(record._is_time_sourced("14:00", line))
+        self.assertTrue(record._says("time", "14:00", line))
+        window = {"id": "W", "kind": "fits_window", "start": "14:00", "end": "16:30", "segments_min": [150]}
+        document = {"version": 1, "objective": {"text": "Plan", "quote": "We need 150 minutes, ending 16:30."},
+                    "items": [], "checks": [window]}
+        self.assertEqual(record.stated_checks(document, line), {"W"})
 
     def test_a_range_start_without_am_or_pm_reads_like_a_time_without_them(self):
         for said, time, sourced in (("Runs 9-10:30.", "09:00", True), ("Runs 9-10:30.", "21:00", True),
