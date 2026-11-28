@@ -171,6 +171,34 @@ class MoneyReadingSpeedTests(unittest.TestCase):
         self.assertLess(time.perf_counter() - started, 3)
         self.assertEqual(unsourced(budget([20]), "Budget 600. " + "2026-03-20: event. " * 3), ["amounts 20"])
 
+    def test_money_costs_about_as_much_to_read_as_plain_numbers(self):
+        # 0.3.26 ran a currency-code search, a month check and an am/pm check on every
+        # number, and reading money took twice as long as reading numbers: a 1.2 MB
+        # quote of numbers took 6.3 s to check against 2.8 s before. Cheap letter
+        # checks now skip those regexes for numbers with no word beside them.
+        quote = "Budget 600. " + "1 " * 100000
+        timings = []
+        for unit in (None, record.MONEY_EXCLUDED_UNIT):
+            record._SOURCED_NUMBERS.clear()
+            started = time.perf_counter()
+            record._sourced_numbers(quote, unit)
+            timings.append(time.perf_counter() - started)
+        self.assertLess(timings[1], 1.8 * timings[0], timings)
+
+    def test_the_cheap_checks_skip_the_same_spaces_as_the_regexes(self):
+        # Codex review on 0.3.28: the letter checks skipped only spaces and tabs, while
+        # the regexes they guard take any space but a line break. So "20 May" and
+        # "9 pm" sourced money of 20 and 9, and "June 25 euros" lost its 25.
+        said = ("Budget 600. Due 20 May. Doors at 9 pm. Rent: June 25 euros. Due June 20. "
+                "Also July 4th and March 20th. Fee: 30 dollars, Mar. 12 and 15 hours.")
+        expected = record._sourced_numbers(said, record.MONEY_EXCLUDED_UNIT)
+        self.assertEqual(sorted(map(str, expected)), ["25", "30", "600"])
+        for space in ("\t", "\x0b", "\x0c", "\r", "\x85", " ", " ", " ", " ", " ", " ", "　"):
+            with self.subTest(space=hex(ord(space))):
+                self.assertEqual(record._sourced_numbers(said.replace(" ", space), record.MONEY_EXCLUDED_UNIT), expected)
+        # A line break still ends the line a month or unit is read on.
+        self.assertEqual(unsourced(budget([20]), "Budget 600. Due 20\nMay brings rain."), [])
+
 
 if __name__ == "__main__":
     unittest.main()
