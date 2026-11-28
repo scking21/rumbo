@@ -19,7 +19,7 @@ import tempfile
 import time
 import zipfile
 
-from .core import Engine, RumboError, MAX_EVENTS, MAX_INGEST, MAX_LEDGER_BYTES, MAX_UPLOAD_TOTAL
+from .core import Engine, RumboError, binder, MAX_EVENTS, MAX_INGEST, MAX_LEDGER_BYTES, MAX_UPLOAD_TOTAL
 
 MAX_DATABASE_BYTES = MAX_LEDGER_BYTES + MAX_EVENTS * 1024 + 1024 * 1024
 MAX_MANIFEST_BYTES = 4 * 1024 * 1024
@@ -199,7 +199,7 @@ def _database_info(root):
         _fail('LEDGER_CORRUPT', 'Invalid ledger event data')
     summary = {key: state[key] for key in ('project_id', 'events_count', 'ledger_head')}
     summary.update(uploaded_blobs=len(uploads), external_file_references=sorted(external), notice=NOTICE)
-    return summary, uploads
+    return summary, uploads, state
 
 
 def _record(data):
@@ -240,7 +240,7 @@ def backup_project(root, destination):
         snapshot_root = staging / 'project'; snapshot_root.mkdir(mode=0o700)
         state_dir = snapshot_root / '.rumbo'; state_dir.mkdir(mode=0o700)
         _snapshot(source, state_dir / 'state.sqlite3')
-        summary, uploads = _database_info(snapshot_root)
+        summary, uploads, _ = _database_info(snapshot_root)
         files = {}
         archive_path = staging / 'archive.zip'
         _write(archive_path, b'')
@@ -359,7 +359,7 @@ def restore_project(archive, destination):
                     if len(data) != record['size'] or hashlib.sha256(data).hexdigest() != record['sha256']:
                         _fail('BACKUP_INVALID', 'Archive checksum mismatch')
                     _write(project / name, data)
-                summary, uploads = _database_info(project)
+                summary, uploads, state = _database_info(project)
                 if summary != manifest['summary']:
                     _fail('BACKUP_INVALID', 'Manifest summary does not match verified history')
                 expected = {DATABASE} | {BLOB_PREFIX + digest for digest in uploads}
@@ -370,6 +370,16 @@ def restore_project(archive, destination):
                         _fail('BACKUP_INVALID', 'Uploaded size does not match history')
                 if uploads:
                     _sync_directory(state_dir / 'artifacts')
+                # External project files are intentionally absent from the archive.
+                current_external = []
+                path_digests = {}
+                for task in state['tasks']:
+                    artifact = task['artifact']
+                    if artifact and artifact.get('source') != 'uploaded_text' and binder(task, state)(artifact):
+                        current_external.append(dict(task_id=task['id'], path=artifact['path'],
+                            sha256=artifact['sha256'], artifact_revision=artifact['revision']))
+                        destination_path = Path(artifact['path']).as_posix()
+                        path_digests.setdefault(destination_path, set()).add(artifact['sha256'])
                 _sync_directory(state_dir); _sync_directory(project)
                 # POSIX rename refuses an occupied directory and does not follow a destination symlink.
                 # Recheck for ordinary concurrent changes immediately before publication.
@@ -378,7 +388,8 @@ def restore_project(archive, destination):
                     _fail('DESTINATION_EXISTS', 'Restore destination is no longer empty')
                 os.rename(str(project), str(destination))
                 _sync_directory(destination.parent)
-        return dict(summary, destination=str(destination))
+        return dict(summary, destination=str(destination), current_external_artifacts=current_external,
+                    conflicting_external_paths=sorted(path for path, digests in path_digests.items() if len(digests) > 1))
     except RumboError:
         raise
     except (OSError, sqlite3.Error, ValueError, TypeError, RecursionError, zipfile.BadZipFile, zipfile.LargeZipFile, EOFError, RuntimeError):

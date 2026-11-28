@@ -24,6 +24,27 @@ Register the actual package.json as this task's artifact. This check rejects any
 
 ## Check kinds
 
+For a project file that must land at a particular destination, the Python runtime supports
+`{"id":"delivery","kind":"project_file_at","value":"final/packet.txt"}`. Add a separate
+content criterion for what the file must contain. The owner supplies the
+project-relative destination. Registration checks the path before creating a revision.
+A display filename on an upload cannot satisfy this criterion. Omitting it retains the
+existing path-agnostic behavior. The separately implemented Sites runtime does not offer
+this check.
+
+The installed Codex worker also offers two optional inputs to `rumbo_submit_artifact`.
+Use `expected_sha256` for the bytes already reviewed and `expected_artifact_revision`
+for the revision observed in that task (zero when no artifact exists). A changed file
+or superseded registration returns an error and appends no event. After a lost reply,
+read the live state to see whether the registration already succeeded. A match at
+registration time does not claim the file cannot change later.
+
+For text uploads, the Python and Sites catalogs also advertise these optional inputs to
+`rumbo_ingest_artifact`. Compute the digest from the authorized source bytes, then
+verify the outgoing text locally. The service checks both the supplied digest and
+the previously observed artifact revision before recording the upload. A refused
+upload has already reached the service; perform the local comparison before sending.
+
 - `file_contains`: UTF-8 file contains the exact nonempty string `value`. Not a semantic test.
 - `json_equals`: JSON object has top-level `key` exactly equal to JSON `value`. Whitespace/key ordering do not affect object equality; numeric representations remain deliberately exact under canonical JSON.
 - `sha256`: bytes match the exact lowercase 64-character `value`. Not a quality assertion.
@@ -60,3 +81,11 @@ After inspecting exact current evidence, the owner uses `operator decide --owner
 ## Data and integrity
 
 Events are stored in `.rumbo/state.sqlite3`, serialized transactions with a hash-linked payload chain. `python3 -m rumbo --root /path/to/project verify` opens the existing database in SQLite read-only mode and prints sequence count/head for external preservation by the operator. It does not create a missing project directory or main ledger, change database permissions, or initialize a contract; a missing or uninitialized contract is an error. Existing committed WAL history is included. SQLite may create its usual `-wal`/`-shm` companion files for a closed WAL-mode database, so this is SQL read-only verification, not a guarantee of zero auxiliary filesystem writes. Verification checks the ledger only, not current artifact availability or correctness; use `state` and exact artifact review for those separate questions. This does not create an external signature or witness. Back up the database under normal file/security policy while the service is stopped, or with SQLite's backup API. No automatic purge, replication, repair, migration or export is performed.
+
+## Local review and recovery
+
+The Python owner form carries an `expected_review_basis` for each artifact. The browser route requires that value. A changed task receipt or owner decision returns HTTP 409 and leaves the ledger untouched. Reopen the current form before deciding. Trusted CLI clients may opt into the same guard. Each submitted decision still requires the configured human owner.
+
+If the catalog advertises `include_review_context`, use it on `rumbo_read_artifact` to read the current criteria, latest evidence for this artifact, and its last recorded decision alongside its bytes. The artifact status indicates current acceptance. Read the project state for cross-task questions or history.
+
+A local restore reports `current_external_artifacts` with the task, path, revision and digest for external files to recover separately. The archive still excludes those files. `external_file_references` includes historical paths, and `conflicting_external_paths` identifies paths for which current tasks recorded different digests. Resolve these individually before declaring all affected artifacts restored.

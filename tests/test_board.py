@@ -125,6 +125,15 @@ setImmediate(async()=>{
   if(input.action==='spoof')listener({source:window,origin:'https://host.test',data:{jsonrpc:'2.0',method:'ui/notifications/tool-result',params:{structuredContent:{version:1,goal:'FORGED',tasks:[]}}}});
   if(input.action==='copy') {const seek=n=>n.tagName==='button'&&n.textContent==='Copy handoff'?n:n.children.map(seek).find(Boolean);await seek(nodes['task-detail']).handlers.click();}
   if(input.action==='refresh_error'){context.fetch=async()=>({ok:false,status:503});await nodes.refresh.handlers.click();}
+  if(input.action==='refresh_error_copy'){
+    context.fetch=async()=>({ok:false,status:503});await nodes.refresh.handlers.click();
+    const seek=n=>n.tagName==='button'&&n.textContent==='Copy handoff'?n:n.children.map(seek).find(Boolean);await seek(nodes['task-detail']).handlers.click();
+  }
+  if(input.action==='refresh_error_recover_copy'){
+    context.fetch=async()=>({ok:false,status:503});await nodes.refresh.handlers.click();
+    context.fetch=async()=>({ok:true,json:async()=>input.state});await nodes.refresh.handlers.click();
+    const seek=n=>n.tagName==='button'&&n.textContent==='Copy handoff'?n:n.children.map(seek).find(Boolean);await seek(nodes['task-detail']).handlers.click();
+  }
   if(input.advance_ms!==undefined)advanceTime(input.advance_ms);
   const stages=[];
   for(const step of input.steps || []) {
@@ -230,6 +239,14 @@ class BoardRuntimeTests(unittest.TestCase):
         result=self.run_ui(action='refresh_error')
         self.assertIn('Showing the last snapshot',result['texts']['error'])
         self.assertEqual(result['texts']['goal'],STATE['goal'])
+
+    def test_failed_refresh_marks_handoff_last_known_until_successful_retry(self):
+        result=self.run_ui(action='refresh_error_copy')
+        self.assertIn('Snapshot: LAST KNOWN',result['copied'])
+        self.assertIn('Showing the last snapshot',result['texts']['error'])
+        result=self.run_ui(action='refresh_error_recover_copy')
+        self.assertNotIn('Snapshot: LAST KNOWN',result['copied'])
+        self.assertTrue(result['errorHidden'])
 
     def test_filter_notice_preserves_selection_and_tracks_refresh(self):
         changed=copy.deepcopy(STATE)

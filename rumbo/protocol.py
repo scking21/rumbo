@@ -24,6 +24,12 @@ RECEIPT_NOTICE = 'Incomplete operation-time observation of one task; excludes go
 
 def mutation_receipt(name, args, state):
     """Project only a successful engine response; never change execution or storage."""
+    if 'decision_request_ack' in state:
+        return dict(kind='rumbo.decision_request_receipt.v1', complete=False,
+                    operation=name, project_id=state['project_id'], decision_request_ack=state['decision_request_ack'],
+                    ledger=dict(events_count=state['events_count'], head=state['ledger_head']),
+                    recovery=dict(tool='rumbo_state', arguments={}),
+                    notice='Recorded question only. The event identifies the original request, even if its task has since changed. Read current state for handoff. Owner delivery, reply, and acceptance are unverified.')
     task = next(task for task in state['tasks'] if task['id'] == args['task_id'])
     artifact = task['artifact']
     return dict(kind='rumbo.mutation_receipt.v1', complete=False,
@@ -59,8 +65,15 @@ QUESTION_INPUTS = {
         'related_task_ids': QUESTION_RELATED,
     },
     'rumbo_request_decision': {
+        'request_key': prop('string', 'Generate a fresh identifier per intended question and retain it with the exact observation. On uncertain delivery read state first. On the same project and worker, repeating that key and exact inputs acknowledges the original event without adding another question. A restarted worker has a new identity. Never reuse a key for changed evidence.', minLength=1, maxLength=64, pattern='^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$'),
         'observation': prop('object', 'Return the exact question_observation from the state used to compose this question. A stale observation appends nothing; reread and reconsider the wording. Not permission or proof a user read the question.'),
     },
+}
+
+
+UPLOAD_INPUTS = {
+    'expected_sha256': prop('string', 'SHA-256 of the original authorized source bytes, computed independently of the outgoing text.', pattern='^[a-f0-9]{64}$'),
+    'expected_artifact_revision': prop('integer', 'Current artifact revision observed before preparing the upload, or zero for a first registration.', minimum=0),
 }
 
 
@@ -68,6 +81,10 @@ def tool_definitions(oauth=False, *, question_observations=False):
     result=[]
     for name,title,description,properties,readonly in TOOL_SPECS:
         schema_properties=dict(properties)
+        if name == 'rumbo_ingest_artifact':
+            schema_properties.update(UPLOAD_INPUTS)
+        if name == 'rumbo_read_artifact':
+            schema_properties['include_review_context'] = prop('boolean', 'Include the current task criteria, latest applicable evidence, dependencies and last decision for these exact bytes.')
         if question_observations:
             schema_properties.update(QUESTION_INPUTS.get(name, {}))
         if not readonly:
@@ -75,6 +92,8 @@ def tool_definitions(oauth=False, *, question_observations=False):
         item=dict(name=name,title=title,description=description,inputSchema=dict(type='object',properties=schema_properties,required=list(properties),additionalProperties=False),outputSchema=dict(type='object'),annotations=dict(readOnlyHint=readonly,destructiveHint=False,openWorldHint=False,idempotentHint=readonly))
         if question_observations and name=='rumbo_state':
             item['inputSchema']['dependentRequired']={'related_task_ids':['question_task_id']}
+        if question_observations and name=='rumbo_request_decision':
+            item['inputSchema']['dependentRequired']={'request_key':['observation']}
         if oauth:
             item['securitySchemes']=[dict(type='oauth2',scopes=['rumbo:read'] if readonly else ['rumbo:read','rumbo:write'])]
         if name=='open_project_board':
@@ -118,6 +137,8 @@ def safe_json(raw):
 
 
 class Protocol:
+    extra_tool_inputs = {}
+
     def __init__(self,engine,oauth=False,owner_url=None,*,question_observations=False):
         if engine.role=='human':
             raise ValueError('MCP principals cannot hold human authority')
@@ -148,6 +169,11 @@ class Protocol:
                     return rpc_error(id,-32602,'Unknown tool')
                 try:
                     optional=set() if spec[4] else {'response_mode'}
+                    if name == 'rumbo_ingest_artifact':
+                        optional.update(UPLOAD_INPUTS)
+                    optional.update(self.extra_tool_inputs.get(name, {}))
+                    if name == 'rumbo_read_artifact':
+                        optional.add('include_review_context')
                     if self.question_observations:
                         optional.update(QUESTION_INPUTS.get(name, {}))
                     fields(args,set(spec[3]),optional)
@@ -176,6 +202,11 @@ class Protocol:
                         # the old words, or preserve what might be an incomplete declaration.
                         result['structuredContent']=dict(code=e.code, recovery=dict(tool='rumbo_state',
                             arguments={'question_task_id': args['task_id']}))
+                    elif self.question_observations and name=='rumbo_request_decision' and e.code=='QUESTION_KEY_CONFLICT':
+                        result['structuredContent']=dict(code=e.code, recovery=dict(tool='rumbo_state', arguments={}))
+                    elif name in ('rumbo_submit_artifact', 'rumbo_ingest_artifact') and e.code in (
+                            'DESTINATION_MISMATCH', 'STALE_REGISTRATION', 'REVIEWED_BYTES_CHANGED'):
+                        result['structuredContent'] = dict(code=e.code, recovery=dict(tool='rumbo_state', arguments={}))
             elif method=='resources/list':
                 result=dict(resources=[dict(uri=UI_URI,name='project-board',title='Project Board',mimeType='text/html;profile=mcp-app')])
             elif method=='resources/read':

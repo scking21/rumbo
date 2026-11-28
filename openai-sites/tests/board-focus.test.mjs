@@ -29,6 +29,26 @@ const localBoard=new URL('../../rumbo/web/board.html',import.meta.url);
 if(fs.existsSync(localBoard))boards.push(['local board',localBoard]);
 for(const [name,url] of boards){
  const source=fs.readFileSync(url,'utf8');
+ for(const change of ['same project','project ID','hosted key'])test(name+': selected task and handoff after '+change+' update',async()=>{
+  const {dom,d,update,pendingCopy}=await hostFixture(source);
+  try {
+   const first=snapshot();first.hosted_project_key='alpha';
+   await update(first);
+   const second=d.querySelector('[data-task-id="two"]');second.focus();second.click();
+   const next=snapshot();next.hosted_project_key=change==='hosted key'?'beta':'alpha';
+   if(change==='project ID')next.project_id='second-project';
+   next.tasks[0].title='Review invoices';next.tasks[1].title='Archive receipts';
+   await update(next);
+   const expected=change==='same project'?'two':'one';
+   assert.equal(d.querySelector('[aria-pressed="true"]').dataset.taskId,expected);
+   assert.equal(d.activeElement.dataset.taskId,expected);
+   d.querySelector('#task-detail button').click();
+   pendingCopy.at(-1).reject(new Error('Use manual copy'));await tick();
+   const handoff=d.getElementById('handoff-text').value;
+   assert.ok(handoff.includes('Project: '+next.project_id+'\n'));
+   assert.ok(handoff.includes(expected==='one'?'Task: one — Review invoices':'Task: two — Archive receipts'));
+  } finally {dom.window.close();}
+ });
  test(name+': focused task activation preserves keyboard focus on its replacement',async()=>{
   const {dom,d}=await fixture(source);try{
    const task=d.querySelectorAll('#task-list button')[1];task.focus();task.click();const selected=d.querySelector('#task-list [aria-pressed="true"]');

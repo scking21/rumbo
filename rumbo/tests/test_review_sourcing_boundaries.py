@@ -303,6 +303,18 @@ class ReviewSourcingBoundaryTests(unittest.TestCase):
                     dict(kind='fits_window',start='09:00',end='10:00',segments_min=[minutes]))
                 self.assertIn('PASS',result.stdout)
 
+    def test_spoken_signs_and_articles_do_not_create_positive_hours(self):
+        for phrase, minutes, expected in (
+            ("minus two hours", 120, "UNSOURCED"), ("negative an hour", 60, "UNSOURCED"),
+            ("an hours", 60, "UNSOURCED"), ("an hour", 60, "PASS"),
+            ("minus two hours; rehearsal is two hours", 120, "PASS"),
+            ("last estimate was negative. Rehearsal is an hour", 60, "PASS"),
+        ):
+            with self.subTest(phrase=phrase):
+                result = self.check_output("Start 9:00; " + phrase + "; finish 12:00.",
+                    dict(kind="fits_window", start="09:00", end="12:00", segments_min=[minutes]))
+                self.assertIn(expected, result.stdout)
+
     def test_spaced_signed_hours_never_source_positive_duration(self):
         for sign in ('-', '−'):
             for gap in (' ', '   ', '\t'):

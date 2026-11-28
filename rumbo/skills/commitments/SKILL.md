@@ -15,6 +15,7 @@ miss a scheduling conflict. The record is a memory aid, nothing more.
 - `init --objective TEXT --quote - <<'QUOTE'` — create the record with the goal and the user's own words, then a line with the user's exact words, then a line `QUOTE`; refuses to overwrite. Always pass the user's words through `--quote -` with a quoted heredoc (`<<'QUOTE'`); inside double quotes the shell rewrites `$` amounts and backticks.
 - `validate` — print `RECORD_OK`, or one fault line per problem.
 - `check` — validate, then print `PASS`/`FAIL` per check, `REPLACED` for a check a newer one replaces, and `DROPPED` for one a decision dropped; exit 1 if any check fails or is unsourced.
+- `handoff --root "<absolute project root>"` — emit the exact record SHA-256, target, every requested outcome and current bound-artifact observations; `CONTINUE` or `BOUNDED` exits 1, `COMPLETE` exits 0. For the standard project record, `HANDOFF_PROJECT_MISMATCH` exits 2. Recover both paths from the intended project and retry.
 - `show [--max-chars N]` — compact summary; silent when no record exists.
 - `stop-gate` — read the Stop hook input on stdin; block up to three times per session while checks or provenance remain unresolved. A failing or unsourced check that your reply already states (see Stopping) does not block. If the problems are unchanged when you stop again right after a block, the stop passes; at a later turn's stop, unchanged problems get a one-line status block.
 - Exit codes: 0 clean, 1 content problem, 2 tool or I/O problem.
@@ -34,6 +35,12 @@ one, record the decisions the user has already made, and keep adding them.
 
 Update only when a message adds, narrows, replaces, defers or rejects something
 that affects later work. Do not atomize every sentence into an item.
+
+For multi-deliverable or delegated work, add a top-level `target` naming the exact project or artifact target and one top-level `outcomes` row per requested result. Each row needs `id`, `text`, `owner`, `acceptance`, and `status`: `runnable`, `blocked`, or `verified`. Runnable rows need an exact `next_action`. Blocked rows need a specific `blocker` and `restart_trigger`. Verified rows need concise exact `evidence`; if that evidence is a local project file, bind it with `artifacts: [{"path":"project/relative/file","sha256":"..."}]`. A worker return, checkpoint, negative check or blocker on a different row never verifies this row. Keep unrelated runnable rows moving.
+
+If a row requires an existing numeric or date check to pass, list its IDs in `required_checks`, for example `["Budget"]`. Handoff reopens a verified row if a named check is missing, fails, uses unsourced values, or has been retired. Use the current check after an accepted correction. Keep the record of the old check. An outcome whose job is to report a conflict can be verified by evidence of that report. Only link checks whose success is part of that row’s acceptance.
+
+Run `handoff` before a handoff or closeout. `CONTINUE` means at least one row is runnable, including a row whose recorded artifact hash is stale. `BOUNDED` means nothing is runnable but at least one row has a blocker and restart trigger. Only `COMPLETE` means every recorded row is verified against any bound artifact bytes. This projection cannot prove the outcome list is exhaustive, the evidence is semantically sufficient or independent, the user accepted it, or the bytes stayed unchanged after the read.
 
 ## Status rules
 
@@ -157,9 +164,10 @@ choose the others.
 
 ## Stopping
 
-The Stop hook blocks, up to three times per session, while a check fails, a value
+The Stop hook blocks, up to three times per session, while an outcome remains runnable or its bound evidence is stale, a check fails, a value
 is unsourced, a quote is not found in the user's messages, the harness transcript
 is missing or unreadable, a failing check was deleted, or the record is unreadable.
+An outcome that is specifically blocked does not hold Stop: leave it in the handoff as `BOUNDED` with its owner and restart trigger. Another runnable outcome still holds Stop. Artifact hashing in the hook is bounded to 16 MiB per file; a larger bound artifact stays open until an explicit `handoff` checks it outside the hook, or the ledger binds a smaller evidence artifact.
 An unavailable transcript is unverified provenance, not a clean result; disclose
 it if a readable harness transcript cannot be supplied. Never invent transcript
 evidence. An `EARLIER_APPROVAL` line means the user approved something in an earlier

@@ -159,7 +159,7 @@ const labels = {unclaimed:'Unclaimed', claimed:'Claimed', blocked:'Blocked', pro
 const attention = new Set(['blocked','rejected','stale']);
 const embedded = window.parent !== window;
 const pending = new Map();
-let state = null, selected = null, ready = false, canRefresh = false, hostOrigin = null;
+let state = null, selected = null, ready = false, canRefresh = false, hostOrigin = null, snapshotCurrent = false;
 let requestSequence = 0, stateSequence = 0, resizeTimer = null, lastSize = '', hostContext = {}, closed = false;
 let initialHostSequence = 0, receivedInitialHostResult = false;
 const currentStateRequest = sequence => !closed && sequence === stateSequence;
@@ -183,14 +183,16 @@ function date(value) {
   return Number.isNaN(valueDate.getTime()) ? text(value) : valueDate.toLocaleString();
 }
 function error(message) {
+  if (state) snapshotCurrent = false;
   $('error').textContent = message + (state ? ' Showing the last snapshot; it may be out of date.' : ' No project snapshot is available.');
   $('error').hidden = false;
   $('connection').textContent = embedded ? 'Host connection needs attention' : 'Local connection needs attention';
-  $('refresh').disabled = false;
+  const hostMustUpdate = embedded && ready && !canRefresh;
+  $('refresh').disabled = hostMustUpdate;
   $('refresh').textContent = 'Refresh';
   if (!state) {
     $('goal').textContent = 'Your acceptance board';
-    $('task-detail').replaceChildren(element('p','Refresh to try again. In an MCP host, open the Rumbo board tool to load a project.','empty large'));
+    $('task-detail').replaceChildren(element('p',hostMustUpdate ? 'Open the Rumbo board tool in the host to load a project.' : 'Refresh to try again. In an MCP host, open the Rumbo board tool to load a project.','empty large'));
   }
 }
 function matches(task, filter) {
@@ -204,8 +206,9 @@ function updateFilterNotice() {
   const task = state.tasks.find(item => item.id === selected);
   notice.hidden = !task || matches(task, $('status-filter').value);
 }
-function renderList() {
+function renderList(sameProject = true) {
   const focusedTask = document.activeElement?.dataset?.taskId;
+  const focusId = sameProject ? focusedTask : selected;
   let focusTarget = null;
   const tasks = state.tasks.filter(task => matches(task, $('status-filter').value));
   const fragment = document.createDocumentFragment();
@@ -215,7 +218,7 @@ function renderList() {
     button.type = 'button';
     button.setAttribute('aria-pressed', String(selected === task.id));
     button.dataset.taskId = task.id;
-    if (task.id === focusedTask) focusTarget = button;
+    if (task.id === focusId) focusTarget = button;
     button.append(element('span',task.title || task.id,'task-title'),statusNode(task.status));
     if (task.lease && task.status === 'claimed') button.append(element('span','Claimed by ' + text(task.lease.actor),'task-meta'));
     button.addEventListener('click', () => { selected = task.id; renderList(); renderDetail(); });
@@ -255,6 +258,7 @@ function receipt(record, task, assertion) {
 function handoff(task) {
   const lines = [state.demo ? 'Rumbo DEMO handoff' : 'Rumbo handoff', 'Goal: ' + text(state.goal),
     'Project: ' + text(state.project_id), 'Contract: r' + text(state.contract_revision),
+    'Snapshot: ' + (snapshotCurrent ? 'last successful refresh' : 'LAST KNOWN; latest refresh failed. Refresh before relying on status.'),
     'Task: ' + text(task.id) + ' — ' + text(task.title), 'State: ' + (labels[task.status] || text(task.status)),
     'Decision owner: ' + text(state.decision_owner), 'Artifact: ' + (task.artifact ? text(task.artifact.path) + ' (r' + text(task.artifact.revision) + ', SHA256 ' + text(task.artifact.sha256) + ')' : 'None'),
     'Deterministic receipts: ' + array(task.evidence).filter(e => e.kind === 'deterministic').length,
@@ -373,10 +377,10 @@ function render(snapshot) {
   if (!snapshot || snapshot.version !== 1 || !Array.isArray(snapshot.tasks) || typeof snapshot.goal !== 'string' || snapshot.tasks.some(t => !t || typeof t.id !== 'string')) throw new Error('Unsupported or malformed project snapshot');
   const detail = $('task-detail'), active = document.activeElement;
   const restoreDetailFocus = active && active !== detail && detail.contains(active);
-  const sameTask = state && state.project_id === snapshot.project_id &&
-    state.hosted_project_key === snapshot.hosted_project_key && snapshot.tasks.some(task => task.id === selected);
-  state = snapshot;
-  if (!state.tasks.some(task => task.id === selected)) selected = state.tasks[0]?.id || null;
+  const sameProject = state && state.project_id === snapshot.project_id && state.hosted_project_key === snapshot.hosted_project_key;
+  const sameTask = sameProject && snapshot.tasks.some(task => task.id === selected);
+  state = snapshot; snapshotCurrent = true;
+  if (!sameTask) selected = state.tasks[0]?.id || null;
   $('goal').textContent = state.goal || 'Untitled goal';
   $('contract-revision').textContent = text(state.contract_revision);
   $('decision-owner').textContent = text(state.decision_owner);
@@ -395,7 +399,7 @@ function render(snapshot) {
   $('ledger').textContent = text(state.events_count) + ' ledger events · ' + (integrity ? 'Hash chain verified locally' : 'Integrity not verified');
   $('ledger').title = 'Ledger head: ' + text(state.ledger_head) + '. A local hash chain does not prove real-world correctness.';
   $('connection').textContent = (embedded ? 'MCP host snapshot' : 'Local snapshot') + (state.demo ? ' · demonstration data' : '') + ' · refreshed ' + new Date().toLocaleTimeString();
-  renderList();renderDetail();
+  renderList(sameProject);renderDetail();
   // Rebuilt handoff controls must not strand focus or preserve stale summary bytes.
   if (restoreDetailFocus) (sameTask ? detail.querySelector('button') : $('status-filter')).focus({preventScroll:true});
   $('refresh').disabled = embedded && !canRefresh;

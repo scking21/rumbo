@@ -41,6 +41,48 @@ class CoreTests(unittest.TestCase):
         self.checked()
         return self.owner.execute('decide', dict(task_id='export', contract_revision=1, artifact_revision=1, outcome='accepted', reason='Reviewed the export'))
 
+    def test_stale_owner_basis_refuses_replaced_evidence_and_allows_fresh_review(self):
+        self.checked()
+        state = self.owner.snapshot()
+        args = dict(task_id='export', contract_revision=1, artifact_revision=1)
+        basis = Engine.review_basis(state['tasks'][0], state)
+        self.worker.execute('run_checks', args)
+        fresh = self.owner.snapshot()
+        decision = dict(args, outcome='accepted', reason='Reviewed', expected_review_basis=basis)
+        with self.assertRaisesRegex(RumboError, 'STALE_REVIEW'):
+            self.owner.execute('decide', decision)
+        self.assertEqual(self.owner.snapshot()['ledger_head'], fresh['ledger_head'])
+        decision['expected_review_basis'] = Engine.review_basis(fresh['tasks'][0], fresh)
+        self.assertEqual(self.owner.execute('decide', decision)['tasks'][0]['status'], 'accepted')
+
+    def test_owner_basis_survives_exact_reconfirmation_but_not_intervening_rejection(self):
+        self.accept()
+        state = self.owner.snapshot()
+        basis = Engine.review_basis(state['tasks'][0], state)
+        args = dict(task_id='export', contract_revision=1, artifact_revision=1,
+                    outcome='accepted', reason='Reviewed the export')
+        self.owner.execute('decide', args)
+        self.owner.execute('decide', dict(args, expected_review_basis=basis))
+        self.owner.execute('decide', dict(args, outcome='rejected', reason='Reopened'))
+        self.owner.execute('decide', args)
+        current = self.owner.snapshot()
+        with self.assertRaisesRegex(RumboError, 'STALE_REVIEW'):
+            self.owner.execute('decide', dict(args, expected_review_basis=basis))
+        self.assertEqual(current['ledger_head'], self.owner.snapshot()['ledger_head'])
+
+    def test_artifact_review_context_keeps_old_decision_distinct_from_fresh_checks(self):
+        self.accept()
+        args = dict(task_id='export', contract_revision=1, artifact_revision=1)
+        self.worker.execute('run_checks', args)
+        plain = self.worker.artifact_view(args)
+        self.assertNotIn('review_context', plain)
+        rich = self.worker.artifact_view(dict(args, include_review_context=True))
+        self.assertEqual(rich['status'], 'checks_passed')
+        self.assertEqual(rich['review_context']['decision']['outcome'], 'accepted')
+        self.assertNotIn(rich['review_context']['evidence']['header']['id'],
+                         rich['review_context']['decision']['evidence_ids'])
+        self.assertEqual(rich['sha256'], plain['sha256'])
+
     def test_claim_conflict_and_expiration(self):
         self.claim()
         other = Engine(self.root, 'other', 'worker', clock=lambda: self.now[0])
@@ -173,6 +215,100 @@ class CoreTests(unittest.TestCase):
             self.owner.execute('decide', dict(task_id=task, contract_revision=2, artifact_revision=1, outcome='accepted', reason='Reviewed'))
         self.owner.execute('decide', dict(task_id='export', contract_revision=2, artifact_revision=1, outcome='rejected', reason='Reopened'))
         self.assertEqual(self.owner.snapshot()['tasks'][1]['status'], 'blocked')
+
+    def test_redundant_dependency_acceptance_keeps_downstream_acceptance(self):
+        c = contract(); c['tasks'].append(dict(id='docs', title='Docs', dependencies=['export'], acceptance=[dict(id='doc', kind='file_contains', value='name')]))
+        c['tasks'].append(dict(id='release', title='Release', dependencies=['docs'], acceptance=[dict(id='release', kind='file_contains', value='name')]))
+        self.owner.execute('revise_contract', dict(contract=c, expected_revision=1, reason='docs'))
+        for task in ['export', 'docs', 'release']:
+            self.worker.execute('claim_task', dict(task_id=task, contract_revision=2, lease_seconds=60))
+            self.worker.execute('submit_artifact', dict(task_id=task, contract_revision=2, path='export.csv'))
+            self.worker.execute('run_checks', dict(task_id=task, contract_revision=2, artifact_revision=1))
+            self.owner.execute('decide', dict(task_id=task, contract_revision=2, artifact_revision=1, outcome='accepted', reason='Reviewed'))
+        self.assertEqual([task['status'] for task in self.owner.snapshot()['tasks']], ['accepted', 'accepted', 'accepted'])
+
+        # Reconfirming the exact same dependency bytes and evidence is a supported
+        # owner action, but it must not invalidate already accepted dependents.
+        self.owner.execute('decide', dict(task_id='export', contract_revision=2, artifact_revision=1,
+                                          outcome='accepted', reason='Reviewed'))
+        state = self.owner.snapshot()
+        self.assertEqual([task['status'] for task in state['tasks']], ['accepted', 'accepted', 'accepted'])
+
+    def test_worker_rechecks_two_reconfirmed_dependencies_under_task_scope(self):
+        c = contract()
+        c['revision_scope'] = 'task'
+        for name, dependencies in [('schema', []), ('guide', ['export', 'schema'])]:
+            c['tasks'].append(dict(id=name, title=name, dependencies=dependencies,
+                                   acceptance=[dict(id='text', kind='file_contains', value='name')]))
+        self.owner.execute('revise_contract', dict(contract=c, expected_revision=1, reason='Add guide'))
+        for name in ('export', 'schema', 'guide'):
+            args = dict(task_id=name, contract_revision=2)
+            self.worker.execute('claim_task', dict(args, lease_seconds=60))
+            self.worker.execute('submit_artifact', dict(args, path='export.csv'))
+            args['artifact_revision'] = 1
+            self.worker.execute('run_checks', args)
+            self.owner.execute('decide', dict(args, outcome='accepted', reason='Reviewed'))
+
+        guide = dict(task_id='guide', contract_revision=2, artifact_revision=1)
+        for name in ('export', 'schema'):
+            self.owner.execute('decide', dict(guide, task_id=name, outcome='accepted', reason='Reviewed'))
+        checked = self.worker.execute('run_checks', guide)
+        self.assertEqual(checked['tasks'][-1]['status'], 'checks_passed')
+        self.owner.execute('decide', dict(guide, task_id='schema', outcome='accepted', reason='Changed rationale'))
+        before = self.owner.snapshot()['ledger_head']
+        with self.assertRaisesRegex(RumboError, 'DEPENDENCY_BLOCKED'):
+            self.worker.execute('run_checks', guide)
+        self.assertEqual(self.owner.snapshot()['ledger_head'], before)
+
+    def test_reaccepted_dependency_after_rejection_stales_downstream(self):
+        c = contract(); c['tasks'].append(dict(id='docs', title='Docs', dependencies=['export'], acceptance=[dict(id='doc', kind='file_contains', value='name')]))
+        c['tasks'].append(dict(id='release', title='Release', dependencies=['docs'], acceptance=[dict(id='release', kind='file_contains', value='name')]))
+        self.owner.execute('revise_contract', dict(contract=c, expected_revision=1, reason='docs'))
+        for task in ['export', 'docs', 'release']:
+            self.worker.execute('claim_task', dict(task_id=task, contract_revision=2, lease_seconds=60))
+            self.worker.execute('submit_artifact', dict(task_id=task, contract_revision=2, path='export.csv'))
+            self.worker.execute('run_checks', dict(task_id=task, contract_revision=2, artifact_revision=1))
+            self.owner.execute('decide', dict(task_id=task, contract_revision=2, artifact_revision=1, outcome='accepted', reason='Reviewed'))
+
+        self.owner.execute('decide', dict(task_id='export', contract_revision=2, artifact_revision=1,
+                                          outcome='rejected', reason='Reopened for owner review'))
+        state = self.owner.execute('decide', dict(task_id='export', contract_revision=2, artifact_revision=1,
+                                                  outcome='accepted', reason='Accepted after reopening'))
+        self.assertEqual(state['tasks'][0]['status'], 'accepted')
+        self.assertEqual(state['tasks'][1]['status'], 'stale')
+        self.assertEqual(state['tasks'][1]['stale_reason'], 'Dependency acceptance changed')
+        self.assertEqual(state['tasks'][2]['status'], 'blocked')
+
+    def test_changed_dependency_acceptance_reason_stales_downstream(self):
+        c = contract(); c['tasks'].append(dict(id='docs', title='Docs', dependencies=['export'], acceptance=[dict(id='doc', kind='file_contains', value='name')]))
+        self.owner.execute('revise_contract', dict(contract=c, expected_revision=1, reason='docs'))
+        for task in ['export', 'docs']:
+            self.worker.execute('claim_task', dict(task_id=task, contract_revision=2, lease_seconds=60))
+            self.worker.execute('submit_artifact', dict(task_id=task, contract_revision=2, path='export.csv'))
+            self.worker.execute('run_checks', dict(task_id=task, contract_revision=2, artifact_revision=1))
+            self.owner.execute('decide', dict(task_id=task, contract_revision=2, artifact_revision=1, outcome='accepted', reason='Reviewed'))
+
+        state = self.owner.execute('decide', dict(task_id='export', contract_revision=2, artifact_revision=1,
+                                                  outcome='accepted', reason='Accepted for a new owner reason'))
+        self.assertEqual(state['tasks'][0]['status'], 'accepted')
+        self.assertEqual(state['tasks'][1]['status'], 'stale')
+        self.assertEqual(state['tasks'][1]['stale_reason'], 'Dependency acceptance changed')
+
+    def test_refreshed_dependency_evidence_stales_downstream(self):
+        c = contract(); c['tasks'].append(dict(id='docs', title='Docs', dependencies=['export'], acceptance=[dict(id='doc', kind='file_contains', value='name')]))
+        self.owner.execute('revise_contract', dict(contract=c, expected_revision=1, reason='docs'))
+        for task in ['export', 'docs']:
+            self.worker.execute('claim_task', dict(task_id=task, contract_revision=2, lease_seconds=60))
+            self.worker.execute('submit_artifact', dict(task_id=task, contract_revision=2, path='export.csv'))
+            self.worker.execute('run_checks', dict(task_id=task, contract_revision=2, artifact_revision=1))
+            self.owner.execute('decide', dict(task_id=task, contract_revision=2, artifact_revision=1, outcome='accepted', reason='Reviewed'))
+
+        self.worker.execute('run_checks', dict(task_id='export', contract_revision=2, artifact_revision=1))
+        state = self.owner.execute('decide', dict(task_id='export', contract_revision=2, artifact_revision=1,
+                                                  outcome='accepted', reason='Reviewed'))
+        self.assertEqual(state['tasks'][0]['status'], 'accepted')
+        self.assertEqual(state['tasks'][1]['status'], 'stale')
+        self.assertEqual(state['tasks'][1]['stale_reason'], 'Dependency acceptance changed')
 
     def test_path_traversal_secrets_and_symlink_escape(self):
         self.claim()
@@ -505,6 +641,19 @@ Engine(Path(sys.argv[1]), 'maker', 'worker', clock=lambda:1000).execute('ingest_
                 self.worker.execute('submit_artifact',dict(task_id='export',contract_revision=1,path=name))
         with self.assertRaisesRegex(RumboError,'STALE_ARTIFACT'):
             self.worker.artifact_view(dict(task_id='export',contract_revision=1,artifact_revision=1))
+
+    def test_casefold_aliases_of_private_paths_cannot_be_registered(self):
+        self.claim()
+        for name in ['.EnV', '.ENV.LOCAL', '.AWS/credentials', '.GiT/config', '.NPMRC', 'Id_RsA', '.ſſh/config', '.Kube/config', '.conﬁg/service.json']:
+            path = self.root / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text('synthetic fixture credential')
+            with self.subTest(name=name), self.assertRaisesRegex(RumboError, 'PATH_PRIVATE'):
+                self.worker.execute('submit_artifact', dict(task_id='export', contract_revision=1, path=name))
+        for name in ['MixedCase.txt', 'Résumé.txt']:
+            (self.root / name).write_text('ordinary artifact')
+            self.worker.execute('submit_artifact', dict(task_id='export', contract_revision=1, path=name))
+            self.assertEqual(self.worker.snapshot()['tasks'][0]['artifact']['path'], name)
 
     def test_unknown_action_and_nan_rejected(self):
         with self.assertRaisesRegex(RumboError, 'UNKNOWN_ACTION'):

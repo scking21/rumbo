@@ -269,7 +269,14 @@ class MutationReceiptTests(unittest.TestCase):
         self.assertEqual(process.returncode, 0, process.stderr)
         responses = [json.loads(line) for line in process.stdout.splitlines()]
         self.assertEqual(len(responses), 5)
-        self.assertEqual(responses[0]['result']['tools'], installed_tool_definitions())
+        catalog = responses[0]['result']['tools']
+        # The packaged launcher has exactly two optional connection-local controls.
+        by_name = {tool['name']: tool['inputSchema'] for tool in catalog}
+        for name, field, kind in [('rumbo_verify_checks', 'preserve_approval', 'boolean'),
+                                  ('rumbo_run_checks', 'record_after_verification', 'string')]:
+            self.assertNotIn(field, by_name[name]['required'])
+            self.assertEqual(by_name[name]['properties'].pop(field)['type'], kind)
+        self.assertEqual(catalog, installed_tool_definitions())
         self.assertEqual(responses[1]['result']['structuredContent']['role'], 'worker')
         state = responses[3]['result']['structuredContent']
         assert_receipt(self, responses[2]['result']['structuredContent'], state, 'rumbo_request_decision', 'export')

@@ -85,6 +85,37 @@ class BackupTests(unittest.TestCase):
         for path in self.destination.rglob('*'):
             self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o700 if path.is_dir() else 0o600)
 
+    def test_restore_groups_equivalent_file_spellings(self):
+        current = self.owner.snapshot()
+        task = dict(current['tasks'][0])
+        new_task = dict(id='other', title='Other', dependencies=[], acceptance=task['acceptance'])
+        old_task = {key: task[key] for key in ('id', 'title', 'dependencies', 'acceptance')}
+        contract = {key: current[key] for key in ('project_id', 'decision_owner', 'goal', 'original_request', 'constraints')}
+        self.owner.execute('revise_contract', dict(expected_revision=1, reason='Track both files',
+                                                   contract=dict(contract, tasks=[old_task, new_task])))
+        (self.root/'out').mkdir()
+        for name, spelling, body in [('task', './out/file.txt', 'proof one'), ('other', 'out//file.txt', 'proof two')]:
+            args = dict(task_id=name, contract_revision=2)
+            self.worker.execute('claim_task', dict(args, lease_seconds=60))
+            (self.root/'out/file.txt').write_text(body)
+            self.worker.execute('submit_artifact', dict(args, path=spelling))
+        self.backup()
+        report = self.api().restore_project(self.archive, self.base/'returned')
+        self.assertEqual(report['conflicting_external_paths'], ['out/file.txt'])
+        self.assertEqual([a['path'] for a in report['current_external_artifacts']],
+                         ['./out/file.txt', 'out//file.txt'])
+
+    def test_restore_lists_only_current_external_file_and_expected_digest(self):
+        for name in ('old.txt', 'current.txt'):
+            (self.root / name).write_text(name)
+            self.worker.execute('submit_artifact', dict(task_id='task', contract_revision=1, path=name))
+        self.backup()
+        summary = self.api().restore_project(self.archive, self.destination)
+        self.assertEqual(summary['external_file_references'], ['current.txt', 'old.txt'])
+        self.assertEqual(summary['current_external_artifacts'], [dict(task_id='task', path='current.txt',
+            sha256=hashlib.sha256(b'current.txt').hexdigest(), artifact_revision=2)])
+        self.assertFalse((self.destination / 'current.txt').exists())
+
     def test_external_registered_files_and_credentials_are_excluded_and_reported(self):
         (self.root / 'proof.txt').write_text('proof')
         (self.root / '.env').write_text('SECRET=do-not-copy')

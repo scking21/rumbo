@@ -128,6 +128,16 @@ class InstalledTests(unittest.TestCase):
         self.assertEqual(listed, [dict(alias='sample', project_id='sample')])
         self.assertNotIn(str(self.project), json.dumps(listed))
 
+    def test_listing_guides_an_existing_process_to_read_state_without_rebinding(self):
+        self.register()
+        client = self.protocol()
+        self.assertIsNone(self.call(client, 'rumbo_list_projects')['structuredContent']['bound_alias'])
+        self.call(client, 'rumbo_connect_project', {'alias': 'sample'})
+        result = self.call(client, 'rumbo_list_projects')
+        self.assertEqual(result['structuredContent']['bound_alias'], 'sample')
+        self.assertIn('rumbo_state', result['content'][0]['text'])
+        self.assertTrue(self.call(client, 'rumbo_connect_project', {'alias': 'sample'})['isError'])
+
     def test_binding_is_read_only_and_uses_generated_worker_actor(self):
         self.register()
         db = self.project / '.rumbo/state.sqlite3'

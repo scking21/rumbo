@@ -6,11 +6,25 @@ import shutil
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 import zipfile
 from scripts.package_release import build_local, build_submission, validate_public_config
 
 ROOT=Path(__file__).resolve().parents[1]
 class PackageTests(unittest.TestCase):
+    def test_interrupted_build_preserves_previous_archive_and_leaves_new_target_absent(self):
+        with tempfile.TemporaryDirectory() as directory:
+            existing = Path(directory) / 'last.zip'
+            fresh = Path(directory) / 'next.zip'
+            build_local(ROOT, existing)
+            before = existing.read_bytes()
+            with patch.object(zipfile.ZipFile, 'writestr', side_effect=OSError('write interrupted')):
+                for target in (existing, fresh):
+                    with self.assertRaises(OSError):
+                        build_local(ROOT, target)
+            self.assertEqual(existing.read_bytes(), before)
+            self.assertFalse(fresh.exists())
+
     def test_local_zip_reproducible_and_hook_free(self):
         with tempfile.TemporaryDirectory() as d:
             a=Path(d)/'a.zip';b=Path(d)/'b.zip'

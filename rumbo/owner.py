@@ -18,7 +18,7 @@ import threading
 import time
 from urllib.parse import parse_qsl, urlencode, urlsplit
 
-from .core import Engine, RumboError
+from .core import MAX_INGEST, Engine, RumboError, binder
 from .protocol import safe_json
 
 SESSION_COOKIE = '__Host-rumbo-owner'
@@ -424,11 +424,13 @@ class OwnerPortal:
                     if not isinstance(contract, dict) or contract.get('decision_owner', session['actor']) != session['actor']:
                         raise ValueError('Owner identity cannot be changed')
                     contract['decision_owner'] = session['actor']
+                if action == 'decide' and 'expected_review_basis' not in args:
+                    raise RumboError('STALE_REVIEW', 'Open the current task review form before recording a decision.')
                 Engine(session['root'], session['actor'], 'human').execute(action, args)
             except (ValueError, UnicodeError, RecursionError):
                 self._send(handler, 400, 'Invalid owner action data'); return
             except RumboError as error:
-                status = 409 if error.code in ('STALE_CONTRACT', 'STALE_ARTIFACT', 'ARTIFACT_CHANGED', 'DEPENDENCY_BLOCKED', 'CHECKS_INCOMPLETE', 'CONTRACT_EXISTS') else 400
+                status = 409 if error.code in ('STALE_CONTRACT', 'STALE_ARTIFACT', 'STALE_REVIEW', 'ARTIFACT_CHANGED', 'DEPENDENCY_BLOCKED', 'CHECKS_INCOMPLETE', 'CONTRACT_EXISTS') else 400
                 self._send(handler, status, str(error)); return
             except OSError:
                 self._send(handler, 503, 'Owner action unavailable'); return
@@ -456,11 +458,22 @@ class OwnerPortal:
         content += '<section><h2>Original request</h2><pre>' + escape(state['original_request']) + '</pre><h2>Agreed goal</h2><p>' + escape(state['goal']) + '</p><p>Contract revision ' + str(state['contract_revision']) + '</p><h2>Constraints</h2><pre>' + self._json(state['constraints']) + '</pre></section>'
         for task in state['tasks']:
             content += '<section><h2>' + escape(task['title']) + '</h2><p>Task ' + escape(task['id']) + ' · ' + escape(task['status']) + '</p><p>' + escape(task['stale_reason']) + '</p><h3>Acceptance criteria</h3><pre>' + self._json(task['acceptance']) + '</pre><h3>Recorded artifact</h3><pre>' + self._json(task['artifact']) + '</pre><h3>Evidence and reviewer assertions</h3><pre>' + self._json(task['evidence']) + '</pre><h3>Prior owner decisions</h3><pre>' + self._json(task['decisions']) + '</pre>'
-            if task['artifact']:
-                preview = '/owner/artifact?' + urlencode(dict(task_id=task['id'], contract_revision=state['contract_revision'], artifact_revision=task['artifact']['revision']))
-                content += '<p><a href="' + escape(preview) + '">Inspect these exact artifact bytes</a></p>'
-                args = dict(task_id=task['id'], contract_revision=state['contract_revision'], artifact_revision=task['artifact']['revision'], outcome='rejected', reason='')
-                content += self._action_form('decide', args, csrf, 'Record a decision', 'Inspect the original goal, criteria and evidence above. Set outcome to accepted or rejected and give an explicit nonempty reason. The decision applies only to these exact contract and artifact revisions. Acceptance requires every current criterion to pass.')
+            artifact = task['artifact']
+            if artifact and not binder(task, state)(artifact):
+                content += ('<p>The recorded artifact belongs to an earlier agreement. '
+                            'Have the worker register an artifact under the current agreement '
+                            'and obtain fresh evidence before requesting acceptance.</p>')
+            elif artifact:
+                size = task['artifact'].get('size')
+                if type(size) is int and size > MAX_INGEST:
+                    content += (f'<p>This artifact exceeds the {MAX_INGEST // 1024} KiB inline preview limit. '
+                                'If you already have access to the file, inspect it and compare its SHA-256 with the recorded digest above. '
+                                'Otherwise, ask for review access to those bytes.</p>')
+                else:
+                    preview = '/owner/artifact?' + urlencode(dict(task_id=task['id'], contract_revision=state['contract_revision'], artifact_revision=task['artifact']['revision']))
+                    content += '<p><a href="' + escape(preview) + '">Inspect these exact artifact bytes</a></p>'
+                args = dict(task_id=task['id'], contract_revision=state['contract_revision'], artifact_revision=task['artifact']['revision'], outcome='rejected', reason='', expected_review_basis=Engine.review_basis(task, state))
+                content += self._action_form('decide', args, csrf, 'Record a decision', 'Inspect the original goal, criteria and evidence above. Set outcome to accepted or rejected and give an explicit nonempty reason. The decision applies only to these exact contract and artifact revisions. Keep the review basis from this form. If it changes, reopen the task before deciding. Acceptance requires every current criterion to pass.')
             content += '</section>'
         content += '<section><h2>Decision requests</h2><pre>' + self._json(state['requests']) + '</pre></section>'
         contract = {key: state[key] for key in ('project_id', 'goal', 'original_request', 'constraints')}

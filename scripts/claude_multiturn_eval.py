@@ -285,13 +285,19 @@ def regrade(folder, judge, errors_only=False):
 def report(rows):
     for row in rows:
         graded = row.get("graders")
+        grade_summary = ""
+        if graded is not None:
+            verdicts = list(graded.values())
+            scored = verdicts.count("PASS") + verdicts.count("FAIL")
+            grade_summary = ", graders %d/%d" % (verdicts.count("PASS"), scored)
+            if scored < len(verdicts):
+                grade_summary += ", %d unscored" % (len(verdicts) - scored)
         print("%s run %d: %d turns, $%.3f, %d Stop blocks at turns %s, %d write holds at turns %s, "
               "record ids named at turns %s%s%s" % (
             os.path.basename(os.path.normpath(row["case"])), row["run"], row["turns"], row["cost"] or 0,
             len(row["blocks"]), [b["turn"] for b in row["blocks"]],
             len(row.get("holds") or []), [h["turn"] for h in row.get("holds") or []], row["naming_ids"],
-            "" if graded is None else ", graders %d/%d" % (
-                list(graded.values()).count("PASS"), len([v for v in graded.values() if v != "SKIPPED"])),
+            grade_summary,
             "" if not row["failure"] else ", INCOMPLETE (%s)" % row["failure"]))
 
 
