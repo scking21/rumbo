@@ -133,6 +133,16 @@ export const baseTools=[
           "description": "Authorized artifact text, at most 128 KiB UTF-8 bytes",
           "maxLength": 131072
         },
+        "expected_sha256": {
+          "type": "string",
+          "description": "SHA-256 of the original authorized source bytes, computed independently of the outgoing text.",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "expected_artifact_revision": {
+          "type": "integer",
+          "description": "Current artifact revision observed before preparing the upload, or zero for a first registration.",
+          "minimum": 0
+        },
         "response_mode": {
           "type": "string",
           "description": "Optional response shape. snapshot (default) returns full state; receipt returns an incomplete operation-time observation. Use its rumbo_state recovery call for full context; never treat a ledger head as cache validity.",
@@ -182,6 +192,10 @@ export const baseTools=[
           "type": "integer",
           "description": "Exact recorded artifact revision",
           "minimum": 1
+        },
+        "include_review_context": {
+          "type": "boolean",
+          "description": "Include the current task criteria, latest applicable evidence, dependencies and last decision for these exact bytes."
         }
       },
       "required": [

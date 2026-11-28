@@ -9,14 +9,14 @@ import {fixture as storageFixture} from './support.mjs';
 const tick = () => new Promise(resolve=>setImmediate(resolve));
 const selection = {project_selection_required:true,projects:[{alias:'Project A',role:'owner',project_key:'a'},{alias:'Project B',role:'owner',project_key:'b'}]};
 const snapshot = (project,revision=1) => ({version:1,project_id:project,hosted_project_key:project.toLowerCase(),goal:'Goal '+project,contract_revision:revision,decision_owner:'Synthetic owner',integrity:{valid:true},tasks:[{id:'task',title:'Task '+project,status:'produced',acceptance:[],evidence:[],decisions:[]}]});
-async function fixture(source,initial=snapshot('A')) {
+async function fixture(source,initial=snapshot('A'),hostCapabilities={serverTools:{}}) {
   const messages=[];let send;
   // jsdom exercises real board code and DOM state with a synthetic MCP parent.
   // It does not supply native browser focus, layout or transport verification.
   const dom=new JSDOM(source,{url:'https://board.test/board',runScripts:'dangerously',beforeParse(w){
     const parent={postMessage(message){
       messages.push(message);
-      if(message.method==='ui/initialize')queueMicrotask(()=>send({id:message.id,result:{protocolVersion:'2026-01-26',hostCapabilities:{serverTools:{}},hostContext:{theme:'light'}}}));
+      if(message.method==='ui/initialize')queueMicrotask(()=>send({id:message.id,result:{protocolVersion:'2026-01-26',hostCapabilities,hostContext:{theme:'light'}}}));
       if(message.method==='ui/notifications/initialized' && initial!==null)queueMicrotask(()=>send({method:'ui/notifications/tool-result',params:{structuredContent:initial}}));
     }};
     Object.defineProperty(w,'parent',{value:parent});
@@ -32,6 +32,21 @@ if(fs.existsSync(localURL))boards.push(['local board',localURL]);
 
 for(const [name,url] of boards){
   const source=fs.readFileSync(url,'utf8');
+  test(name+': a display-only host can deliver a snapshot after an error',async()=>{
+    const {dom,d,calls,send}=await fixture(source,null,{});
+    try {
+      send({method:'ui/notifications/tool-result',params:{isError:true}});
+      await tick();
+      assert.equal(d.getElementById('refresh').disabled,true);
+      assert.doesNotMatch(d.getElementById('task-detail').textContent,/refresh to try again/i);
+      d.getElementById('refresh').click();
+      send({method:'ui/notifications/tool-result',params:{structuredContent:snapshot('Recovered',3)}});
+      await tick();
+      assert.equal(d.getElementById('goal').textContent,'Goal Recovered');
+      assert.equal(d.getElementById('error').hidden,true);
+      assert.equal(calls().length,0);
+    } finally { dom.window.close(); }
+  });
   for(const initialOrder of ['before','after'])test(name+': a delayed initial host result cannot supersede a refresh ('+initialOrder+' its response)',async()=>{
     const {dom,d,calls,send}=await fixture(source,null);try{
       assert.equal(d.getElementById('refresh').disabled,false);
@@ -119,10 +134,14 @@ for(const [name,url] of boards){
       send({id:calls()[0].id,error:{message:'Current request failed'}});await tick();
       assert.equal(d.getElementById('error').hidden,false);
       assert.match(d.getElementById('error').textContent,/Current request failed/);
+      d.querySelector('#task-detail button').click();await tick();
+      assert.match(d.getElementById('handoff-text').value,/Snapshot: LAST KNOWN/);
       d.getElementById('refresh').click();
       send({id:calls()[1].id,result:{structuredContent:snapshot('A',2)}});await tick();
       assert.equal(d.getElementById('contract-revision').textContent,'2');
       assert.equal(d.getElementById('error').hidden,true);
+      d.querySelector('#task-detail button').click();await tick();
+      assert.doesNotMatch(d.getElementById('handoff-text').value,/Snapshot: LAST KNOWN/);
     }finally{dom.window.close();}
   });
   test(name+': teardown does not let pending state rejection replace the final view',async()=>{
@@ -139,6 +158,20 @@ for(const [name,url] of boards){
 }
 
 const hostedSource=fs.readFileSync(hostedURL,'utf8');
+test('hosted selector in a display-only host keeps choices visible without offering an unavailable read',async()=>{
+  const {dom,d,calls,send}=await fixture(hostedSource,selection,{});
+  try {
+    const buttons=[...d.querySelectorAll('#task-list button')];
+    assert.deepEqual(buttons.map(b=>b.textContent),['Project A · owner','Project B · owner']);
+    buttons[1].click();
+    assert.equal(calls().length,0);
+    assert.ok(buttons.every(b=>b.disabled));
+    assert.match(d.getElementById('task-detail').textContent,/host/i);
+    send({method:'ui/notifications/tool-result',params:{structuredContent:snapshot('B')}});
+    await tick();
+    assert.equal(d.getElementById('goal').textContent,'Goal B');
+  } finally { dom.window.close(); }
+});
 for(const projects of [selection.projects,[]])test('hosted project selection clears the task empty state; projects='+projects.length,async()=>{
   const {dom,d,send}=await fixture(hostedSource);try{
     const filter=d.getElementById('status-filter');filter.value='accepted';

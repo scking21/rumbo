@@ -424,11 +424,13 @@ class OwnerPortal:
                     if not isinstance(contract, dict) or contract.get('decision_owner', session['actor']) != session['actor']:
                         raise ValueError('Owner identity cannot be changed')
                     contract['decision_owner'] = session['actor']
+                if action == 'decide' and 'expected_review_basis' not in args:
+                    raise RumboError('STALE_REVIEW', 'Open the current task review form before recording a decision.')
                 Engine(session['root'], session['actor'], 'human').execute(action, args)
             except (ValueError, UnicodeError, RecursionError):
                 self._send(handler, 400, 'Invalid owner action data'); return
             except RumboError as error:
-                status = 409 if error.code in ('STALE_CONTRACT', 'STALE_ARTIFACT', 'ARTIFACT_CHANGED', 'DEPENDENCY_BLOCKED', 'CHECKS_INCOMPLETE', 'CONTRACT_EXISTS') else 400
+                status = 409 if error.code in ('STALE_CONTRACT', 'STALE_ARTIFACT', 'STALE_REVIEW', 'ARTIFACT_CHANGED', 'DEPENDENCY_BLOCKED', 'CHECKS_INCOMPLETE', 'CONTRACT_EXISTS') else 400
                 self._send(handler, status, str(error)); return
             except OSError:
                 self._send(handler, 503, 'Owner action unavailable'); return
@@ -459,8 +461,8 @@ class OwnerPortal:
             if task['artifact']:
                 preview = '/owner/artifact?' + urlencode(dict(task_id=task['id'], contract_revision=state['contract_revision'], artifact_revision=task['artifact']['revision']))
                 content += '<p><a href="' + escape(preview) + '">Inspect these exact artifact bytes</a></p>'
-                args = dict(task_id=task['id'], contract_revision=state['contract_revision'], artifact_revision=task['artifact']['revision'], outcome='rejected', reason='')
-                content += self._action_form('decide', args, csrf, 'Record a decision', 'Inspect the original goal, criteria and evidence above. Set outcome to accepted or rejected and give an explicit nonempty reason. The decision applies only to these exact contract and artifact revisions. Acceptance requires every current criterion to pass.')
+                args = dict(task_id=task['id'], contract_revision=state['contract_revision'], artifact_revision=task['artifact']['revision'], outcome='rejected', reason='', expected_review_basis=Engine.review_basis(task, state))
+                content += self._action_form('decide', args, csrf, 'Record a decision', 'Inspect the original goal, criteria and evidence above. Set outcome to accepted or rejected and give an explicit nonempty reason. The decision applies only to these exact contract and artifact revisions. Keep the review basis from this form. If it changes, reopen the task before deciding. Acceptance requires every current criterion to pass.')
             content += '</section>'
         content += '<section><h2>Decision requests</h2><pre>' + self._json(state['requests']) + '</pre></section>'
         contract = {key: state[key] for key in ('project_id', 'goal', 'original_request', 'constraints')}

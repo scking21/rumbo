@@ -54,6 +54,47 @@ test('artifact JSON parsing and text bytes preserve Python semantics',async()=>{
 
 test('a top-level JSON float is never mistaken for an object with a value field',async()=>{const c=contract();c.tasks[0].acceptance=[{id:'json',kind:'json_equals',key:'value',value:1}];const steps=[step('create_contract',c),claim(),upload('1.0'),checks()];assert.deepEqual(await actual(steps),oracle(steps));});
 
+test('artifact review context matches Python and keeps current evidence distinct from a prior decision',async()=>{
+ const steps=[...scenarios['complete owner/worker/reviewer workflow'].slice(0,6),checks(),step('read',{task_id:'one',contract_revision:1,artifact_revision:1,include_review_context:true})];
+ const observed=await actual(steps),expected=oracle(steps);assert.deepEqual(observed,expected);
+ const view=observed.at(-1).ok,context=view.review_context;
+ assert.equal(view.status,'checks_passed');assert.equal(canonical(context.acceptance),canonical(contract().tasks[0].acceptance));assert.equal(canonical(context.dependencies),'{}');
+ assert.deepEqual(Object.keys(context.evidence).sort(),['review','text']);assert.equal(context.evidence.text.id,'e7-text');assert.equal(context.evidence.review.id,'e5');
+ assert.equal(context.decision.id,'e6');assert.equal(context.decision.outcome,'accepted');assert.ok(context.decision.evidence_ids.includes('e4-text'));assert.ok(!context.decision.evidence_ids.includes('e7-text'));
+});
+
+test('artifact review context is opt-in, boolean, and preserves currentness refusals',async()=>{
+ const setup=scenarios['complete owner/worker/reviewer workflow'].slice(0,6),plain=await actual([...setup,step('read',{task_id:'one',contract_revision:1,artifact_revision:1})]),disabled=await actual([...setup,step('read',{task_id:'one',contract_revision:1,artifact_revision:1,include_review_context:false})]);
+ assert.deepEqual(plain,disabled);assert.equal(Object.hasOwn(plain.at(-1).ok,'review_context'),false);
+ for(const value of [null,0,1,'true',[],{}]){const result=await actual([...setup,step('read',{task_id:'one',contract_revision:1,artifact_revision:1,include_review_context:value})]);assert.equal(result.at(-1).error,'BAD_INPUT');}
+ const stale=await actual([...setup,step('read',{task_id:'one',contract_revision:2,artifact_revision:1,include_review_context:true})]);assert.equal(stale.at(-1).error,'STALE_CONTRACT');
+});
+
+test('an owner review basis rejects evidence refreshed after inspection and accepts a fresh basis',async()=>{
+ const io=memoryStorage();for(const op of scenarios['complete owner/worker/reviewer workflow'].slice(0,5))await new Engine({...io,actor:op.actor,role:op.role,clock:()=>op.now}).execute(op.action,op.args);
+ const owner=new Engine({...io,actor:'owner',role:'human',clock:()=>1000}),maker=new Engine({...io,actor:'maker',role:'worker',clock:()=>1000});
+ const inspected=await owner.artifactView({task_id:'one',contract_revision:1,artifact_revision:1,include_review_context:true});
+ await maker.execute('run_checks',checks().args);
+ const args={...decide().args,expected_review_basis:inspected.review_context.review_basis};
+ await assert.rejects(()=>owner.execute('decide',args),error=>error.code==='STALE_REVIEW');
+ const unchanged=await owner.snapshot();assert.equal(unchanged.tasks[0].decisions.length,0);assert.equal(unchanged.tasks[0].status,'checks_passed');
+ const fresh=await owner.artifactView({task_id:'one',contract_revision:1,artifact_revision:1,include_review_context:true});
+ const accepted=await owner.execute('decide',{...args,expected_review_basis:fresh.review_context.review_basis});assert.equal(accepted.tasks[0].status,'accepted');
+});
+
+test('an accepted form tolerates identical reconfirmation but changed decisions require a fresh basis',async()=>{
+ const io=memoryStorage();for(const op of scenarios['complete owner/worker/reviewer workflow']){if(op.action==='read'||op.action==='claim_task'&&op.args.task_id==='two')continue;await new Engine({...io,actor:op.actor,role:op.role,clock:()=>op.now}).execute(op.action,op.args);}
+ const owner=new Engine({...io,actor:'owner',role:'human',clock:()=>1000}),base=decide().args;
+ const acceptedForm=await owner.artifactView({task_id:'one',contract_revision:1,artifact_revision:1,include_review_context:true}),basis=acceptedForm.review_context.review_basis;
+ const identical={...base,expected_review_basis:basis};await owner.execute('decide',identical);await owner.execute('decide',identical);assert.equal((await owner.snapshot()).tasks[0].decisions.length,3);
+ const changed={...identical,reason:'A materially different owner rationale'};await owner.execute('decide',changed);await assert.rejects(()=>owner.execute('decide',identical),error=>error.code==='STALE_REVIEW');
+ const afterChanged=await owner.artifactView({task_id:'one',contract_revision:1,artifact_revision:1,include_review_context:true}),changedBasis=afterChanged.review_context.review_basis;
+ await owner.execute('decide',{...base,outcome:'rejected',reason:'Owner found a blocking issue',expected_review_basis:changedBasis});
+ await assert.rejects(()=>owner.execute('decide',{...base,expected_review_basis:changedBasis}),error=>error.code==='STALE_REVIEW');
+ const afterReject=await owner.artifactView({task_id:'one',contract_revision:1,artifact_revision:1,include_review_context:true});await owner.execute('decide',{...base,expected_review_basis:afterReject.review_context.review_basis});
+ await assert.rejects(()=>owner.execute('decide',{...base,expected_review_basis:changedBasis}),error=>error.code==='STALE_REVIEW');
+});
+
 test('fractional lease clocks expire at the exact boundary after canonical replay',async()=>{
  const args={task_id:'one',contract_revision:1,lease_seconds:60};
  const steps=[step('create_contract',contract(),'owner','human',1000.5),
@@ -75,6 +116,9 @@ const childUpload=()=>step('ingest_artifact',{task_id:'two',contract_revision:1,
 const childChecks=artifact_revision=>step('run_checks',{task_id:'two',contract_revision:1,artifact_revision},'next','worker');
 const childDecision=artifact_revision=>step('decide',{task_id:'two',contract_revision:1,artifact_revision,outcome:'accepted',reason:'Exact downstream revision inspected'});
 const workflowScenarios={
+ 'identical dependency reacceptance preserves downstream acceptance':[
+  ...scenarios['complete owner/worker/reviewer workflow'],childUpload(),childChecks(1),childDecision(1),decide(),step('snapshot')
+ ],
  'rejecting and reaccepting a dependency requires downstream resubmission':[
   ...scenarios['complete owner/worker/reviewer workflow'],childUpload(),childChecks(1),childDecision(1),decide('rejected'),step('snapshot'),decide(),childChecks(1),childUpload(),childChecks(2),childDecision(2),step('snapshot')
  ],
@@ -101,4 +145,22 @@ test('removing and later restoring a task does not revive its old acceptance',as
 test('complete contract replacement resets an omitted demo flag to the canonical default',async()=>{
  const synthetic={...contract(),demo:true};const steps=[step('create_contract',synthetic),step('revise_contract',{contract:contract(),expected_revision:1,reason:'Replace complete synthetic scope'}),step('snapshot')];
  assert.deepEqual(await actual(steps),oracle(steps));
+});
+
+test('upload preconditions preserve original text and reject a superseded write',async()=>{
+ const io=memoryStorage();
+ const owner=new Engine({...io,actor:'owner',role:'human',clock:()=>1000});
+ const maker=new Engine({...io,actor:'maker',role:'worker',clock:()=>1000});
+ await owner.execute('create_contract',contract());
+ await maker.execute('claim_task',claim().args);
+ const bytes='hello output\r\n';
+ const {createHash}=await import('node:crypto');
+ const hash=createHash('sha256').update(bytes).digest('hex');
+ const request={...upload(bytes).args,expected_sha256:hash,expected_artifact_revision:0};
+ await assert.rejects(maker.execute('ingest_artifact',{...request,content:bytes.trimEnd()}),{code:'REVIEWED_BYTES_CHANGED'});
+ assert.equal(io.blobs.size,0);
+ const saved=await maker.execute('ingest_artifact',request);
+ await assert.rejects(maker.execute('ingest_artifact',request),{code:'STALE_REGISTRATION'});
+ assert.equal((await maker.snapshot()).ledger_head,saved.ledger_head);
+ assert.equal(io.blobs.size,1);
 });

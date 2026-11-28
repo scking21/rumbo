@@ -24,10 +24,31 @@ class CodexCommitmentsTests(unittest.TestCase):
         self.record = self.base/'project space/.rumbo/record.json'
     def run_cli(self, *args, input=None):
         return subprocess.run([sys.executable, '-I', '-S', str(self.plugin/'scripts/commitments.py'), *args], input=input, text=True, capture_output=True, cwd=self.base, timeout=10)
+    def test_pinned_handoff_uses_the_record_that_is_projected(self):
+        import hashlib
+        project = self.record.parent.parent
+        self.record.parent.mkdir(parents=True)
+        row = dict(id='guide', text='Draft available', owner='editor', acceptance='Read draft',
+                   status='verified', evidence='Editor read the draft')
+        record = dict(version=1, objective=dict(text='Ship the guide', quote='Ship the guide'),
+                      target='approved guide', outcomes=[row], items=[], checks=[])
+        self.record.write_text(json.dumps(record))
+        pin = hashlib.sha256(self.record.read_bytes()).hexdigest()
+        args = ('handoff', '--record', str(self.record), '--root', str(project))
+        self.assertEqual(self.run_cli(*args, '--reviewed-record-sha256', pin).returncode, 0)
+        row['owner'] = 'another editor'
+        self.record.write_text(json.dumps(record))
+        changed = self.run_cli(*args, '--reviewed-record-sha256', pin)
+        self.assertEqual((changed.returncode, changed.stdout), (2, ''))
+        self.assertIn('HANDOFF_RECORD_CHANGED', changed.stderr)
+        self.assertEqual(json.loads(self.run_cli(*args).stdout)['outcomes'][0]['owner'], 'another editor')
+        invalid = self.run_cli(*args, '--reviewed-record-sha256', 'bad')
+        self.assertIn('INVALID_REVIEW_DIGEST', invalid.stderr)
+
     def test_runtime_exact_bytes_and_skill_boundaries(self):
         self.assertEqual((self.plugin/'scripts/_commitments_record.py').read_bytes(), (ROOT/'rumbo/scripts/record.py').read_bytes())
         skill = (self.plugin/'skills/commitments/SKILL.md').read_text()
-        for phrase in ['explicit', 'not automatic', 'private session', 'transcript verification']:
+        for phrase in ['explicit', 'not automatic', 'private session', 'transcript verification', 'CONTINUE', 'BOUNDED']:
             self.assertIn(phrase, skill)
         self.assertFalse((self.plugin/'hooks').exists())
     def test_init_validate_check_show_and_literal_quote(self):
@@ -68,6 +89,31 @@ class CodexCommitmentsTests(unittest.TestCase):
             self.assertEqual(result.returncode,code,result.stdout+result.stderr)
             self.assertIn(marker,result.stdout)
             self.assertEqual(before,self.record.read_bytes())
+
+    def test_packaged_handoff_keeps_runnable_and_blocked_rows_distinct(self):
+        target=self.record.parents[1]
+        target.mkdir(parents=True)
+        artifact=target/'report.txt';artifact.write_text('reviewed report\n')
+        import hashlib
+        digest=hashlib.sha256(artifact.read_bytes()).hexdigest()
+        record={'version':1,'objective':{'text':'Build report and index','quote':'Build report and index.'},
+                'target':'the report packet in this project','items':[],'checks':[],
+                'outcomes':[
+                    {'id':'O1','text':'Report saved','owner':'worker','acceptance':'report.txt has reviewed bytes',
+                     'status':'verified','evidence':'read back report.txt',
+                     'artifacts':[{'path':'report.txt','sha256':digest}]},
+                    {'id':'O2','text':'Index saved','owner':'worker','acceptance':'index.txt names report.txt',
+                     'status':'runnable','next_action':'write and read back index.txt'},
+                    {'id':'O3','text':'Owner accepts packet','owner':'project owner','acceptance':'owner decision recorded',
+                     'status':'blocked','blocker':'owner decision unavailable','restart_trigger':'owner records decision'}]}
+        self.record.parent.mkdir(parents=True);self.record.write_text(json.dumps(record))
+        result=self.run_cli('handoff','--record',str(self.record),'--root',str(target))
+        self.assertEqual(result.returncode,1,result.stdout+result.stderr)
+        report=json.loads(result.stdout)
+        self.assertEqual(report['status'],'CONTINUE')
+        self.assertEqual(report['outcomes'][0]['artifacts'][0]['state'],'current')
+        self.assertEqual(report['outcomes'][1]['next_action'],'write and read back index.txt')
+        self.assertEqual(report['outcomes'][2]['restart_trigger'],'owner records decision')
     def test_init_refuses_existing_record_without_overwriting(self):
         self.record.parent.mkdir(parents=True)
         self.record.write_text('user edits must survive')

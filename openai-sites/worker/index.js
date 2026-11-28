@@ -40,7 +40,7 @@ export default {async fetch(request,env){
   if(path==='/api/state'&&request.method==='GET'){
    const key=url.searchParams.get('project_key')??'';return response({...await (await storage.engine(subject,key)).snapshot(),hosted_project_key:key});
   }
-  if(path==='/api/artifact'&&request.method==='GET')return response(await (await storage.engine(subject,url.searchParams.get('project_key')??'')).artifactView({task_id:url.searchParams.get('task_id'),contract_revision:Number(url.searchParams.get('contract_revision')),artifact_revision:Number(url.searchParams.get('artifact_revision'))}));
+  if(path==='/api/artifact'&&request.method==='GET')return response(await (await storage.engine(subject,url.searchParams.get('project_key')??'')).artifactView({task_id:url.searchParams.get('task_id'),contract_revision:Number(url.searchParams.get('contract_revision')),artifact_revision:Number(url.searchParams.get('artifact_revision')),include_review_context:true}));
   if(path.startsWith('/owner/api/')&&request.method==='POST'){
    await requireBrowserSession(request,storage,subject);const args=await bodyJSON(request);
    if(path==='/owner/api/create'){fields(args,['contract']);return response(await storage.createProject(subject,args.contract.project_id,args.contract));}
@@ -48,7 +48,7 @@ export default {async fetch(request,env){
    if(path==='/owner/api/delete'){fields(args,['project_key','confirmation']);return response(await storage.deleteProject(subject,args.project_key,args.confirmation));}
    if(path==='/owner/api/member'){fields(args,['project_key','subject','role']);return response(await storage.setMember(subject,args.project_key,args.subject,args.role));}
    if(path==='/owner/api/revise'||path==='/owner/api/decide'){
-    const expected=path.endsWith('revise')?['project_key','contract','expected_revision','reason']:['project_key','task_id','contract_revision','artifact_revision','outcome','reason'];fields(args,expected);const {project_key,...action}=args;const engine=await storage.engine(subject,project_key,'human');return response(await engine.execute(path.endsWith('revise')?'revise_contract':'decide',action));
+    const expected=path.endsWith('revise')?['project_key','contract','expected_revision','reason']:['project_key','task_id','contract_revision','artifact_revision','outcome','reason','expected_review_basis'];fields(args,expected);const {project_key,...action}=args;const engine=await storage.engine(subject,project_key,'human');return response(await engine.execute(path.endsWith('revise')?'revise_contract':'decide',action));
    }
   }
   return response({error:'Not found'},404);

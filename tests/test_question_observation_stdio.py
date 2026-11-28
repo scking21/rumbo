@@ -21,12 +21,14 @@ class QuestionStdioTests(unittest.TestCase):
         for name in base:
             item=copy.deepcopy(local[name])
             schema=item['inputSchema']
-            additions={'rumbo_state':('question_task_id','related_task_ids'),'rumbo_request_decision':('observation',)}.get(name,())
+            additions={'rumbo_state':('question_task_id','related_task_ids'),'rumbo_request_decision':('observation','request_key')}.get(name,())
             for key in additions:
                 self.assertNotIn(key,schema['required'])
                 del schema['properties'][key]
             if name=='rumbo_state':
                 self.assertEqual(schema.pop('dependentRequired'),{'related_task_ids':['question_task_id']})
+            if name=='rumbo_request_decision':
+                self.assertEqual(schema.pop('dependentRequired'),{'request_key':['observation']})
             self.assertEqual(item,base[name])
         installed = {t['name'] for t in installed_tool_definitions()}
         self.assertNotIn('rumbo_submit_review',installed)

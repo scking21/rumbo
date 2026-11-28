@@ -31,6 +31,12 @@ def stated(reply, check, said):
 
 
 class MoneyReadingTests(unittest.TestCase):
+    def test_zero_quantity_and_monetary_unit_need_independent_sources(self):
+        quote = "A 25-minute session. No attendees. Budget $600."
+        factors = budget([{"unit": 25, "quantity": 0}])
+        self.assertEqual(unsourced(factors, quote), ["amounts unit 25", "amounts quantity 0"])
+        self.assertEqual(unsourced(factors, quote + " Tickets are $25 per attendee."), [])
+
     def test_a_length_of_time_does_not_source_an_amount(self):
         said = "Our budget is $600. He can only do a 60-minute session, and the room is ours for 2 hours."
         self.assertEqual(unsourced(budget([60]), said), ["amounts 60"])

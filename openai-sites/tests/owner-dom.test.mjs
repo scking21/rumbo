@@ -179,6 +179,21 @@ test('a stale inspected revision is rejected and refreshed exact bytes can be ac
  }finally{dom.window.close();}
 });
 
+test('owner review shows the exact basis and refuses evidence refreshed after inspection',async()=>{
+ const {w,storage,dom}=await ownerDOM(),d=w.document;try{
+  const {project}=await createOwnerProject(w,storage),session=await storage.openWorker('owner',project.project_key,'Review basis worker'),maker=await storage.workerEngine('owner',project.project_key,session.worker_id),owner=await storage.engine('owner',project.project_key,'human');
+  const task_id='first-task',check={task_id,contract_revision:1,artifact_revision:1};await maker.execute('claim_task',{task_id,contract_revision:1,lease_seconds:300});await maker.execute('ingest_artifact',{task_id,contract_revision:1,filename:'basis.txt',content:'hello basis'});await maker.execute('run_checks',check);
+  d.getElementById('refresh').click();await idle(d);d.querySelector('#tasks button').click();await idle(d);
+  assert.match(d.getElementById('artifact-criteria').textContent,/file_contains/);assert.match(d.getElementById('artifact-evidence').textContent,/e4-check/);assert.equal(d.getElementById('artifact-decision').textContent,'null');
+  d.getElementById('decision-reason').value='First exact basis';d.getElementById('accept').click();await tick();d.getElementById('confirmation').close('confirm');await idle(d);assert.equal((await owner.snapshot()).tasks[0].decisions.length,1);
+  await maker.execute('run_checks',check);d.getElementById('refresh').click();await idle(d);d.querySelector('#tasks button').click();await idle(d);
+  assert.match(d.getElementById('artifact-evidence').textContent,/e6-check/);assert.match(d.getElementById('artifact-decision').textContent,/First exact basis/);
+  await maker.execute('run_checks',check);d.getElementById('decision-reason').value='Must not absorb unseen evidence';d.getElementById('accept').click();await tick();d.getElementById('confirmation').close('confirm');await idle(d);
+  assert.match(d.getElementById('message').textContent,/STALE_REVIEW/);assert.equal((await owner.snapshot()).tasks[0].decisions.length,1);assert.equal(d.getElementById('decision-reason').value,'Must not absorb unseen evidence');
+  d.getElementById('refresh').click();await idle(d);d.querySelector('#tasks button').click();await idle(d);d.getElementById('accept').click();await tick();d.getElementById('confirmation').close('confirm');await idle(d);assert.equal((await owner.snapshot()).tasks[0].decisions.length,2);
+ }finally{dom.window.close();}
+});
+
 
 for(const retainDialogFocus of [false,true])test('canceling a confirmation restores focus from '+(retainDialogFocus?'the closed dialog':'body'),async()=>{
  const {w,dom}=await ownerDOM({browserFocus:true,retainDialogFocus}),d=w.document;try{

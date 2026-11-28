@@ -47,6 +47,16 @@ GRADER = textwrap.dedent('''\
 
 
 class RunnerTests(unittest.TestCase):
+    def test_printed_grader_count_excludes_missing_and_error(self):
+        import contextlib
+        import io
+        from scripts.claude_multiturn_eval import report
+        row = dict(case="local", run=1, turns=1, cost=0, blocks=[], holds=[], naming_ids=[],
+                   failure=None, graders=dict(truth="PASS", other="ERROR", absent="MISSING"))
+        with contextlib.redirect_stdout(io.StringIO()) as output:
+            report([row])
+        self.assertIn("graders 1/1, 2 unscored", output.getvalue())
+
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         base = self.tmp.name

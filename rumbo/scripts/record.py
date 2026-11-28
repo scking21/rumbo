@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """rumbo record tool. Python 3.9+, standard library only.
 
-Subcommands: validate, check, show, init, stop-gate, pre-write.
+Subcommands: validate, check, show, handoff, init, stop-gate, pre-write.
 Exit codes: 0 clean, 1 content problem, 2 tool or I/O problem.
 """
 
@@ -13,6 +13,7 @@ import hashlib
 import json
 import math
 import os
+from pathlib import Path
 import re
 import stat
 import sys
@@ -43,6 +44,10 @@ STATUS_ORDER = [
 ]
 
 CHECK_KINDS = ["fits_window", "before", "within_budget"]
+
+OUTCOME_STATUSES = ["runnable", "blocked", "verified"]
+SHA256_TEXT = re.compile(r"[0-9a-f]{64}")
+HOOK_ARTIFACT_LIMIT = 16 * 1024 * 1024
 
 TRUNCATION_MARKER = "…(truncated)"
 
@@ -125,18 +130,24 @@ def _loads(raw):
         raise ValueError("JSON nesting exceeds limit") from None
 
 
-def load_record(path):
+def load_record_snapshot(path):
+    """Return (decoded record, SHA-256) from one exact read of the record."""
     try:
-        with open(path, "r", encoding="utf-8") as handle:
-            raw = handle.read()
+        with open(path, "rb") as handle:
+            raw_bytes = handle.read()
     except FileNotFoundError:
         raise LoadError("RECORD_NOT_FOUND")
-    except (OSError, UnicodeDecodeError):
+    except OSError:
         raise LoadError("RECORD_UNREADABLE")
     try:
-        return _loads(raw)
-    except ValueError:
+        raw = raw_bytes.decode("utf-8")
+        return _loads(raw), hashlib.sha256(raw_bytes).hexdigest()
+    except (UnicodeDecodeError, ValueError):
         raise LoadError("RECORD_UNREADABLE")
+
+
+def load_record(path):
+    return load_record_snapshot(path)[0]
 
 
 # --------------------------------------------------------------- helpers
@@ -360,7 +371,8 @@ def _after_fraction_prefix(text, start):
 
 def _is_number_sourced(num, source_text, excluded_unit=None):
     """Return True if num is sourced in source_text per spec.
-    The amount 0 is always sourced.
+    The scalar amount 0 is always sourced. Multiplicative zero factors use the
+    stricter _is_zero_factor_sourced check instead.
     """
     if num == 0:
         return True
@@ -419,6 +431,97 @@ def _is_money_sourced(num, source_text):
     """True when a budget's amount, price per unit or cap is sourced in source_text:
     as a number, but not one that is a length of time, an ordinal, a clock time or part of a date."""
     return _is_number_sourced(num, source_text, excluded_unit=MONEY_EXCLUDED_UNIT)
+
+
+ZERO_QUANTITY = re.compile(
+    r"\b(0(?:\.0+)?(?![\d.])|zero|no)\s+([A-Za-z][\w-]*)\b",
+    re.IGNORECASE,
+)
+ZERO_UNIT = re.compile(
+    r"(?:\bfree\b|\bat\s+no\s+charge\b|\bno\s+charge\b|[$€£]\s*0(?:\.0+)?(?![\d.])|"
+    r"\bzero\s+(?:dollars?|euros?|pounds?|bucks?|cents?)\b)",
+    re.IGNORECASE,
+)
+NUMERIC_RATE = re.compile(
+    r"(?<![\w\d.:])(?:[$€£]\s*)?(\d[\d,]*(?:\.\d+)?)\s*"
+    r"(?:dollars?|euros?|pounds?|bucks?|cents?)?\s+per\s+([A-Za-z][\w-]*)\b",
+    re.IGNORECASE,
+)
+ZERO_NOT_QUANTITY = {
+    "and", "or", "but", "for", "per", "to", "of", "is", "are", "was", "were",
+    "charge", "cost", "costs", "fee", "fees", "dollar", "dollars", "euro", "euros",
+    "pound", "pounds", "buck", "bucks", "cent", "cents",
+}
+
+
+def _count_stem(word):
+    word = word.lower()
+    if word == "people":
+        return "person"
+    if word.endswith("ies") and len(word) > 3:
+        return word[:-3] + "y"
+    if word.endswith("s") and not word.endswith("ss"):
+        return word[:-1]
+    return word
+
+
+def _source_clauses(source_text):
+    """Sentence-like source pieces, preserving decimal points such as 25.50."""
+    return re.split(r"[!?;\n]+|(?<!\d)\.|\.(?!\d)", source_text)
+
+
+def _unnegated(match, clause):
+    prefix = clause[:match.start()]
+    # A contrast starts a new proposition inside one punctuation clause.
+    prefix = re.split(r"\b(?:but|however|instead)\b", prefix, flags=re.IGNORECASE)[-1]
+    return NEGATION.search(prefix[-40:]) is None
+
+
+def _zero_quantity_units(source_text):
+    """Count-unit stems explicitly assigned zero somewhere in active source text."""
+    units = set()
+    for clause in _source_clauses(source_text):
+        for match in ZERO_QUANTITY.finditer(clause):
+            noun = match.group(2).lower()
+            if noun not in ZERO_NOT_QUANTITY and _unnegated(match, clause):
+                units.add(_count_stem(noun))
+    return units
+
+
+def _numeric_rate_units(value, source_text):
+    """Unit stems from explicit numeric '<value> per <unit>' source phrases."""
+    expected = decimal.Decimal(str(value))
+    units = set()
+    for clause in _source_clauses(source_text):
+        for match in NUMERIC_RATE.finditer(clause):
+            if _unnegated(match, clause) and decimal.Decimal(match.group(1).replace(",", "")) == expected:
+                units.add(_count_stem(match.group(2)))
+    return units
+
+
+def _has_unnegated_zero(marker, clause):
+    for match in marker.finditer(clause):
+        if _unnegated(match, clause):
+            return True
+    return False
+
+
+def _is_zero_factor_sourced(key, other, source_text):
+    """True when an explicit zero factor is linked to its other factor.
+
+    A zero unit shares a clause with its quantity. A zero quantity may follow
+    its numeric rate in another active clause only when their count units match.
+    This keeps "no attendees" and "free for 12 attendees" usable without
+    treating every unrelated zero cost or count as this factor.
+    """
+    if key == "quantity":
+        # A numeric rate and its zero count may be stated in separate active
+        # clauses, but the normalized count unit must agree.
+        return bool(_zero_quantity_units(source_text) & _numeric_rate_units(other, source_text))
+    for clause in _source_clauses(source_text):
+        if _has_unnegated_zero(ZERO_UNIT, clause) and _is_number_sourced(other, clause):
+            return True
+    return False
 
 
 # Which numbers a text states does not depend on the number looked for, so each
@@ -1083,12 +1186,15 @@ def _unsourced(record, check, source=None):
         # amounts N for each amount
         for amt in check["amounts"]:
             if isinstance(amt, dict):
-                # The script multiplies; the user must have said both factors. A
-                # price per unit is money; a quantity can be hours or days.
-                if not _is_money_sourced(amt["unit"], source):
-                    unsourced.append((f"amounts unit {fmt_num(amt['unit'])}", "money", amt["unit"]))
-                if not _is_number_sourced(amt["quantity"], source):
-                    unsourced.append((f"amounts quantity {fmt_num(amt['quantity'])}", "number", amt["quantity"]))
+                unit, quantity = amt["unit"], amt["quantity"]
+                unit_sourced = (_is_zero_factor_sourced("unit", quantity, source)
+                                if unit == 0 else _is_money_sourced(unit, source))
+                quantity_sourced = (_is_zero_factor_sourced("quantity", unit, source)
+                                    if quantity == 0 else _is_number_sourced(quantity, source))
+                if not unit_sourced:
+                    unsourced.append((f"amounts unit {fmt_num(unit)}", "money", unit))
+                if not quantity_sourced:
+                    unsourced.append((f"amounts quantity {fmt_num(quantity)}", "number", quantity))
             elif not _is_money_sourced(amt, source):
                 unsourced.append((f"amounts {fmt_num(amt)}", "money", amt))
         # total_cap N
@@ -1466,6 +1572,97 @@ def _quote_paths(record):
 # ------------------------------------------------------------ validation
 
 
+def _relative_artifact_path(value):
+    """A normalized project-relative path, or None when it escapes/has no target."""
+    if not isinstance(value, str) or not value.strip() or os.path.isabs(value):
+        return None
+    normalized = os.path.normpath(value)
+    if normalized in ("", ".", "..") or normalized.startswith(".." + os.sep):
+        return None
+    return normalized
+
+
+def _validate_outcomes(record):
+    """Validate the optional closeout ledger without changing legacy records."""
+    if "outcomes" not in record:
+        return []
+    faults = []
+    outcomes = record.get("outcomes")
+    target = record.get("target")
+    if not isinstance(target, str) or not target.strip():
+        faults.append("target: RECORD_MISSING_FIELD: add the exact target for this outcome ledger")
+    if not isinstance(outcomes, list):
+        return faults + ["outcomes: RECORD_MISSING_FIELD: outcomes must be a nonempty list"]
+    if not outcomes:
+        return faults + ["outcomes: RECORD_EMPTY_FIELD: add one row for each requested outcome"]
+
+    ids = set()
+    for index, outcome in enumerate(outcomes):
+        base = "outcomes[%d]" % index
+        if not isinstance(outcome, dict):
+            faults.append("%s: RECORD_MISSING_FIELD: each outcome must be an object" % base)
+            continue
+        outcome_id = outcome.get("id")
+        if not isinstance(outcome_id, str) or not outcome_id.strip():
+            faults.append("%s.id: RECORD_MISSING_FIELD: add a nonempty unique id" % base)
+        elif outcome_id in ids:
+            faults.append("%s.id: RECORD_DUP_ID: use an id that is not already used" % base)
+        else:
+            ids.add(outcome_id)
+        for field in ("text", "owner", "acceptance"):
+            value = outcome.get(field)
+            if not isinstance(value, str) or not value.strip():
+                faults.append("%s.%s: RECORD_MISSING_FIELD: add nonempty %s" % (base, field, field))
+        status = outcome.get("status")
+        if status not in OUTCOME_STATUSES:
+            faults.append("%s.status: RECORD_BAD_STATUS: use one of %s" %
+                          (base, ", ".join(OUTCOME_STATUSES)))
+        if status == "runnable":
+            if not isinstance(outcome.get("next_action"), str) or not outcome["next_action"].strip():
+                faults.append("%s.next_action: RECORD_MISSING_FIELD: runnable work needs an exact next action" % base)
+        elif status == "blocked":
+            for field in ("blocker", "restart_trigger"):
+                value = outcome.get(field)
+                if not isinstance(value, str) or not value.strip():
+                    faults.append("%s.%s: RECORD_MISSING_FIELD: blocked work needs a specific %s" %
+                                  (base, field, field.replace("_", " ")))
+        elif status == "verified":
+            if not isinstance(outcome.get("evidence"), str) or not outcome["evidence"].strip():
+                faults.append("%s.evidence: RECORD_MISSING_FIELD: verified work needs exact evidence" % base)
+        if outcome.get("evidence") is not None and not isinstance(outcome["evidence"], str):
+            faults.append("%s.evidence: RECORD_MISSING_FIELD: evidence must be a string" % base)
+
+        if "required_checks" in outcome:
+            required = outcome["required_checks"]
+            if not isinstance(required, list) or not required:
+                faults.append("%s.required_checks: RECORD_BAD_REF: list the checks this outcome requires to pass" % base)
+            else:
+                seen = set()
+                for offset, check_id in enumerate(required):
+                    if not isinstance(check_id, str) or not check_id.strip() or check_id in seen:
+                        faults.append("%s.required_checks[%d]: RECORD_BAD_REF: use a nonempty check id once per outcome" %
+                                      (base, offset))
+                    else:
+                        seen.add(check_id)
+        artifacts = outcome.get("artifacts")
+        if artifacts is None:
+            continue
+        if not isinstance(artifacts, list) or not artifacts:
+            faults.append("%s.artifacts: RECORD_EMPTY_FIELD: artifacts must be a nonempty list" % base)
+            continue
+        for artifact_index, artifact in enumerate(artifacts):
+            path = "%s.artifacts[%d]" % (base, artifact_index)
+            if not isinstance(artifact, dict):
+                faults.append("%s: RECORD_MISSING_FIELD: each artifact must be an object" % path)
+                continue
+            if _relative_artifact_path(artifact.get("path")) is None:
+                faults.append("%s.path: RECORD_BAD_PATH: use a project-relative path that stays inside the root" % path)
+            digest = artifact.get("sha256")
+            if not isinstance(digest, str) or SHA256_TEXT.fullmatch(digest) is None:
+                faults.append("%s.sha256: RECORD_BAD_VALUE: use an exact lowercase SHA-256" % path)
+    return faults
+
+
 def validate_record(record):
     """Return a list of fault strings: '<path>: <CODE>: <hint>'."""
     faults = []
@@ -1582,6 +1779,8 @@ def validate_record(record):
                             "RECORD_BAD_REF",
                             "replace an id that exists in items",
                         )
+
+    faults.extend(_validate_outcomes(record))
 
     # checks ------------------------------------------------------------
     checks = record.get("checks", [])
@@ -2180,6 +2379,158 @@ def open_problem_lines(record):
     return lines
 
 
+def _record_project_root(record_path):
+    """Default Claude project root for PROJECT/.rumbo/record.json."""
+    return os.path.dirname(os.path.dirname(os.path.abspath(record_path)))
+
+
+def _artifact_observation(root, artifact, max_bytes=None):
+    """Observe one artifact under root without following a path outside it."""
+    relative = _relative_artifact_path(artifact["path"])
+    root = os.path.realpath(root)
+    candidate = os.path.realpath(os.path.join(root, relative))
+    if candidate != root and not candidate.startswith(root + os.sep):
+        return {"path": relative, "expected_sha256": artifact["sha256"],
+                "state": "outside_root", "observed_sha256": None}
+    try:
+        size = os.path.getsize(candidate)
+        if max_bytes is not None and size > max_bytes:
+            return {"path": relative, "expected_sha256": artifact["sha256"],
+                    "state": "too_large_for_hook", "observed_sha256": None, "size": size}
+        digest = hashlib.sha256()
+        with open(candidate, "rb") as handle:
+            while True:
+                chunk = handle.read(1024 * 1024)
+                if not chunk:
+                    break
+                digest.update(chunk)
+    except FileNotFoundError:
+        return {"path": relative, "expected_sha256": artifact["sha256"],
+                "state": "missing", "observed_sha256": None}
+    except OSError:
+        return {"path": relative, "expected_sha256": artifact["sha256"],
+                "state": "unreadable", "observed_sha256": None}
+    observed = digest.hexdigest()
+    return {"path": relative, "expected_sha256": artifact["sha256"],
+            "state": "current" if observed == artifact["sha256"] else "stale",
+            "observed_sha256": observed, "size": size}
+
+
+def _required_check_results(record, outcomes):
+    """Evaluate only explicitly bound checks, once per ID, using the normal check semantics."""
+    required = {check_id for row in outcomes for check_id in row.get("required_checks", [])}
+    if not required:
+        return {}
+    retired = retired_checks(record)
+    results = {check_id: {"id": check_id, "state": "missing", "detail": "No check with this ID in the record"}
+               for check_id in required}
+    for check in record.get("checks") or []:
+        check_id = check["id"]
+        if check_id not in required:
+            continue
+        if check_id in retired:
+            result = {"id": check_id, "state": "retired", "detail": "This check is no longer in force"}
+        else:
+            passed, detail = evaluate_check(check)
+            unsourced = unsourced_values(record, check)
+            state = "failed"
+            if passed:
+                state = "unsourced" if unsourced else "passed"
+            result = {"id": check_id, "state": state,
+                      "detail": problem_line(record, check, passed, unsourced) or detail}
+        results[check_id] = result
+    return results
+
+
+def outcome_report(record, root, max_bytes=None):
+    """Project the optional outcome ledger into CONTINUE, BOUNDED or COMPLETE."""
+    outcomes = record.get("outcomes")
+    if not outcomes:
+        return {"status": "UNTRACKED", "target": record.get("target"), "outcomes": []}
+    checks = _required_check_results(record, outcomes)
+    rows = []
+    for outcome in outcomes:
+        observations = [_artifact_observation(root, artifact, max_bytes)
+                        for artifact in outcome.get("artifacts") or []]
+        stale = [item for item in observations if item["state"] != "current"]
+        effective = outcome["status"]
+        next_action = outcome.get("next_action")
+        required = [checks[check_id] for check_id in outcome.get("required_checks", [])]
+        open_checks = [check for check in required if check["state"] != "passed"]
+        if effective == "verified" and (stale or open_checks):
+            effective = "runnable"
+            actions = []
+            if stale:
+                actions.append("Re-establish current evidence for %s" % ", ".join(item["path"] for item in stale))
+            if open_checks:
+                actions.append("Reconcile the acceptance criteria with required checks: %s" %
+                               ", ".join("%s (%s)" % (check["id"], check["state"]) for check in open_checks))
+            next_action = ". ".join(actions)
+        rows.append({
+            "id": outcome["id"],
+            "text": outcome["text"],
+            "owner": outcome["owner"],
+            "acceptance": outcome["acceptance"],
+            "recorded_status": outcome["status"],
+            "effective_status": effective,
+            "evidence": outcome.get("evidence"),
+            "artifacts": observations,
+            **({"required_checks": required} if required else {}),
+            "next_action": next_action,
+            "blocker": outcome.get("blocker"),
+            "restart_trigger": outcome.get("restart_trigger"),
+        })
+    if any(row["effective_status"] == "runnable" for row in rows):
+        status = "CONTINUE"
+    elif any(row["effective_status"] == "blocked" for row in rows):
+        status = "BOUNDED"
+    else:
+        status = "COMPLETE"
+    return {"status": status, "target": record["target"], "outcomes": rows}
+
+
+def outcome_stop_lines(record, root):
+    """Only actionable or stale rows block Stop; blocked rows remain a BOUNDED handoff."""
+    report = outcome_report(record, root, max_bytes=HOOK_ARTIFACT_LIMIT)
+    lines = []
+    for row in report["outcomes"]:
+        if row["effective_status"] != "runnable":
+            continue
+        stale = [artifact for artifact in row["artifacts"] if artifact["state"] != "current"]
+        if stale:
+            details = ", ".join("%s %s" % (artifact["path"], artifact["state"]) for artifact in stale)
+            lines.append("OUTCOME %s: STALE_EVIDENCE: %s -> owner %s; %s" %
+                         (row["id"], details, row["owner"], row["next_action"]))
+        else:
+            lines.append("OUTCOME %s: RUNNABLE: %s -> owner %s; next %s" %
+                         (row["id"], row["text"], row["owner"], row["next_action"]))
+    return lines
+
+
+def _recorded_outcome_lines(record):
+    """Compact outcome orientation for prompt and compaction injection."""
+    outcomes = record.get("outcomes") or []
+    if not outcomes:
+        return []
+    if any(row["status"] == "runnable" for row in outcomes):
+        status = "CONTINUE"
+    elif any(row["status"] == "blocked" for row in outcomes):
+        status = "BOUNDED"
+    else:
+        status = "COMPLETE"
+    lines = ["Target: %s" % record["target"],
+             "Handoff (recorded status; run handoff to verify artifact hashes): %s" % status]
+    for row in outcomes[:8]:
+        detail = row.get("next_action") if row["status"] == "runnable" else row.get("blocker")
+        line = "OUTCOME %s [%s] owner %s: %s" % (row["id"], row["status"], row["owner"], row["text"])
+        if detail:
+            line += " -> %s" % detail
+        lines.append(line)
+    if len(outcomes) > 8:
+        lines.append("... and %d more outcomes" % (len(outcomes) - 8))
+    return lines
+
+
 # ------------------------------------------------------------ subcommands
 
 
@@ -2246,6 +2597,65 @@ def cmd_check(args):
             return 1
 
     return 1 if (failed or unsourced_found) else 0
+
+
+def _handoff_root_matches(record_path, root):
+    """The standard record belongs to its project. Detached exports use the explicit root."""
+    path = Path(record_path)
+    suffix = path.parts[-2:]
+    standard = Path(DEFAULT_RECORD).parts
+    project = path.parent.parent
+    if suffix != standard:
+        if tuple(name.casefold() for name in suffix) != standard:
+            return True
+        # Case variants may denote either the same file or a separate custom record.
+        try:
+            if not path.samefile(project / DEFAULT_RECORD):
+                return True
+        except FileNotFoundError:
+            return True
+    return project.samefile(root)
+
+
+def cmd_handoff(args):
+    try:
+        record, record_sha256 = load_record_snapshot(args.record)
+    except LoadError as error:
+        print(error.code, file=sys.stderr)
+        return 2
+    expected = getattr(args, 'reviewed_record_sha256', None)
+    if expected is not None:
+        if not re.fullmatch(r'[0-9a-f]{64}', expected):
+            print("INVALID_REVIEW_DIGEST: use the lowercase SHA-256 from the reviewed record", file=sys.stderr)
+            return 2
+        if record_sha256 != expected:
+            print("HANDOFF_RECORD_CHANGED: this record differs from the reviewed copy. "
+                  "Inspect its current changes before certifying a replacement.", file=sys.stderr)
+            return 2
+    faults = validate_record(record)
+    if faults:
+        for line in faults:
+            print(line)
+        return 1
+    root = os.path.realpath(args.root)
+    if not os.path.isdir(root):
+        print("PROJECT_ROOT_UNREADABLE", file=sys.stderr)
+        return 2
+    try:
+        matches = _handoff_root_matches(args.record, root)
+    except OSError:
+        print("PROJECT_ROOT_UNREADABLE", file=sys.stderr)
+        return 2
+    if not matches:
+        print("HANDOFF_PROJECT_MISMATCH: select both the record and the root "
+              "from the intended project, then rerun handoff", file=sys.stderr)
+        return 2
+    report = outcome_report(record, root)
+    report["objective"] = record["objective"]["text"]
+    report["project_root"] = root
+    report["record_sha256"] = record_sha256
+    print(json.dumps(report, indent=2, sort_keys=True))
+    return 0 if report["status"] == "COMPLETE" else 1
 
 
 def _marker_path(session_id, suffix):
@@ -2367,7 +2777,7 @@ def cmd_show(args):
         print("rumbo: record invalid, run record.py validate")
         return 0
 
-    empty = not record.get("items") and not record.get("checks")
+    empty = not record.get("items") and not record.get("checks") and not record.get("outcomes")
     if empty and payload is not None and isinstance(payload.get("prompt"), str) and \
             PLANNING_PATTERN.search(payload["prompt"]):
         # Counted for the Stop gate's nudge, as without a record.
@@ -2381,6 +2791,7 @@ def cmd_show(args):
         lines.append(OPEN_HEADER)
         lines.extend(problems)
     lines.append("Objective: %s" % record["objective"]["text"])
+    lines.extend(_recorded_outcome_lines(record))
     if empty:
         lines.append(EMPTY_NOTE)
 
@@ -2720,6 +3131,9 @@ def _stop_gate(args, hook_input):
         return _block_bounded(session_id, [BROKEN_RECORD] + faults[:5], BROKEN_TAIL, chained=chained)
 
     parts, problem_ids = record_problems(record)
+    outcome_parts = outcome_stop_lines(record, _record_project_root(args.record))
+    parts.extend(outcome_parts)
+    problem_ids.extend([None] * len(outcome_parts))
     # A conflict or assumption the reply already states plainly needs no block:
     # the user has just been told. Only the harness's copy of the reply counts.
     reply = hook_input.get("last_assistant_message") if isinstance(hook_input, dict) else None
@@ -2796,11 +3210,13 @@ def _stop_gate(args, hook_input):
                     pass
         if ledger_parts:
             return _block_bounded(session_id, ledger_parts, CONFLICT_TAIL, chained=chained, marker=".ledger-")
-        if not record.get("items") and not record.get("checks") and _nudge_empty_record(session_id, chained):
+        if not record.get("items") and not record.get("checks") and not record.get("outcomes") \
+                and _nudge_empty_record(session_id, chained):
             print(json.dumps({"decision": "block", "reason": EMPTY_REASON}))
         return 0
     present = {c.get("id") for c in record.get("checks") or []}
-    remembered = problem_ids + [i for i in _read_failed_ids(session_id) if i not in present]
+    remembered = [i for i in problem_ids if i is not None] + \
+        [i for i in _read_failed_ids(session_id) if i not in present]
     shown = [part for part in parts if part not in stated_parts]
     if not shown:
         # Every open problem is a check the reply states. Keep their ids so a
@@ -2875,8 +3291,9 @@ ASSUMPTION_WORDS = re.compile(r"\b(?:assum\w*|estimat\w*|est\.|guess\w*|propos\w
 # to the user ("the $15 you suggested", "your earlier estimate"), which is the
 # claim an unsourced value contradicts, so they do not count there.
 USERS_WORDS = re.compile(r"\b(?:you|your|you've|you'd|you're|yours)\b(?:\W+\w+){0,2}\W*$", re.IGNORECASE)
-# 0 written as a number or a word; the source check counts 0 as always sourced,
-# but a reply that never says it has not stated a cap of 0.
+# 0 written as a number or a word; the source check implicitly sources scalar 0,
+# but a reply that never says it has not stated a cap of 0. Zero factors are
+# checked separately against their unit-linked evidence.
 EXPLICIT_ZERO = re.compile(r"(?<![\d.,:])0+(?:\.0+)?(?![\d.,:]?\d)|\bzero\b", re.IGNORECASE)
 # Bounds that keep a long reply inside the hook timeout. Text past them is not
 # read, so it can only leave a problem unstated: the gate then blocks as before.
@@ -3341,6 +3758,11 @@ def build_parser():
     add_record_option(check_parser)
     check_parser.add_argument("--transcript", help="path to transcript JSONL for quote verification")
 
+    # explicit closeout projection; reads only the authorized root and record
+    handoff = subparsers.add_parser("handoff", help="emit outcome status and verify bound artifact hashes")
+    add_record_option(handoff)
+    handoff.add_argument("--root", required=True, help="explicit authorized project root")
+
     # show subcommand
     show = subparsers.add_parser("show", help="compact summary for hook injection")
     add_record_option(show)
@@ -3367,6 +3789,7 @@ def main(argv=None):
     handlers = {
         "validate": cmd_validate,
         "check": cmd_check,
+        "handoff": cmd_handoff,
         "show": cmd_show,
         "init": cmd_init,
         "stop-gate": cmd_stop_gate,

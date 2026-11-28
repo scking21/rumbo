@@ -39,11 +39,39 @@ test('full HTTP owner/worker/separate-reviewer workflow; read tools make no writ
  const args={project_key,task_id:'one',contract_revision:1,artifact_revision:1,check_id:'review',outcome:'pass',detail:'Synthetic separate reviewer'};
  assert.equal((await rpc(env,'rumbo_submit_review',args)).body.result.isError,true);
  assert.equal((await rpc(env,'rumbo_submit_review',args,'reviewer')).body.result.isError,false);
- const decision=await worker.fetch(request('/owner/api/decide',{project_key,task_id:'one',contract_revision:1,artifact_revision:1,outcome:'accepted',reason:'Synthetic owner checked bytes'},headers),env);assert.equal(decision.status,200);assert.equal((await decision.json()).tasks[0].status,'accepted');
+ const artifact=await (await worker.fetch(request('/api/artifact?project_key='+project_key+'&task_id=one&contract_revision=1&artifact_revision=1',undefined,identity()),env)).json();
+ const decision=await worker.fetch(request('/owner/api/decide',{project_key,task_id:'one',contract_revision:1,artifact_revision:1,outcome:'accepted',reason:'Synthetic owner checked bytes',expected_review_basis:artifact.review_context.review_basis},headers),env);assert.equal(decision.status,200);assert.equal((await decision.json()).tasks[0].status,'accepted');
  const before=db.prepare('SELECT total_changes() AS n').get().n;
  for(const [name,args] of [['rumbo_list_projects',{}],['rumbo_state',{project_key}],['open_project_board',{project_key}],['rumbo_read_artifact',{project_key,task_id:'one',contract_revision:1,artifact_revision:1}]])assert.equal((await rpc(env,name,args)).body.result.isError,false);
  assert.equal(db.prepare('SELECT total_changes() AS n').get().n,before);
  assert.equal((await rpc(env,'rumbo_state',{project_key},'outsider')).body.result.isError,true);
+});
+test('owner API requires an inspected basis and rejects refreshed evidence without appending a decision',async()=>{
+ const {env,storage}=fixture(),headers=await browser(env),made=await worker.fetch(request('/owner/api/create',{contract:await contract()},headers),env),{project_key}=await made.json();
+ await storage.setMember('owner',project_key,'reviewer','reviewer');const opened=await storage.openWorker('owner',project_key,'Maker'),maker=await storage.workerEngine('owner',project_key,opened.worker_id);
+ await maker.execute('claim_task',{task_id:'one',contract_revision:1,lease_seconds:300});await maker.execute('ingest_artifact',{task_id:'one',contract_revision:1,filename:'output.txt',content:'hello'});await maker.execute('run_checks',{task_id:'one',contract_revision:1,artifact_revision:1});
+ await (await storage.reviewerEngine('reviewer',project_key)).execute('submit_review',{task_id:'one',contract_revision:1,artifact_revision:1,check_id:'review',outcome:'pass',detail:'Synthetic exact review'});
+ const common={project_key,task_id:'one',contract_revision:1,artifact_revision:1,outcome:'accepted',reason:'Inspected exact current basis'};
+ const missing=await worker.fetch(request('/owner/api/decide',common,headers),env);assert.equal(missing.status,400);assert.equal((await missing.json()).code,'MISSING_FIELD');
+ const inspected=await (await worker.fetch(request('/api/artifact?project_key='+project_key+'&task_id=one&contract_revision=1&artifact_revision=1',undefined,identity()),env)).json();
+ await maker.execute('run_checks',{task_id:'one',contract_revision:1,artifact_revision:1});
+ const stale=await worker.fetch(request('/owner/api/decide',{...common,expected_review_basis:inspected.review_context.review_basis},headers),env);assert.equal(stale.status,409);assert.equal((await stale.json()).code,'STALE_REVIEW');assert.equal((await maker.snapshot()).tasks[0].decisions.length,0);
+ const fresh=await (await worker.fetch(request('/api/artifact?project_key='+project_key+'&task_id=one&contract_revision=1&artifact_revision=1',undefined,identity()),env)).json();
+ const accepted=await worker.fetch(request('/owner/api/decide',{...common,expected_review_basis:fresh.review_context.review_basis},headers),env);assert.equal(accepted.status,200);assert.equal((await accepted.json()).tasks[0].status,'accepted');
+});
+test('owner API permits identical accepted reconfirmation but rebases changed reason and reject transitions',async()=>{
+ const {env,storage}=fixture(),headers=await browser(env),made=await worker.fetch(request('/owner/api/create',{contract:await contract()},headers),env),{project_key}=await made.json();
+ await storage.setMember('owner',project_key,'reviewer','reviewer');const opened=await storage.openWorker('owner',project_key,'Maker'),maker=await storage.workerEngine('owner',project_key,opened.worker_id);
+ await maker.execute('claim_task',{task_id:'one',contract_revision:1,lease_seconds:300});await maker.execute('ingest_artifact',{task_id:'one',contract_revision:1,filename:'output.txt',content:'hello'});await maker.execute('run_checks',{task_id:'one',contract_revision:1,artifact_revision:1});await (await storage.reviewerEngine('reviewer',project_key)).execute('submit_review',{task_id:'one',contract_revision:1,artifact_revision:1,check_id:'review',outcome:'pass',detail:'Synthetic exact review'});
+ const artifact=()=>worker.fetch(request('/api/artifact?project_key='+project_key+'&task_id=one&contract_revision=1&artifact_revision=1',undefined,identity()),env).then(response=>response.json());
+ const post=payload=>worker.fetch(request('/owner/api/decide',payload,headers),env),base={project_key,task_id:'one',contract_revision:1,artifact_revision:1,outcome:'accepted',reason:'Stable owner rationale'};
+ let view=await artifact();assert.equal((await post({...base,expected_review_basis:view.review_context.review_basis})).status,200);
+ view=await artifact();const acceptedBasis=view.review_context.review_basis,identical={...base,expected_review_basis:acceptedBasis};assert.equal((await post(identical)).status,200);assert.equal((await post(identical)).status,200);
+ assert.equal((await (await storage.engine('owner',project_key,'human')).snapshot()).tasks[0].decisions.length,3);
+ assert.equal((await post({...identical,reason:'Changed owner rationale'})).status,200);let stale=await post(identical);assert.equal(stale.status,409);assert.equal((await stale.json()).code,'STALE_REVIEW');
+ view=await artifact();const changedBasis=view.review_context.review_basis;assert.equal((await post({...base,outcome:'rejected',reason:'Blocking issue found',expected_review_basis:changedBasis})).status,200);
+ stale=await post({...base,expected_review_basis:changedBasis});assert.equal(stale.status,409);assert.equal((await stale.json()).code,'STALE_REVIEW');
+ view=await artifact();assert.equal((await post({...base,expected_review_basis:view.review_context.review_basis})).status,200);stale=await post({...base,expected_review_basis:changedBasis});assert.equal(stale.status,409);
 });
 test('board global and thread entrypoints accept empty arguments and safely select authorized projects',async()=>{
  const {env,storage}=fixture();let board=await rpc(env,'open_project_board',{});assert.equal(board.body.result.isError,false);assert.deepEqual(board.body.result.structuredContent.projects,[]);

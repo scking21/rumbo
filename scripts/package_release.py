@@ -4,6 +4,9 @@ import argparse
 import hashlib
 import ipaddress
 import json
+import os
+import stat
+import tempfile
 from pathlib import Path
 import re
 import sys
@@ -109,16 +112,27 @@ def write_zip(target,files,prefix='rumbo'):
             raise ValueError('Unsafe archive path')
         seen.add(name.casefold())
     target=Path(target);target.parent.mkdir(parents=True,exist_ok=True)
-    with zipfile.ZipFile(target,'w',compression=zipfile.ZIP_DEFLATED,compresslevel=9) as archive:
-        for name,data in sorted(files.items()):
-            info=zipfile.ZipInfo(prefix+'/'+name,STAMP)
-            info.compress_type=zipfile.ZIP_DEFLATED
-            info.external_attr=(0o100755 if name.endswith('.sh') else 0o100644)<<16
-            archive.writestr(info,data,compress_type=zipfile.ZIP_DEFLATED,compresslevel=9)
-    if target.stat().st_size>100*1024*1024:
-        target.unlink()
-        raise ValueError('Compressed archive limit exceeded')
-    return hashlib.sha256(target.read_bytes()).hexdigest()
+    # Publish only the fully written and hashed ZIP. A failed rebuild leaves the previous package usable.
+    target = target.resolve()
+    mode = None
+    if target.exists():
+        with target.open('r+b') as previous:
+            mode = stat.S_IMODE(os.fstat(previous.fileno()).st_mode)
+    with tempfile.TemporaryDirectory(prefix='.rumbo-package-', dir=target.parent) as staging:
+        staged = Path(staging) / 'package.zip'
+        with zipfile.ZipFile(staged,'w',compression=zipfile.ZIP_DEFLATED,compresslevel=9) as archive:
+            for name,data in sorted(files.items()):
+                info=zipfile.ZipInfo(prefix+'/'+name,STAMP)
+                info.compress_type=zipfile.ZIP_DEFLATED
+                info.external_attr=(0o100755 if name.endswith('.sh') else 0o100644)<<16
+                archive.writestr(info,data,compress_type=zipfile.ZIP_DEFLATED,compresslevel=9)
+        if staged.stat().st_size > 100*1024*1024:
+            raise ValueError('Compressed archive limit exceeded')
+        digest = hashlib.sha256(staged.read_bytes()).hexdigest()
+        if mode is not None:
+            staged.chmod(mode)
+        os.replace(staged, target)
+    return digest
 
 
 def build_local(root,target):
@@ -130,6 +144,19 @@ def build_local(root,target):
     for path in (root/'rumbo').glob('*.py'):
         files['rumbo/'+path.name]=path.read_bytes()
     files['rumbo/web/board.html']=(root/'rumbo/web/board.html').read_bytes()
+    preparation = root/'openai-plugin/upload-preparation'
+    for name in ('prepare_upload.py', 'instructions.md'):
+        path = preparation/name
+        if preparation.is_symlink() or path.is_symlink() or not path.is_file():
+            raise ValueError('Missing or unsafe local upload preparation input: '+name)
+    files['skills/coordinate-work/prepare_upload.py'] = (preparation/'prepare_upload.py').read_bytes()
+    files['skills/coordinate-work/SKILL.md'] += (preparation/'instructions.md').read_bytes()
+    preservation = root/'openai-plugin/approval-preservation.md'
+    if preservation.is_symlink() or not preservation.is_file():
+        raise ValueError('Missing or unsafe local approval preservation instructions')
+    guidance = preservation.read_bytes()
+    for skill in ('coordinate-work', 'review-evidence'):
+        files['skills/'+skill+'/SKILL.md'] += guidance
     runtime=root/'rumbo/scripts/record.py'
     if runtime.is_symlink():raise ValueError('Symlink commitments runtime is forbidden')
     files['scripts/_commitments_record.py']=runtime.read_bytes()

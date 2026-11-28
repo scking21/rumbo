@@ -16,7 +16,7 @@ A worker can now attach the observation it used to compose a question. This is a
    })
    ```
 
-3. `STALE_QUESTION` appends nothing. Reread and reconsider or recompose the question. Never fetch a fresh token simply to retry stale text; never drop the guard to force a retry. A successful append is **one question**, not a decision. Lost response? Inspect the ledger before considering any retry; this operation is not idempotent.
+3. `STALE_QUESTION` appends nothing. Reread and reconsider or recompose the question. Never fetch a fresh token simply to retry stale text; never drop the guard to force a retry. A successful append is **one question**, not a decision. Lost response? Inspect the ledger before considering any retry; an unkeyed request is not idempotent.
 
 ## Choose context explicitly
 
@@ -27,3 +27,9 @@ A worker can now attach the observation it used to compose a question. This is a
 Both modes check inside the SQLite write transaction after lock acquisition and verified replay. The checked client observation and live submission revision are both retained on a successful guarded question. Standard snapshots, legacy unguarded questions, other actions, roles and existing ledger contents are unchanged. No secret, signature or unforgeable read receipt is involved. Content-equal cloned ledger history is not a verified unique installation.
 
 **Filesystem and other boundaries:** The write lock serializes cooperating SQLite ledger writers, not filesystem edits, clocks, other projects or remote services. The whole-project check compares the ledger and its Engine projection, **not the entire project directory**. A changed unregistered file, a local source that was uploaded earlier, facts changed outside Rumbo, or bytes that change while their projected status and recorded identity stay the same are not reliably detected. Do a fresh exact-byte/source check where the question relies on those facts. Neither mode certifies external permissions, continuous filesystem integrity or anything the person actually authorized.
+
+## Recover one intended question
+
+When the local catalog advertises `request_key`, generate a fresh identifier for each question you intend to record. Retain the key, bound actor/role, project, task, exact words and original observation before sending it. Keys are identifiers in the ledger, visible to project readers. The first successful call appends one request. The same principal can repeat its identical keyed call, including a different response mode, and receive the original event ID even if the task has since changed. A successful keyed call adds `decision_request_ack` to the snapshot, or returns `rumbo.decision_request_receipt.v1` in receipt mode. Its `appended` flag distinguishes a new append from reconciliation. Read current state before handoff: an old recorded question establishes neither receipt by a person nor a decision.
+
+On a lost acknowledgement, first look for the original actor, role and key in current state. If found, use that event ID. If absent, the original attempt may still be in flight; only the same principal can safely repeat its exact keyed call. A new installed connection receives a new worker identity. If reconnecting, reconcile the old principal's event or establish that its attempt ended without a commit before considering a fresh submission. A repeated key with different text, task or observation returns `QUESTION_KEY_CONFLICT`; inspect the original request. A genuinely distinct question, including one motivated by new evidence, uses a new key and an appropriate fresh observation. Older catalogs and unkeyed calls retain ordinary readback by actor, task, question and revision. If that readback cannot distinguish two attempts, report the ambiguity.

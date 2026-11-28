@@ -10,7 +10,7 @@ from pathlib import Path
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
     subs = parser.add_subparsers(dest='command', required=True)
-    for name in ('init', 'validate', 'check', 'show'):
+    for name in ('init', 'validate', 'check', 'show', 'handoff'):
         sub = subs.add_parser(name, allow_abbrev=False)
         sub.add_argument('--record', required=True, help='Explicit authorized project record path')
         if name == 'init':
@@ -18,6 +18,9 @@ def main(argv=None):
             sub.add_argument('--quote', required=True, help='Exact user quote; use - for stdin')
         elif name == 'show':
             sub.add_argument('--max-chars', type=int, default=1500)
+        elif name == 'handoff':
+            sub.add_argument('--root', required=True, help='Explicit authorized project root')
+            sub.add_argument('--reviewed-record-sha256', help='Limit this handoff to the exact record previously reviewed')
     args = parser.parse_args(argv)
     # Resolve this distribution, not cwd, PATH, an environment variable or a session.
     script = Path(__file__).resolve()

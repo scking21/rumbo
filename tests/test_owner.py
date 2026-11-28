@@ -228,6 +228,11 @@ class OwnerPortalTests(unittest.TestCase):
         worker.execute('submit_artifact', dict(task_id='export', contract_revision=1, path='export.csv'))
         worker.execute('run_checks', dict(task_id='export', contract_revision=1, artifact_revision=1))
         decision = dict(task_id='export', contract_revision=1, artifact_revision=1, outcome='accepted', reason='I reviewed the result')
+        self.assertEqual(self.action(cookie, csrf, 'decide', decision)[0], 409)
+        page = self.request('GET', '/owner', cookie=cookie)[2]
+        from html import unescape
+        rendered = unescape(page)
+        decision['expected_review_basis'] = re.search(r'"expected_review_basis":\s*"([0-9a-f]{64})"', rendered)[1]
         self.assertEqual(self.action(cookie, csrf, 'decide', decision)[0], 303)
         self.assertEqual(owner.snapshot()['tasks'][0]['status'], 'accepted')
         revised = contract(); revised['goal'] = 'Ship revised export'

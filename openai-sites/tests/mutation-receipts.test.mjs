@@ -52,7 +52,29 @@ test('hosted optional schema preserves required fields, authority and special to
    assert.equal(tool.inputSchema.required.includes('worker_id'),tool.name!=='rumbo_submit_review');
   }
  }
+ const read=toolDefinitions().find(tool=>tool.name==='rumbo_read_artifact');
+ assert.equal(read.inputSchema.required.includes('include_review_context'),false);
+ assert.deepEqual(read.inputSchema.properties.include_review_context,{type:'boolean',description:'Include the current task criteria, latest applicable evidence, dependencies and last decision for these exact bytes.'});
  assert.deepEqual(toolDefinitions().find(t=>t.name==='open_project_board').inputSchema.required,[]);
+});
+
+test('hosted exact-artifact review context is opt-in and keeps evidence separate from decisions',async()=>{
+ const f=await setup();try{
+  await f.owner.execute('claim_task',claim);
+  await f.owner.execute('ingest_artifact',{task_id:'one',contract_revision:1,filename:'one.txt',content:'hello exact bytes'});
+  await f.owner.execute('run_checks',exact);
+  const reviewer=await f.storage.reviewerEngine('reviewer',f.p.project_key);
+  await reviewer.execute('submit_review',{...exact,check_id:'review',outcome:'pass',detail:'Exact synthetic bytes'});
+  await f.owner.execute('decide',{...exact,outcome:'accepted',reason:'Owner inspected exact bytes'});
+  await f.owner.execute('run_checks',exact);
+  const plain=await call(f,'rumbo_read_artifact',{project_key:f.p.project_key,...exact},null);
+  const disabled=await call(f,'rumbo_read_artifact',{project_key:f.p.project_key,...exact,include_review_context:false},null);
+  assert.deepEqual(plain,disabled);assert.equal(Object.hasOwn(plain.structuredContent,'review_context'),false);
+  const included=await call(f,'rumbo_read_artifact',{project_key:f.p.project_key,...exact,include_review_context:true},null),context=included.structuredContent.review_context;
+  assert.equal(included.structuredContent.status,'checks_passed');assert.deepEqual(Object.keys(context.evidence).sort(),['contains','review']);
+  assert.equal(context.evidence.contains.id,'e7-contains');assert.equal(context.decision.id,'e6');assert.ok(context.decision.evidence_ids.includes('e4-contains'));assert.ok(!context.decision.evidence_ids.includes('e7-contains'));
+  for(const value of [null,0,1,'true',[],{}]){const result=await call(f,'rumbo_read_artifact',{project_key:f.p.project_key,...exact,include_review_context:value},null);assert.equal(result.isError,true);assert.match(result.content[0].text,/BAD_INPUT: include_review_context must be a boolean/);}
+ }finally{f.db.close();}
 });
 test('invalid mode fails before storage access, upload or mutation for every hosted mutation',async()=>{
  const storage=new Proxy({},{get(){throw new Error('Storage must not be touched for invalid mode');}});

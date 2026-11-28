@@ -8,7 +8,7 @@ import sys
 import uuid
 
 from .core import RumboError, fail, fields
-from .protocol import Protocol, prop, rpc_error, serve_protocol_stdio, tool_definitions
+from .protocol import ARTIFACT, CONTRACT, TASK, Protocol, prop, rpc_error, serve_protocol_stdio, tool_definitions
 from .registry import ExistingProjectEngine, ProjectRegistry
 
 
@@ -35,11 +35,49 @@ def _tool(name, title, description, properties, readonly):
                 annotations=dict(readOnlyHint=readonly, destructiveHint=False, openWorldHint=False, idempotentHint=readonly))
 
 
+SUBMISSION_INPUTS = {
+    'rumbo_submit_artifact': {
+        'expected_sha256': prop('string', 'SHA-256 from the file you reviewed. Supply it to prevent registering different bytes.', pattern='^[a-f0-9]{64}$'),
+        'expected_artifact_revision': prop('integer', 'Previously observed artifact revision, or zero for a first registration. Prevents delayed or repeated requests from replacing newer work.', minimum=0),
+    }
+}
+
+
 def installed_tool_definitions():
+    local = [tool for tool in tool_definitions(question_observations=True) if tool['name'] != 'rumbo_submit_review']
+    for tool in local:
+        tool['inputSchema']['properties'].update(SUBMISSION_INPUTS.get(tool['name'], {}))
+        if tool['name'] == 'rumbo_run_checks':
+            tool['description'] += ' This records new evidence and can suspend acceptance and dependent work. For a read-only recheck use rumbo_verify_checks.'
+        if tool['name'] == 'rumbo_submit_artifact':
+            tool['description'] += ' For a reviewed file, pass its independently observed digest and prior artifact revision. On a mismatch reread the file and current task before retrying.'
     return [
         _tool('rumbo_list_projects', 'List Registered Projects', 'List only owner-provisioned project aliases available to this installed connection. Does not search the filesystem or expose project paths.', {}, True),
         _tool('rumbo_connect_project', 'Connect Registered Project', 'Bind this process once to one owner-provisioned alias as a fresh worker. Arbitrary paths, actor identities, roles, rebinding, and lease resumption are unavailable.', {'alias': prop('string', 'Owner-registered alias from rumbo_list_projects', minLength=1, maxLength=64)}, False),
-    ] + [tool for tool in tool_definitions(question_observations=True) if tool['name'] != 'rumbo_submit_review']
+        _tool('rumbo_verify_checks', 'Verify Checks Without Recording', 'Recompute deterministic criteria against the exact current registered artifact, including binary project files. Returns outcomes without appending evidence or changing human acceptance. To inspect existing evidence use rumbo_state or rumbo_read_artifact. To deliberately record new evidence use rumbo_run_checks.',
+              {'task_id': TASK, 'contract_revision': CONTRACT, 'artifact_revision': ARTIFACT}, True),
+    ] + local
+
+
+def _verify_checks(engine, arguments):
+    """Evaluate through the same preparation step used for recording, in a read transaction."""
+    fields(arguments, {'task_id', 'contract_revision', 'artifact_revision'})
+    with engine._db() as db:
+        db.execute('BEGIN')
+        now = engine._now()
+        state = engine._project(engine._replay(db), now)
+        prepared = engine._prepare('run_checks', arguments, state, now)
+        task = engine._task(arguments['task_id'], state)
+        artifact = task['artifact']
+        # Preparation computes deterministic outcomes. Only execute() can append the receipts.
+        checks = [{key: row[key] for key in ('check_id', 'outcome', 'detail')}
+                  for row in prepared['evidence']]
+        return dict(project_id=state['project_id'], task_id=task['id'], contract_revision=state['contract_revision'],
+                    artifact_revision=artifact['revision'], sha256=artifact['sha256'], ledger_head=state['ledger_head'],
+                    status=task['status'], recorded=False, checks=checks,
+                    manual_review_ids=[c['id'] for c in task['acceptance'] if c['kind'] == 'manual_review'],
+                    notice='Computed the listed deterministic checks for this observation. Manual criteria were not evaluated. '
+                           'Status is the projected ledger status at observation time. No receipt or decision was recorded.')
 
 
 def _success(data, text):
@@ -51,6 +89,8 @@ def _failure(error):
 
 
 class InstalledProtocol(Protocol):
+    extra_tool_inputs = SUBMISSION_INPUTS
+
     def __init__(self, plugin_data, clock=None):
         self.registry = ProjectRegistry(plugin_data)
         self.actor = 'worker-' + uuid.uuid4().hex
@@ -76,6 +116,29 @@ class InstalledProtocol(Protocol):
             except RumboError as error:
                 return rpc_error(request['id'], -32602, str(error))
             name = params['name']
+            if name == 'rumbo_verify_checks':
+                try:
+                    if self.alias is None:
+                        self.engine.snapshot()  # Emits the same PROJECT_UNBOUND diagnostic as the other reads.
+                    observation = _verify_checks(self.engine, params.get('arguments', {}))
+                    result = _success(observation, observation['notice'])
+                except RumboError as error:
+                    reasons = {
+                        'ARTIFACT_CHANGED': 'The bytes differ from the registered digest.',
+                        'STALE_ARTIFACT': 'The requested artifact revision is unavailable under the current task definition.',
+                        'STALE_CONTRACT': 'The requested contract revision is no longer current.',
+                        'DEPENDENCY_BLOCKED': 'A prerequisite is unaccepted or its approved basis has changed.',
+                    }
+                    if error.code in reasons:
+                        message = reasons[error.code] + ' Read current state and report the mismatch for this request; changing registrations or evidence requires a separate decision.'
+                        result = _failure(RumboError(error.code, message))
+                        result['structuredContent'] = dict(code=error.code, recorded=False,
+                                                           recovery=dict(tool='rumbo_state', arguments={}))
+                    else:
+                        result = _failure(error)
+                except (OSError, ValueError, TypeError, RecursionError):
+                    return rpc_error(request['id'], -32603, 'Local verification failed; inspect the project and its ledger')
+                return dict(jsonrpc='2.0', id=request['id'], result=result)
             if name == 'rumbo_submit_review':
                 return rpc_error(request['id'], -32602, 'Unknown tool')
             if name in ('rumbo_list_projects', 'rumbo_connect_project'):
@@ -84,7 +147,9 @@ class InstalledProtocol(Protocol):
                     fields(args, {'alias'} if name == 'rumbo_connect_project' else set())
                     if name == 'rumbo_list_projects':
                         projects = self.registry.list_projects()
-                        result = _success(dict(projects=projects), str(len(projects)) + ' owner-registered projects. Connect one alias before using project tools.')
+                        guide = ('This process selected alias ' + self.alias + '. Call rumbo_state to verify current access and read its contract.'
+                                 if self.alias is not None else 'Connect one owner-registered alias before using project tools.')
+                        result = _success(dict(projects=projects, bound_alias=self.alias), guide)
                     else:
                         if self.alias is not None:
                             fail('PROJECT_ALREADY_BOUND', 'This process is already bound; start a new connection to select another project')
