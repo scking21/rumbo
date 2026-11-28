@@ -422,9 +422,14 @@ ISO_DATE = re.compile(r"(?<!\d)\d{4}-(?:1[0-2]|0?[1-9])-(?:3[01]|[12]\d|0?[1-9])
 CURRENCY_WORD = re.compile(r"[^\S\n]*(?:dollars?|bucks|euros?|pounds?|quid|usd|eur|gbp|cad|aud)\b", re.IGNORECASE)
 
 
+def _line_space(char):
+    """True for the whitespace that [^\\S\\n] matches: any but a line break, so also a no-break space."""
+    return char.isspace() and char != "\n"
+
+
 def _next_letter(text, end):
     """True when the first character after end, past spaces on the same line, is a letter."""
-    while end < len(text) and text[end] in " \t":
+    while end < len(text) and _line_space(text[end]):
         end += 1
     return end < len(text) and text[end].isalpha()
 
@@ -440,7 +445,7 @@ def _day_of_date(text, match):
     if letter_after and CURRENCY_WORD.match(text, end):
         return False
     before = start - 1
-    while before >= 0 and text[before] in " \t":
+    while before >= 0 and _line_space(text[before]):
         before -= 1
     if before >= 0 and (text[before].isalpha() or text[before] == ".") and \
             MONTH_BEFORE.search(text, max(0, start - 16), start) is not None:

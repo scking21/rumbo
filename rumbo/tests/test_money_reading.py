@@ -185,6 +185,20 @@ class MoneyReadingSpeedTests(unittest.TestCase):
             timings.append(time.perf_counter() - started)
         self.assertLess(timings[1], 1.8 * timings[0], timings)
 
+    def test_the_cheap_checks_skip_the_same_spaces_as_the_regexes(self):
+        # Codex review on 0.3.28: the letter checks skipped only spaces and tabs, while
+        # the regexes they guard take any space but a line break. So "20 May" and
+        # "9 pm" sourced money of 20 and 9, and "June 25 euros" lost its 25.
+        said = ("Budget 600. Due 20 May. Doors at 9 pm. Rent: June 25 euros. Due June 20. "
+                "Also July 4th and March 20th. Fee: 30 dollars, Mar. 12 and 15 hours.")
+        expected = record._sourced_numbers(said, record.MONEY_EXCLUDED_UNIT)
+        self.assertEqual(sorted(map(str, expected)), ["25", "30", "600"])
+        for space in ("\t", "\x0b", "\x0c", "\r", "\x85", " ", " ", " ", " ", " ", " ", "　"):
+            with self.subTest(space=hex(ord(space))):
+                self.assertEqual(record._sourced_numbers(said.replace(" ", space), record.MONEY_EXCLUDED_UNIT), expected)
+        # A line break still ends the line a month or unit is read on.
+        self.assertEqual(unsourced(budget([20]), "Budget 600. Due 20\nMay brings rain."), [])
+
 
 if __name__ == "__main__":
     unittest.main()
