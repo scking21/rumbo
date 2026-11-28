@@ -64,6 +64,20 @@ class MoneyReadingTests(unittest.TestCase):
             with self.subTest(said=said):
                 self.assertEqual(unsourced(budget(amounts, total_cap=1500 if "1.5k" in said else 600), said), [])
 
+    def test_a_number_that_cannot_be_a_day_stays_money_beside_a_month(self):
+        # Codex review on 0.3.26: monthly figures without a currency sign are money
+        # when no calendar day is that large.
+        said = "Our budget is 600. Monthly costs: May 50, June 40, July 35."
+        self.assertEqual(unsourced(budget([50, 40, 35]), said), [])
+        self.assertEqual(stated("Monthly costs: May 50, June 40, July 35 (my estimates).", budget([50, 40, 35]),
+                                "Our budget is 600."), {"C1"})
+        # A day from 1 to 31 still reads as a date, and so does an ISO date with a real month.
+        self.assertEqual(unsourced(budget([31]), "Budget 600, due May 31."), ["amounts 31"])
+        self.assertEqual(unsourced(budget([20]), "Budget 600, due 2026-12-20."), ["amounts 20"])
+        self.assertEqual(unsourced(budget([30]), "Budget 600, code 2026-13-30."), [])
+        # A currency word after the day makes it money too.
+        self.assertEqual(unsourced(budget([25, 20]), "Budget 600. Rent: June 25 euros, May 20 dollars."), [])
+
     def test_a_price_is_not_cut_short_by_a_date_after_it(self):
         # "$20.50 May fee" must not read as "$20." with "50 May" taken for a date.
         self.assertEqual(unsourced(budget([20]), "Budget $600. A $20.50 May fee."), ["amounts 20"])

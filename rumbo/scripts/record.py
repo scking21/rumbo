@@ -384,15 +384,21 @@ MONEY_EXCLUDED_UNIT = re.compile(
 WHOLE_MONTH = (r"(?:(?i:january|february|march|april|june|july|august|september|october|november|december|"
                r"jan|feb|mar|apr|jun|jul|aug|sept|sep|oct|nov|dec)\b\.?|May\b)")
 # A date stays on one line: a check's sources are its quotes joined by line
-# breaks, and "launch in May" then "20 for printing" is no May 20.
-DATE_TEXT = re.compile(r"\b" + WHOLE_MONTH + r"[^\S\n]*\d{1,2}(?:st|nd|rd|th)?\b"
-                       r"|\b\d{1,2}(?:st|nd|rd|th)?[^\S\n]+(?:of[^\S\n]+)?" + WHOLE_MONTH +
-                       r"|(?<!\d)\d{4}-\d{1,2}-\d{1,2}(?!\d)")
+# breaks, and "launch in May" then "20 for printing" is no May 20. Its day is 1 to
+# 31, so "Monthly costs: May 50, June 40" stays money; "May 20" reads as a date.
+DAY = r"(?:3[01]|[12]\d|0?[1-9])"
+DATE_TEXT = re.compile(r"\b" + WHOLE_MONTH + r"[^\S\n]*" + DAY + r"(?:st|nd|rd|th)?\b"
+                       r"|\b" + DAY + r"(?:st|nd|rd|th)?[^\S\n]+(?:of[^\S\n]+)?" + WHOLE_MONTH +
+                       r"|(?<!\d)\d{4}-(?:1[0-2]|0?[1-9])-" + DAY + r"(?!\d)")
+
+
+CURRENCY_WORD = re.compile(r"[^\S\n]*(?:dollars?|bucks|euros?|pounds?|quid|usd|eur|gbp|cad|aud)\b", re.IGNORECASE)
 
 
 def _blank_dates(text):
     """text with its dates blanked for the money reading, but never a piece of a
-    number or a price: "$20.50 May fee", "$ 20 May fee" and "May 20.50" keep theirs."""
+    number or a price: "$20.50 May fee", "$ 20 May fee", "May 20.50" and "June 25
+    euros" keep theirs."""
     def blank(match):
         start, end = match.span()
         before = start - 1
@@ -403,6 +409,8 @@ def _blank_dates(text):
         if before >= 0 and text[before] in "$€£":
             return match.group(0)
         if end + 1 < len(text) and text[end] in ".," and text[end + 1].isdecimal():
+            return match.group(0)
+        if CURRENCY_WORD.match(text, end):
             return match.group(0)
         return " "
     return DATE_TEXT.sub(blank, text)
