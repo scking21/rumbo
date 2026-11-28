@@ -3231,6 +3231,8 @@ def _stop_gate(args, hook_input):
             return _block_bounded(session_id, ledger_parts, CONFLICT_TAIL, chained=chained, marker=".ledger-")
         return 0
     labels = {check["id"]: check.get("label") or check["kind"] for check in record.get("checks") or []}
+    # The short repeat names an outcome by its text, as it names a check by its label.
+    labels.update({"OUTCOME %s" % row["id"]: row["text"] for row in record.get("outcomes") or []})
     return _block_bounded(session_id, ledger_parts + parts, CONFLICT_TAIL, remembered, chained,
                           shown=ledger_parts + shown, labels=labels)
 
@@ -3767,6 +3769,8 @@ def build_parser():
     handoff = subparsers.add_parser("handoff", help="emit outcome status and verify bound artifact hashes")
     add_record_option(handoff)
     handoff.add_argument("--root", required=True, help="explicit authorized project root")
+    handoff.add_argument("--reviewed-record-sha256",
+                         help="refuse the handoff if the record's bytes differ from this reviewed SHA-256")
 
     # show subcommand
     show = subparsers.add_parser("show", help="compact summary for hook injection")
