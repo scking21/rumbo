@@ -443,6 +443,31 @@ def _sourced_numbers(source_text, excluded_unit=None):
 
 
 NUMBER_COMMA = re.compile(r"(?<=\d),(?=\d)")
+# A currency code before a number marks money like a sign does: "USD 20", "EUR 2.5M".
+CURRENCY_CODE_BEFORE = re.compile(r"(?<![A-Za-z])(?:usd|eur|gbp|cad|aud)[^\S\n]*\Z", re.IGNORECASE)
+
+
+def _currency_before(text, start):
+    """(currency, pos) for the number at start: whether a currency sign or code comes
+    right before it, and the index of the character before that prefix and its spaces.
+
+    Walks only the adjacent prefix, not the complete quote: rescanning the full
+    prefix for every number makes long quotes quadratic.
+    """
+    pos = start - 1
+    while pos >= 0 and text[pos].isspace():
+        pos -= 1
+    code = None
+    if pos >= 0 and text[pos] in "$€£":
+        pos -= 1
+    else:
+        code = CURRENCY_CODE_BEFORE.search(text, max(0, start - 12), start)
+        if code is None:
+            return False, pos
+        pos = code.start() - 1
+    while pos >= 0 and text[pos].isspace():
+        pos -= 1
+    return True, pos
 
 
 def _read_numbers(source_text, excluded_unit=None):
@@ -456,18 +481,9 @@ def _read_numbers(source_text, excluded_unit=None):
     # rounding. Digits next to ":" belong to a time, so "9:45" does not source 45; an
     # exponent stays part of its number, so "1e3" sources 1000, not 1 or 3.
     for match in re.finditer(r"(?<![\d.:])(\d+(?:\.\d+)?(?:[eE][-+]?\d+)?)(?![\d:]|\.\d)", no_commas):
-        # Scan only adjacent whitespace/currency, preserving signs and currency
-        # scales without copying or rescanning the entire preceding quote.
-        pos = match.start() - 1
-        while pos >= 0 and no_commas[pos].isspace():
-            pos -= 1
-        currency = pos >= 0 and no_commas[pos] in "$€£"
-        if currency:
-            pos -= 1
-            while pos >= 0 and no_commas[pos].isspace():
-                pos -= 1
-        # A number written with a currency sign is money whatever follows it:
-        # "$150 hour", "$60 hr", "£500 pm" (a month).
+        currency, pos = _currency_before(no_commas, match.start())
+        # A number written with a currency sign or code is money whatever follows it:
+        # "$150 hour", "$60 hr", "£500 pm" (a month), "USD 150 hour".
         excluded = excluded_unit is not None and not (currency and excluded_unit is MONEY_EXCLUDED_UNIT)
         if excluded and excluded_unit.match(no_commas, match.end()):
             continue
@@ -511,17 +527,8 @@ def _read_numbers(source_text, excluded_unit=None):
     for start, end, value in _word_numbers(source_text):
         if value is None:
             continue
-        # Walk only the adjacent sign/currency prefix, not the complete quote:
-        # rescanning the full prefix for every word makes long quotes quadratic.
-        pos = start - 1
-        while pos >= 0 and source_text[pos].isspace():
-            pos -= 1
-        currency = pos >= 0 and source_text[pos] in "$€£"
-        if currency:
-            pos -= 1
-            while pos >= 0 and source_text[pos].isspace():
-                pos -= 1
-        # As with digits, a currency sign makes it money whatever follows: "£five hundred pm".
+        currency, pos = _currency_before(source_text, start)
+        # As with digits, a currency sign or code makes it money whatever follows: "£five hundred pm".
         if (excluded_unit is not None and not (currency and excluded_unit is MONEY_EXCLUDED_UNIT)
                 and (excluded_unit.match(source_text, end)
                      or excluded_unit is MONEY_EXCLUDED_UNIT and _clock_time(value, source_text, end))):

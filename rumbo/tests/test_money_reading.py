@@ -65,6 +65,9 @@ class MoneyReadingTests(unittest.TestCase):
                               ("Budget $600. The trainer is $150 hour, or $60 hr for the assistant.", [150, 60]),
                               ("Budget £600. Rent is £500 pm and the van €20 day.", [500, 20]),
                               ("Budget £600. Rent is £five hundred pm.", [500]),
+                              # A currency code marks money like a sign (Codex review on 0.3.26).
+                              ("Budget 600. A USD 20 May fee, and the trainer is EUR 150 hour.", [20, 150]),
+                              ("Budget 600. A $1e+3 May fee.", [1000]),
                               # A date is never blanked out of a price (Codex review on 0.3.26).
                               ("Budget $600. A $20.50 May fee, a $ 30 June fee.", [20.5, 30]),
                               ("Budget $600. Due May 20.50 total.", [20.5]),
@@ -143,6 +146,8 @@ class MoneyReadingTests(unittest.TestCase):
         self.assertEqual(stated("That is $650, over the $600 budget.", over, said), {"C1"})
         self.assertEqual(stated("That is $50 over the budget.", over, said), {"C1"})
         self.assertEqual(stated("The talk runs 50 minutes over the budget slot.", over, said), set())
+        self.assertEqual(stated("A USD 20 May fee (my estimate).", budget([20]), "Budget 600."), {"C1"})
+        self.assertEqual(unsourced(budget([2500000], total_cap=3000000), "Budget EUR 3M, and EUR 2.5M for the hall."), [])
         rent = budget([500])
         self.assertEqual(stated("Rent is £five hundred pm (my estimate).", rent, "Budget £600."), {"C1"})
 
