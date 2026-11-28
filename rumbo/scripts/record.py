@@ -501,15 +501,21 @@ ZERO_NOT_QUANTITY = {
 }
 
 
-def _count_stem(word):
+def _count_stems(word):
+    """The singulars a count noun can be, so "no cookies" meets "per cookie" and "no
+    parties" meets "per party". One guess per plural made "cooky", "classe" and "py"
+    of "cookies", "classes" and "pies", which then met no price per unit."""
     word = word.lower()
-    if word == "people":
-        return "person"
-    if word.endswith("ies") and len(word) > 3:
-        return word[:-3] + "y"
+    if word in ("people", "person"):
+        return {"person"}
+    stems = {word}
     if word.endswith("s") and not word.endswith("ss"):
-        return word[:-1]
-    return word
+        stems.add(word[:-1])
+        if word.endswith("ies") and len(word) > 3:
+            stems.add(word[:-3] + "y")
+        if word.endswith("es"):
+            stems.add(word[:-2])
+    return stems
 
 
 def _source_clauses(source_text):
@@ -531,7 +537,7 @@ def _zero_quantity_units(source_text):
         for match in ZERO_QUANTITY.finditer(clause):
             noun = match.group(2).lower()
             if noun not in ZERO_NOT_QUANTITY and _unnegated(match, clause):
-                units.add(_count_stem(noun))
+                units |= _count_stems(noun)
     return units
 
 
@@ -542,7 +548,7 @@ def _numeric_rate_units(value, source_text):
     for clause in _source_clauses(source_text):
         for match in NUMERIC_RATE.finditer(clause):
             if _unnegated(match, clause) and decimal.Decimal(match.group(1).replace(",", "")) == expected:
-                units.add(_count_stem(match.group(2)))
+                units |= _count_stems(match.group(2))
     return units
 
 
