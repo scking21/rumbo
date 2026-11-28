@@ -24,11 +24,11 @@ So two live sessions were blocked for telling the user just that:
 ## Evidence
 
 - `rumbo/tests/test_stated_problems.py` checks both live replies and other forms of the word. It checks a status line after the date was told in full, and that "your calculation", "calculator" and a reply with none of these words state nothing. Against 0.3.24, it fails.
-- **Replay.** `scripts/replay_stop_blocks.py --told` read the 80 Stop blocks with check problems saved from the eval runs since 0.3.12. It rebuilds 76 of them; the other 4 are repeats whose checks it cannot recover. 0.3.24 reads 43 of the 76 as stated, and 0.3.25 reads 46: the two blocks above and the haiku one's repeat. No block that 0.3.24 read as stated changed.
+- **Replay.** `scripts/replay_stop_blocks.py --told` read the 68 Stop blocks with check problems saved from the eval runs since November 24, counting once a run that was graded again in other folders. It rebuilds 64 of them; the other 4 are repeats whose checks it cannot recover. 0.3.24 reads 33 of the 64 as stated, and 0.3.25 reads 36: the two blocks above and the haiku one's repeat. No block that 0.3.24 read as stated changed. (These notes first gave 80, 76, 43 and 46, counting one sonnet run on 0.3.15 three times.)
 
 ## Left as it is
 
-The 27 other blocks that 0.3.25 does not read as stated, not counting repeats, were read by hand. In most of them, the reply does not name the values the block lists, or presents them as the user's. Five replies name them in ways the reader does not take:
+The 25 other blocks that 0.3.25 does not read as stated, not counting repeats, were read by hand. In most of them, the reply does not name the values the block lists, or presents them as the user's. Five replies name them in ways the reader does not take:
 
 - estimates summed in one table row ("Supplies + contingency | $120" for $70 and $50), in two blocks;
 - one value named in one reply and the other two in the next, so that no single reply names them all;

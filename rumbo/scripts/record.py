@@ -367,6 +367,60 @@ def _is_number_sourced(num, source_text, excluded_unit=None):
     return decimal.Decimal(str(num)) in _sourced_numbers(source_text, excluded_unit)
 
 
+# Money is not written as a length of time, an ordinal, a clock time or a date, so
+# none of those sources a budget's amount, price per unit or cap: "he can only do a
+# 60-minute session" does not source $60, nor "Today is August 20" $20 (in saved
+# live records, 6 of 254 budget checks had an estimate that looked sourced so). A
+# number with a currency sign stays money ("$150 hour"; see _read_numbers). A
+# quantity can be a length of time ("$150 an hour for 4 hours"): it reads as a number.
+# Like a date (see DAY_NUMBER), a unit stays on the number's line: a check's sources
+# are its quotes joined by line breaks, and "costs 20" then "Hours for setup" is no
+# 20 hours. It follows the number after spaces or one attached hyphen ("2-hour"), so
+# "costs 20 - hours" and "costs 20, hours" are not lengths of time either.
+MONEY_EXCLUDED_UNIT = re.compile(
+    r"(?:(?:-|[^\S\n]*)(?:minutes?|mins?|hours?|hrs?|h|seconds?|secs?|days?|weeks?|months?|years?|nights?)"
+    r"|st|nd|rd|th)\b", re.IGNORECASE)
+# "9am" or "9.30pm" is a clock time, not $9; a number no clock shows, as in "Rent
+# 500 pm" (a month), stays money.
+MERIDIEM_AFTER = re.compile(r"[^\S\n]*[ap]\.?[^\S\n]*m\b", re.IGNORECASE)
+
+
+def _clock_time(value, text, end):
+    """True when value, ending at end in text, reads as an hour with am or pm after it."""
+    return 0 < value < 13 and MERIDIEM_AFTER.match(text, end) is not None
+# Only whole month names and their usual abbreviations: MONTH_NAME takes any word
+# that starts like one, and "marketing 50" is money.
+WHOLE_MONTH = (r"(?:(?i:january|february|march|april|june|july|august|september|october|november|december|"
+               r"jan|feb|mar|apr|jun|jul|aug|sept|sep|oct|nov|dec)\b\.?|May\b)")
+# A day of a date is no money: a whole number from 1 to 31 with no currency sign,
+# scale or currency word, right after a month name ("August 20", "Mar. 12") or
+# right before one ("20 May", "the 20 of May") on the same line, or a part of a
+# YYYY-MM-DD date. The number reader decides it on each whole number it reads, so
+# "$20.50 May fee", "May 20.50", "May 2 thousand dollars", "June 25 euros" and
+# "Monthly costs: May 50" stay money, and "launch in May" ending one quote and "20
+# for printing" starting the next are no May 20.
+DAY_NUMBER = re.compile(r"(?:3[01]|[12]\d|0?[1-9])\Z")
+MONTH_BEFORE = re.compile(r"(?<![A-Za-z])" + WHOLE_MONTH + r"[^\S\n]*\Z")
+MONTH_AFTER = re.compile(r"(?:st|nd|rd|th)?[^\S\n]+(?:of[^\S\n]+)?" + WHOLE_MONTH)
+ISO_DATE = re.compile(r"(?<!\d)\d{4}-(?:1[0-2]|0?[1-9])-(?:3[01]|[12]\d|0?[1-9])(?!\d)")
+CURRENCY_WORD = re.compile(r"[^\S\n]*(?:dollars?|bucks|euros?|pounds?|quid|usd|eur|gbp|cad|aud)\b", re.IGNORECASE)
+
+
+def _day_of_date(text, match):
+    """True when the number match reads in text is a day of a date with a month name (see DAY_NUMBER)."""
+    start, end = match.span(1)
+    if not DAY_NUMBER.match(match.group(1)) or CURRENCY_WORD.match(text, end):
+        return False
+    return (MONTH_BEFORE.search(text, max(0, start - 16), start) is not None
+            or MONTH_AFTER.match(text, end) is not None)
+
+
+def _is_money_sourced(num, source_text):
+    """True when a budget's amount, price per unit or cap is sourced in source_text:
+    as a number, but not one that is a length of time, an ordinal, a clock time or part of a date."""
+    return _is_number_sourced(num, source_text, excluded_unit=MONEY_EXCLUDED_UNIT)
+
+
 # Which numbers a text states does not depend on the number looked for, so each
 # text is read once: a check reads the same quotes for every value it has, and a
 # hook reads them for every check. Reading a 12 KB quote took 25 ms per value.
@@ -386,36 +440,67 @@ def _sourced_numbers(source_text, excluded_unit=None):
     return found
 
 
+NUMBER_COMMA = re.compile(r"(?<=\d),(?=\d)")
+# A currency code before a number marks money like a sign does: "USD 20", "EUR 2.5M".
+CURRENCY_CODE_BEFORE = re.compile(r"(?<![A-Za-z])(?:usd|eur|gbp|cad|aud)[^\S\n]*\Z", re.IGNORECASE)
+
+
+def _currency_before(text, start):
+    """(currency, pos) for the number at start: whether a currency sign or code comes
+    right before it, and the index of the character before that prefix and its spaces.
+
+    Walks only the adjacent prefix, not the complete quote: rescanning the full
+    prefix for every number makes long quotes quadratic.
+    """
+    pos = start - 1
+    while pos >= 0 and text[pos].isspace():
+        pos -= 1
+    code = None
+    if pos >= 0 and text[pos] in "$€£":
+        pos -= 1
+    else:
+        code = CURRENCY_CODE_BEFORE.search(text, max(0, start - 12), start)
+        if code is None:
+            return False, pos
+        pos = code.start() - 1
+    while pos >= 0 and text[pos].isspace():
+        pos -= 1
+    return True, pos
+
+
 def _read_numbers(source_text, excluded_unit=None):
     """Yield, as a Decimal, each number that source_text states on its own."""
-    # Remove commas from source text for number matching
-    no_commas = source_text.replace(",", "")
+    # Remove the commas inside numbers ("1,200"), not those between words: in
+    # "Printing costs 20, hours for setup are flexible" 20 is no length of time.
+    no_commas = NUMBER_COMMA.sub("", source_text)
+    money = excluded_unit is MONEY_EXCLUDED_UNIT
+    # The ISO dates in order, and the first one that does not end before the number
+    # being read: numbers come in order too, so the whole text is walked once.
+    iso_spans = [found.span() for found in ISO_DATE.finditer(no_commas)] if money else []
+    iso_at = 0
     # Compare values, not text: sign kept, trailing zeros equal ("$1.50" is 1.5), no
     # rounding. Digits next to ":" belong to a time, so "9:45" does not source 45; an
     # exponent stays part of its number, so "1e3" sources 1000, not 1 or 3.
     for match in re.finditer(r"(?<![\d.:])(\d+(?:\.\d+)?(?:[eE][-+]?\d+)?)(?![\d:]|\.\d)", no_commas):
-        if excluded_unit is not None and excluded_unit.match(no_commas, match.end()):
+        currency, pos = _currency_before(no_commas, match.start())
+        # A number written with a currency sign or code is money whatever follows it:
+        # "$150 hour", "$60 hr", "£500 pm" (a month), "USD 150 hour".
+        excluded = excluded_unit is not None and not (currency and excluded_unit is MONEY_EXCLUDED_UNIT)
+        if excluded and excluded_unit.match(no_commas, match.end()):
             continue
         value = decimal.Decimal(match.group(1))
+        if excluded_unit is MONEY_EXCLUDED_UNIT and not currency and _clock_time(value, no_commas, match.end()):
+            continue
         if (_after_fraction_prefix(no_commas, match.start())
                 or AMOUNT_CONTINUED.match(no_commas, match.end())
                 or _after_decimal_word(no_commas, match.start())
                 or AFTER_SCALE.search(no_commas[max(0, match.start() - 16):match.start()])):
             continue
-        # Scan only adjacent whitespace/currency, preserving signs and currency
-        # scales without copying or rescanning the entire preceding quote.
-        pos = match.start() - 1
-        while pos >= 0 and no_commas[pos].isspace():
-            pos -= 1
-        currency = pos >= 0 and no_commas[pos] in "$€£"
-        if currency:
-            pos -= 1
-            while pos >= 0 and no_commas[pos].isspace():
-                pos -= 1
         # "$1.5k" is 1500 and "1.8 million" is 1800000, never 1.5 or 1.8. A bare "M"
         # scales only after a currency sign: "$2.5M" is money, "5m" is a length.
         scale = SCALE_SUFFIX.match(no_commas, match.end())
-        if scale and (scale.group(1) or scale.group(2) or currency):
+        scaled = bool(scale and (scale.group(1) or scale.group(2) or currency))
+        if scaled:
             word = (scale.group(1) or scale.group(2) or scale.group(3)).lower()
             try:
                 value *= {"k": 1000, "m": 10 ** 6, "bn": 10 ** 9}.get(word) or SCALE_WORDS[word]
@@ -427,7 +512,12 @@ def _read_numbers(source_text, excluded_unit=None):
             # 1000 or 1000000: check again after the scale.
             if AMOUNT_CONTINUED.match(no_commas, scale.end()) or SCALED_CONTINUED.match(no_commas, scale.end()):
                 continue
-            if excluded_unit is not None and excluded_unit.match(no_commas, scale.end()):
+            if excluded and excluded_unit.match(no_commas, scale.end()):
+                continue
+        if money and not currency and not scaled:
+            while iso_at < len(iso_spans) and iso_spans[iso_at][1] <= match.start():
+                iso_at += 1
+            if (iso_at < len(iso_spans) and iso_spans[iso_at][0] <= match.start()) or _day_of_date(no_commas, match):
                 continue
         # A minus not preceded by a digit negates; "30-50" stays a range.
         before_sign = pos - 1
@@ -439,7 +529,13 @@ def _read_numbers(source_text, excluded_unit=None):
         yield value
     # Spelled numbers: "twelve", "four hundred fifty dollars", "five thousand".
     for start, end, value in _word_numbers(source_text):
-        if value is None or excluded_unit is not None and excluded_unit.match(source_text, end):
+        if value is None:
+            continue
+        currency, pos = _currency_before(source_text, start)
+        # As with digits, a currency sign or code makes it money whatever follows: "£five hundred pm".
+        if (excluded_unit is not None and not (currency and excluded_unit is MONEY_EXCLUDED_UNIT)
+                and (excluded_unit.match(source_text, end)
+                     or excluded_unit is MONEY_EXCLUDED_UNIT and _clock_time(value, source_text, end))):
             continue
         ends_scaled = re.search(r"(?:hundred|thousand|million|billion)$", source_text[start:end], re.IGNORECASE)
         if (_after_fraction_prefix(source_text, start)
@@ -448,16 +544,6 @@ def _read_numbers(source_text, excluded_unit=None):
                 or AFTER_SCALE.search(source_text[max(0, start - 16):start])
                 or (ends_scaled and SCALED_CONTINUED.match(source_text, end))):
             continue
-        # Walk only the adjacent sign/currency prefix, not the complete quote:
-        # rescanning the full prefix for every word makes long quotes quadratic.
-        pos = start - 1
-        while pos >= 0 and source_text[pos].isspace():
-            pos -= 1
-        currency = pos >= 0 and source_text[pos] in "$€£"
-        if currency:
-            pos -= 1
-            while pos >= 0 and source_text[pos].isspace():
-                pos -= 1
         before_sign = pos - 1
         while before_sign >= 0 and source_text[before_sign].isspace():
             before_sign -= 1
@@ -732,7 +818,7 @@ def _stated_minutes(source_text):
 
 
 NON_MINUTE_TIME_UNIT = re.compile(
-    r"[\s-]*(?:hours?|hrs?|h|seconds?|secs?|days?|weeks?|months?|years?|nights?)\b", re.IGNORECASE)
+    r"(?:-|[^\S\n]*)(?:hours?|hrs?|h|seconds?|secs?|days?|weeks?|months?|years?|nights?)\b", re.IGNORECASE)
 
 
 def _is_minutes_sourced(minutes, source_text):
@@ -997,20 +1083,22 @@ def _unsourced(record, check, source=None):
         # amounts N for each amount
         for amt in check["amounts"]:
             if isinstance(amt, dict):
-                # The script multiplies; the user must have said both factors.
-                for key in ("unit", "quantity"):
-                    if not _is_number_sourced(amt[key], source):
-                        unsourced.append((f"amounts {key} {fmt_num(amt[key])}", "number", amt[key]))
-            elif not _is_number_sourced(amt, source):
-                unsourced.append((f"amounts {fmt_num(amt)}", "number", amt))
+                # The script multiplies; the user must have said both factors. A
+                # price per unit is money; a quantity can be hours or days.
+                if not _is_money_sourced(amt["unit"], source):
+                    unsourced.append((f"amounts unit {fmt_num(amt['unit'])}", "money", amt["unit"]))
+                if not _is_number_sourced(amt["quantity"], source):
+                    unsourced.append((f"amounts quantity {fmt_num(amt['quantity'])}", "number", amt["quantity"]))
+            elif not _is_money_sourced(amt, source):
+                unsourced.append((f"amounts {fmt_num(amt)}", "money", amt))
         # total_cap N
         cap = check["total_cap"]
-        if not _is_number_sourced(cap, source):
-            unsourced.append((f"total_cap {fmt_num(cap)}", "number", cap))
+        if not _is_money_sourced(cap, source):
+            unsourced.append((f"total_cap {fmt_num(cap)}", "money", cap))
         # item_cap N if present
         item_cap = check.get("item_cap")
-        if item_cap is not None and not _is_number_sourced(item_cap, source):
-            unsourced.append((f"item_cap {fmt_num(item_cap)}", "number", item_cap))
+        if item_cap is not None and not _is_money_sourced(item_cap, source):
+            unsourced.append((f"item_cap {fmt_num(item_cap)}", "money", item_cap))
 
     return unsourced
 
@@ -2878,6 +2966,8 @@ def _says(reading, value, line):
         return _minutes_phrase(value, line)
     if reading == "number":
         return EXPLICIT_ZERO.search(line) is not None if value == 0 else _is_number_sourced(value, line)
+    if reading == "money":
+        return EXPLICIT_ZERO.search(line) is not None if value == 0 else _is_money_sourced(value, line)
     if reading == "order":
         return ORDER_WORDS.search(line) is not None
     if reading == "over":
@@ -2916,12 +3006,12 @@ def _conflict_ways(check):
     amounts, _labels, total, cap, item_cap, excess = _budget(check)
     ways = []
     if total > cap:
-        ways.append([[("number", total), ("number", cap)], [("number", excess), ("over", None)]])
+        ways.append([[("money", total), ("money", cap)], [("money", excess), ("over", None)]])
     if item_cap is not None:
         for amount in amounts:
             if amount > item_cap:
-                ways.append([[("number", amount), ("number", item_cap)],
-                             [("number", amount), ("number", amount - item_cap), ("over", None)]])
+                ways.append([[("money", amount), ("money", item_cap)],
+                             [("money", amount), ("money", amount - item_cap), ("over", None)]])
     return ways
 
 
@@ -2985,7 +3075,7 @@ def _stated(record, reply, told=None):
                    for index in range(len(lines)))
 
     def named_value(reading, value, totals):
-        return named(reading, value) or any(named("number", total) for total in totals)
+        return named(reading, value) or any(named("money", total) for total in totals)
 
     in_full, stated = {}, set()
     replaced = retired_checks(record)

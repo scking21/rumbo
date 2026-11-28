@@ -92,8 +92,15 @@ def holds(transcript):
 
 def main(argv=None):
     folders = sys.argv[1:] if argv is None else argv
+    if folders in (["-h"], ["--help"]):
+        print(__doc__.split("\n\n")[1])
+        return 0
     if not folders:
         print(__doc__.split("\n\n")[1], file=sys.stderr)
+        return 2
+    missing = [folder for folder in folders if not os.path.isdir(folder)]
+    if missing:
+        print("hold_outcomes.py: not a folder: %s" % ", ".join(missing), file=sys.stderr)
         return 2
     for folder in folders:
         counts = collections.Counter()
