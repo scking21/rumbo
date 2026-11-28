@@ -78,3 +78,20 @@ test('board global and thread entrypoints accept empty arguments and safely sele
  await storage.createProject('owner','example',await contract());board=await rpc(env,'open_project_board',{});assert.equal(board.body.result.structuredContent.project_id,'example');
  const c=await contract();c.project_id='second';await storage.createProject('owner','second',c);board=await rpc(env,'open_project_board',{});assert.equal(board.body.result.structuredContent.projects.length,2);assert.equal(board.body.result.structuredContent.project_selection_required,true);
 });
+
+test('export returns the ownership error as a browser response for a shared project', async () => {
+ const {env,storage,db} = fixture();
+ try {
+  const data = {...await contract(), decision_owner:await subjectActor('colleague')};
+  const project = await storage.createProject('colleague', data.project_id, data);
+  await storage.setMember('colleague', project.project_key, 'owner', 'viewer');
+  const headers = await browser(env);
+  const response = await worker.fetch(request('/owner/api/export', {project_key:project.project_key}, headers), env);
+  assert.equal(response.status, 403);
+  const error = await response.json();
+  assert.equal(error.code, 'FORBIDDEN');
+  assert.match(error.error, /project owner/i);
+ } finally {
+  db.close();
+ }
+});

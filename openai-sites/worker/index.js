@@ -44,7 +44,7 @@ export default {async fetch(request,env){
   if(path.startsWith('/owner/api/')&&request.method==='POST'){
    await requireBrowserSession(request,storage,subject);const args=await bodyJSON(request);
    if(path==='/owner/api/create'){fields(args,['contract']);return response(await storage.createProject(subject,args.contract.project_id,args.contract));}
-   if(path==='/owner/api/export'){fields(args,['project_key']);return exportProject(storage,subject,args.project_key);}
+   if(path==='/owner/api/export'){fields(args,['project_key']);return await exportProject(storage,subject,args.project_key);}
    if(path==='/owner/api/delete'){fields(args,['project_key','confirmation']);return response(await storage.deleteProject(subject,args.project_key,args.confirmation));}
    if(path==='/owner/api/member'){fields(args,['project_key','subject','role']);return response(await storage.setMember(subject,args.project_key,args.subject,args.role));}
    if(path==='/owner/api/revise'||path==='/owner/api/decide'){

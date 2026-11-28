@@ -691,7 +691,7 @@ def _stated_minutes(source_text):
     followed by "and a half" or "and a quarter" never state the whole hours alone.
     """
     flags = re.IGNORECASE
-    num = r"(\d+(?:\.\d+)?|%s|an?)" % NUMBER_WORD
+    num = r"(\d+(?:\.\d+)?|%s|an?(?![\s-]*(?:hours|hrs)\b))" % NUMBER_WORD
     lead = r"(?<![\w.:,\u2212-])"
     text = source_text
 
@@ -814,13 +814,18 @@ def _stated_minutes(source_text):
         return re.search(r"(?:[A-Za-z]-|(?:\d|\b(?:%s|hundred|thousand))[\s-]+and[\s-]+(?:an?[\s-]+)?)$"
                          % NUMBER_WORD, text[max(0, start - 40):start], flags) is not None
 
+    word_sign = re.compile(r"\b(?:minus|negative)\Z", flags)
+
     def is_signed_duration(start):
-        # All duration forms reject an adjacent minus even through whitespace.
-        # Inspect only adjacent whitespace, not the entire quote prefix.
+        # Signs qualify only their adjacent duration. Keep words from separate
+        # quoted lines independent.
         pos = start - 1
         while pos >= 0 and text[pos].isspace():
             pos -= 1
-        return pos >= 0 and text[pos] in "-−"
+        if pos >= 0 and text[pos] in "-−":
+            return True
+        return (pos < start - 1 and "\n" not in text[pos + 1:start]
+                and word_sign.search(text, max(0, pos - 8), pos + 1) is not None)
 
     # Hours, optionally followed by minutes: "2 hours", "an hour 15 minutes", "2h30".
     for m in re.finditer(lead + num + r"[\s-]*" + HOUR_UNIT

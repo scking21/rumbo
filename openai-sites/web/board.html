@@ -254,8 +254,11 @@ function receipt(record, task, assertion) {
   return card;
 }
 function handoff(task) {
+  const key = state.hosted_project_key;
+  const projectKeyLine = typeof key === 'string' && /^[a-f0-9]{64}$/.test(key) ? ['Hosted project key: ' + key] : [];
   const lines = [state.demo ? 'Rumbo DEMO handoff' : 'Rumbo handoff', 'Goal: ' + text(state.goal),
-    'Project: ' + text(state.project_id), 'Contract: r' + text(state.contract_revision),
+    'Project: ' + text(state.project_id),
+    ...projectKeyLine, 'Contract: r' + text(state.contract_revision),
     'Snapshot: ' + (snapshotCurrent ? 'last successful refresh' : 'LAST KNOWN; latest refresh failed. Refresh before relying on status.'),
     'Task: ' + text(task.id) + ' — ' + text(task.title), 'State: ' + (labels[task.status] || text(task.status)),
     'Decision owner: ' + text(state.decision_owner), 'Artifact: ' + (task.artifact ? text(task.artifact.path) + ' (r' + text(task.artifact.revision) + ', SHA256 ' + text(task.artifact.sha256) + ')' : 'None'),

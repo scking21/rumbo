@@ -34,6 +34,8 @@ Use Node 24 and Python 3.12. Run `npm ci`, `npm test`, `npm run validate`, `npm 
 
 The canonical Python and independently versioned Claude adapter suites remain required alongside the Sites suite. The separate `verify-sites.yml` workflow tests this adapter. A passing DOM test is not visual browser QA. A saved/deployed private Site is not a verified OAuth connection or a public-directory submission.
 
+The offline export verifier accepts an optional caller-supplied head from an independently saved receipt: set `expected_head` to that full lowercase digest, then run `python3 scripts/verify-export.py --expect-head "$expected_head" < export.ndjson`. It first verifies the export bytes and ledger chain, then compares that computed `ledger_head` with the supplied value. A match proves equality only; it does not establish project identity, recency, ownership or external witnessing. Without `--expect-head`, the verifier keeps its ordinary integrity-only JSON output.
+
 After dependencies are already installed, use explicit process-only offline settings for local test/build validation. These disable npm's optional registry update check as well as package fetching, and retain the synthetic runtime's disabled CF metadata bootstrap:
 
 ```sh

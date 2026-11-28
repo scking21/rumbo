@@ -69,3 +69,33 @@ for(const [path,url] of boards){
  });
 
 }
+
+const hostedSource = fs.readFileSync(boards[0][1], 'utf8');
+for (const [label, key] of [
+  ['current hosted snapshot', 'a0'.repeat(32)],
+  ['legacy snapshot', undefined],
+  ['malformed key', 'unusable'],
+]) {
+  test('copied hosted handoff identifies its project when possible: ' + label, async () => {
+    const {dom, d, pending, setState} = await fixture(hostedSource);
+    try {
+      const next = snapshot();
+      next.hosted_project_key = key;
+      setState(next);
+      d.getElementById('refresh').click();
+      await tick();
+      d.querySelector('#task-detail button').click();
+      const summary = pending[0].summary;
+      const projectLines = summary.split('\n').filter(line => line.startsWith('Hosted project key:'));
+      assert.deepEqual(projectLines, label === 'current hosted snapshot' ? ['Hosted project key: ' + key] : []);
+      assert.ok(summary.includes('Project: copy-fixture\n'));
+      assert.ok(summary.includes('Task: one — Task one\n'));
+      pending[0].reject(new Error('Clipboard unavailable'));
+      await tick();
+      assert.equal(d.getElementById('handoff-text').value, summary);
+      assert.equal(d.getElementById('handoff-text').hidden, false);
+    } finally {
+      dom.window.close();
+    }
+  });
+}

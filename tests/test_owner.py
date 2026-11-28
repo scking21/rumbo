@@ -1,5 +1,6 @@
 """Owner-portal HTTP tests: OAuth endpoints are explicit synthetic transports."""
 import base64
+import copy
 import hashlib
 import http.client
 from http.cookies import SimpleCookie
@@ -438,6 +439,88 @@ class OwnerPortalTests(unittest.TestCase):
         self.assertNotIn('secret-provider-response', response[2])
         self.exchange_error = None
         self.assertEqual(self.request('GET', path, cookie=cookie)[0], 403)
+
+
+class OwnerPreviewBoundaryTests(unittest.TestCase):
+    def test_preview_link_uses_recorded_size_without_disabling_decision(self):
+        from rumbo.core import MAX_INGEST
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            owner = Engine(root, 'owner', 'human')
+            maker = Engine(root, 'maker', 'worker')
+            owner.execute('create_contract', contract())
+            current = dict(task_id='export', contract_revision=1)
+            maker.execute('claim_task', dict(current, lease_seconds=60))
+            for size in (MAX_INGEST, MAX_INGEST + 1):
+                with self.subTest(size=size):
+                    (root / 'export.csv').write_bytes(b'x' * size)
+                    maker.execute('submit_artifact', dict(current, path='export.csv'))
+                    snapshot = owner.snapshot()
+                    html = OwnerPortal({})._render(snapshot, dict(actor='owner', csrf='fixture'))
+                    self.assertIn('value="decide"', html)
+                    self.assertIn(snapshot['tasks'][0]['artifact']['sha256'], html)
+                    self.assertEqual('href="/owner/artifact?' in html, size <= MAX_INGEST)
+                    if size > MAX_INGEST:
+                        self.assertIn('128 KiB', html)
+                        self.assertIn('SHA-256', html)
+
+            for unknown in ('missing', None, 'unknown'):
+                with self.subTest(unverified_size=unknown):
+                    artifact = snapshot['tasks'][0]['artifact']
+                    if unknown == 'missing':
+                        del artifact['size']
+                    else:
+                        artifact['size'] = unknown
+                    html = OwnerPortal({})._render(snapshot, dict(actor='owner', csrf='fixture'))
+                    self.assertIn('href="/owner/artifact?', html)
+                    self.assertIn('value="decide"', html)
+
+
+    def test_review_actions_follow_the_registered_artifacts_agreement(self):
+        for mode in ('task', 'contract', 'switch_to_task'):
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                owner = Engine(root, 'owner', 'human')
+                maker = Engine(root, 'maker', 'worker')
+                agreement = contract()
+                agreement['tasks'].append(dict(agreement['tasks'][0], id='notes', title='Notes'))
+                if mode == 'task':
+                    agreement['revision_scope'] = 'task'
+                owner.execute('create_contract', agreement)
+                current = dict(task_id='export', contract_revision=1)
+                (root / 'export.csv').write_text('name,amount')
+                maker.execute('claim_task', dict(current, lease_seconds=300))
+                maker.execute('submit_artifact', dict(current, path='export.csv'))
+                maker.execute('run_checks', dict(current, artifact_revision=1))
+                owner.execute('decide', dict(current, artifact_revision=1, outcome='accepted', reason='Header verified'))
+
+                def check_page(snapshot, reviewable):
+                    html = OwnerPortal({})._render(snapshot, dict(actor='owner', csrf='fixture'))
+                    self.assertIn(snapshot['tasks'][0]['artifact']['sha256'], html)
+                    self.assertIn('Header verified', html)
+                    self.assertEqual('href="/owner/artifact?' in html, reviewable)
+                    self.assertEqual('value="decide"' in html, reviewable)
+                    if not reviewable:
+                        self.assertIn('register an artifact under the current agreement', html)
+
+                check_page(owner.snapshot(), True)
+                sibling = copy.deepcopy(agreement)
+                sibling['tasks'][1]['title'] = 'Summary notes'
+                if mode == 'switch_to_task':
+                    sibling['revision_scope'] = 'task'
+                snapshot = owner.execute('revise_contract', dict(contract=sibling, expected_revision=1, reason='Revise notes'))
+                check_page(snapshot, mode == 'task')
+                updated = copy.deepcopy(sibling)
+                updated['tasks'][0]['acceptance'][0]['value'] = 'name,unit,total'
+                snapshot = owner.execute('revise_contract', dict(contract=updated, expected_revision=2, reason='Revise header'))
+                check_page(snapshot, False)
+                snapshot = owner.execute('revise_contract', dict(contract=sibling, expected_revision=3, reason='Restore original header'))
+                check_page(snapshot, mode == 'task')
+
+                current['contract_revision'] = 4
+                maker.execute('claim_task', dict(current, lease_seconds=300))
+                snapshot = maker.execute('submit_artifact', dict(current, path='export.csv'))
+                check_page(snapshot, True)
 
 
 class OwnerUnavailableTests(unittest.TestCase):

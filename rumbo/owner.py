@@ -18,7 +18,7 @@ import threading
 import time
 from urllib.parse import parse_qsl, urlencode, urlsplit
 
-from .core import Engine, RumboError
+from .core import MAX_INGEST, Engine, RumboError, binder
 from .protocol import safe_json
 
 SESSION_COOKIE = '__Host-rumbo-owner'
@@ -458,9 +458,20 @@ class OwnerPortal:
         content += '<section><h2>Original request</h2><pre>' + escape(state['original_request']) + '</pre><h2>Agreed goal</h2><p>' + escape(state['goal']) + '</p><p>Contract revision ' + str(state['contract_revision']) + '</p><h2>Constraints</h2><pre>' + self._json(state['constraints']) + '</pre></section>'
         for task in state['tasks']:
             content += '<section><h2>' + escape(task['title']) + '</h2><p>Task ' + escape(task['id']) + ' · ' + escape(task['status']) + '</p><p>' + escape(task['stale_reason']) + '</p><h3>Acceptance criteria</h3><pre>' + self._json(task['acceptance']) + '</pre><h3>Recorded artifact</h3><pre>' + self._json(task['artifact']) + '</pre><h3>Evidence and reviewer assertions</h3><pre>' + self._json(task['evidence']) + '</pre><h3>Prior owner decisions</h3><pre>' + self._json(task['decisions']) + '</pre>'
-            if task['artifact']:
-                preview = '/owner/artifact?' + urlencode(dict(task_id=task['id'], contract_revision=state['contract_revision'], artifact_revision=task['artifact']['revision']))
-                content += '<p><a href="' + escape(preview) + '">Inspect these exact artifact bytes</a></p>'
+            artifact = task['artifact']
+            if artifact and not binder(task, state)(artifact):
+                content += ('<p>The recorded artifact belongs to an earlier agreement. '
+                            'Have the worker register an artifact under the current agreement '
+                            'and obtain fresh evidence before requesting acceptance.</p>')
+            elif artifact:
+                size = task['artifact'].get('size')
+                if type(size) is int and size > MAX_INGEST:
+                    content += (f'<p>This artifact exceeds the {MAX_INGEST // 1024} KiB inline preview limit. '
+                                'If you already have access to the file, inspect it and compare its SHA-256 with the recorded digest above. '
+                                'Otherwise, ask for review access to those bytes.</p>')
+                else:
+                    preview = '/owner/artifact?' + urlencode(dict(task_id=task['id'], contract_revision=state['contract_revision'], artifact_revision=task['artifact']['revision']))
+                    content += '<p><a href="' + escape(preview) + '">Inspect these exact artifact bytes</a></p>'
                 args = dict(task_id=task['id'], contract_revision=state['contract_revision'], artifact_revision=task['artifact']['revision'], outcome='rejected', reason='', expected_review_basis=Engine.review_basis(task, state))
                 content += self._action_form('decide', args, csrf, 'Record a decision', 'Inspect the original goal, criteria and evidence above. Set outcome to accepted or rejected and give an explicit nonempty reason. The decision applies only to these exact contract and artifact revisions. Keep the review basis from this form. If it changes, reopen the task before deciding. Acceptance requires every current criterion to pass.')
             content += '</section>'
