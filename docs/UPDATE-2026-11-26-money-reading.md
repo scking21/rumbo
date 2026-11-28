@@ -28,6 +28,21 @@ Each passed as sourced, so no hook asked the agent to tell the user it was its o
 - **Saved records.** Across the 438 live checks in the 191 saved final records, exactly the six values above change, all from sourced to unsourced. No other value changes, and no check's pass or fail changes.
 - **Replay.** `scripts/replay_stop_blocks.py --told` rebuilds 64 of the saved Stop blocks. 0.3.26 reads 35 of them as stated, one fewer than 0.3.25. That block is in a sonnet session on 0.3.15: the reply's only mention of an assumed $5 a head was "the close would shrink to 5 minutes".
 
+## Live
+
+After the release, sonnet, haiku and opus each ran `01-workshop-full` and `02-launch-full` three times, graded by the same sonnet judge as before. The first three sonnet workshop sessions ran on an early commit of the release (6177c3c), and the other fifteen on the release itself. The 5-hour usage limit cut two batches short, so `--rerun` ran the cut sessions again and `--regrade --errors-only` gave the two missing verdicts.
+
+| Model | Gradings passed, 0.3.26 | Same cases on 0.3.21 | Stop blocks per session, 0.3.26 | On 0.3.21 |
+| --- | --- | --- | --- | --- |
+| sonnet | 36 of 36 | 36 of 36 | 0.2 | 0.2 |
+| haiku | 33 of 36 | 70 of 78 | 1.2 | 1.8 |
+| opus | 35 of 36 | 24 of 24 | 1.5 | 1.3 |
+
+- **The money reading changed nothing here.** In these sessions' final records, 0.3.25's reader and 0.3.26's read every value the same way.
+- **The misses are the usual ones.** Haiku missed the accessibility note once, ads first once and the committed total once. Opus missed ads first once.
+- **Opus's extra blocks** asked about its own event estimates and its worked-out insurance dates. One was a real conflict: the presenter confirms on September 19, after the September 12 newsletter copy deadline.
+- **"My calculation" now appears in live replies.** Haiku wrote "40 minutes, my calculation" for an arrival block. Its record held 45 minutes, so the Stop gate was right to block until reply and record matched.
+
 ## Corrections
 
 The [0.3.25 notes](UPDATE-2026-11-26-calculation.md) counted one sonnet run on 0.3.15 three times, because two other folders hold copies of it that were graded again. Their replay counts are now 68 blocks, 64 rebuilt and 33 and 36 read as stated, where they first said 80, 76, 43 and 46. They now say 25 blocks were left unstated, not 27. The change they measured, three more blocks read as stated, is the same.
