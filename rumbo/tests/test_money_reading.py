@@ -39,6 +39,14 @@ class MoneyReadingTests(unittest.TestCase):
                 number = int("".join(ch for ch in words if ch.isdigit()))
                 self.assertEqual(unsourced(budget([number]), "Budget $600, " + words + "."), ["amounts %d" % number])
         self.assertEqual(unsourced(budget([60]), said + " The room is $60."), [])
+        # A unit follows its number after spaces or one attached hyphen, not a comma
+        # or a spaced dash (Codex review on 0.3.26).
+        for words in ("Printing costs 20, hours for setup are flexible.",
+                      "Printing costs 20 - hours for setup are flexible."):
+            with self.subTest(words=words):
+                self.assertEqual(unsourced(budget([20]), "Budget 600. " + words), [])
+        self.assertEqual(unsourced(budget([20]), "Budget 600. A 20-hour setup."), ["amounts 20"])
+        self.assertEqual(unsourced(budget([1000000], total_cap=1200), "Budget $1,200, catering 1,000,000."), [])
 
     def test_a_date_an_ordinal_or_a_clock_time_does_not_source_an_amount(self):
         for words, amount in (("Today is August 20", 20), ("by the 20th", 20), ("on 2026-03-20", 20),
@@ -108,6 +116,8 @@ class MoneyReadingTests(unittest.TestCase):
         document = {"version": 1, "objective": {"text": "Plan", "quote": "Doors at 9:00, close 9:20, a break of 20"},
                     "items": [{"id": "I1", "text": "t", "quote": "Hours are flexible.", "status": "commitment"}],
                     "checks": [window]}
+        self.assertEqual(record.unsourced_values(document, window), [])
+        document["objective"]["quote"] = "Doors at 9:00, close 9:20, a break of 20, hours are flexible."
         self.assertEqual(record.unsourced_values(document, window), [])
 
     def test_a_cap_and_a_price_per_unit_are_money_but_a_quantity_can_be_hours(self):

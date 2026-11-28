@@ -375,9 +375,10 @@ def _is_number_sourced(num, source_text, excluded_unit=None):
 # quantity can be a length of time ("$150 an hour for 4 hours"): it reads as a number.
 # Like a date (see DATE_TEXT), a unit stays on the number's line: a check's sources
 # are its quotes joined by line breaks, and "costs 20" then "Hours for setup" is no
-# 20 hours.
+# 20 hours. It follows the number after spaces or one attached hyphen ("2-hour"), so
+# "costs 20 - hours" and "costs 20, hours" are not lengths of time either.
 MONEY_EXCLUDED_UNIT = re.compile(
-    r"(?:(?:[^\S\n]|-)*(?:minutes?|mins?|hours?|hrs?|h|seconds?|secs?|days?|weeks?|months?|years?|nights?)"
+    r"(?:(?:-|[^\S\n]*)(?:minutes?|mins?|hours?|hrs?|h|seconds?|secs?|days?|weeks?|months?|years?|nights?)"
     r"|st|nd|rd|th)\b", re.IGNORECASE)
 # "9am" or "9.30pm" is a clock time, not $9; a number no clock shows, as in "Rent
 # 500 pm" (a month), stays money.
@@ -451,10 +452,14 @@ def _sourced_numbers(source_text, excluded_unit=None):
     return found
 
 
+NUMBER_COMMA = re.compile(r"(?<=\d),(?=\d)")
+
+
 def _read_numbers(source_text, excluded_unit=None):
     """Yield, as a Decimal, each number that source_text states on its own."""
-    # Remove commas from source text for number matching
-    no_commas = source_text.replace(",", "")
+    # Remove the commas inside numbers ("1,200"), not those between words: in
+    # "Printing costs 20, hours for setup are flexible" 20 is no length of time.
+    no_commas = NUMBER_COMMA.sub("", source_text)
     # Compare values, not text: sign kept, trailing zeros equal ("$1.50" is 1.5), no
     # rounding. Digits next to ":" belong to a time, so "9:45" does not source 45; an
     # exponent stays part of its number, so "1e3" sources 1000, not 1 or 3.
@@ -807,7 +812,7 @@ def _stated_minutes(source_text):
 
 
 NON_MINUTE_TIME_UNIT = re.compile(
-    r"(?:[^\S\n]|-)*(?:hours?|hrs?|h|seconds?|secs?|days?|weeks?|months?|years?|nights?)\b", re.IGNORECASE)
+    r"(?:-|[^\S\n]*)(?:hours?|hrs?|h|seconds?|secs?|days?|weeks?|months?|years?|nights?)\b", re.IGNORECASE)
 
 
 def _is_minutes_sourced(minutes, source_text):
