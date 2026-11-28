@@ -7,6 +7,7 @@ $20 (two checks).
 """
 import importlib.util
 from pathlib import Path
+import time
 import unittest
 
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "record.py"
@@ -150,6 +151,19 @@ class MoneyReadingTests(unittest.TestCase):
         self.assertEqual(unsourced(budget([2500000], total_cap=3000000), "Budget EUR 3M, and EUR 2.5M for the hall."), [])
         rent = budget([500])
         self.assertEqual(stated("Rent is £five hundred pm (my estimate).", rent, "Budget £600."), {"C1"})
+
+
+class MoneyReadingSpeedTests(unittest.TestCase):
+    def test_a_long_quote_of_iso_dates_is_read_in_linear_time(self):
+        # Codex review on 0.3.26: checking each number against every ISO date was
+        # quadratic, and 12,000 dated lines (384 KB) took 11 to 15 seconds, past the
+        # hooks' 10 second timeout.
+        quote = "Budget 600. " + "2026-03-20: event; printing 40. " * 12000
+        record._SOURCED_NUMBERS.clear()
+        started = time.perf_counter()
+        self.assertEqual(unsourced(budget([40, 55]), quote), ["amounts 55"])
+        self.assertLess(time.perf_counter() - started, 3)
+        self.assertEqual(unsourced(budget([20]), "Budget 600. " + "2026-03-20: event. " * 3), ["amounts 20"])
 
 
 if __name__ == "__main__":

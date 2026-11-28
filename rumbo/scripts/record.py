@@ -406,11 +406,9 @@ ISO_DATE = re.compile(r"(?<!\d)\d{4}-(?:1[0-2]|0?[1-9])-(?:3[01]|[12]\d|0?[1-9])
 CURRENCY_WORD = re.compile(r"[^\S\n]*(?:dollars?|bucks|euros?|pounds?|quid|usd|eur|gbp|cad|aud)\b", re.IGNORECASE)
 
 
-def _day_of_date(text, match, iso_spans):
-    """True when the number match reads in text is a day of a date or a part of an ISO date (see DAY_NUMBER)."""
+def _day_of_date(text, match):
+    """True when the number match reads in text is a day of a date with a month name (see DAY_NUMBER)."""
     start, end = match.span(1)
-    if any(first <= start < last for first, last in iso_spans):
-        return True
     if not DAY_NUMBER.match(match.group(1)) or CURRENCY_WORD.match(text, end):
         return False
     return (MONTH_BEFORE.search(text, max(0, start - 16), start) is not None
@@ -476,7 +474,10 @@ def _read_numbers(source_text, excluded_unit=None):
     # "Printing costs 20, hours for setup are flexible" 20 is no length of time.
     no_commas = NUMBER_COMMA.sub("", source_text)
     money = excluded_unit is MONEY_EXCLUDED_UNIT
+    # The ISO dates in order, and the first one that does not end before the number
+    # being read: numbers come in order too, so the whole text is walked once.
     iso_spans = [found.span() for found in ISO_DATE.finditer(no_commas)] if money else []
+    iso_at = 0
     # Compare values, not text: sign kept, trailing zeros equal ("$1.50" is 1.5), no
     # rounding. Digits next to ":" belong to a time, so "9:45" does not source 45; an
     # exponent stays part of its number, so "1e3" sources 1000, not 1 or 3.
@@ -513,8 +514,11 @@ def _read_numbers(source_text, excluded_unit=None):
                 continue
             if excluded and excluded_unit.match(no_commas, scale.end()):
                 continue
-        if money and not currency and not scaled and _day_of_date(no_commas, match, iso_spans):
-            continue
+        if money and not currency and not scaled:
+            while iso_at < len(iso_spans) and iso_spans[iso_at][1] <= match.start():
+                iso_at += 1
+            if (iso_at < len(iso_spans) and iso_spans[iso_at][0] <= match.start()) or _day_of_date(no_commas, match):
+                continue
         # A minus not preceded by a digit negates; "30-50" stays a range.
         before_sign = pos - 1
         while before_sign >= 0 and no_commas[before_sign].isspace():
