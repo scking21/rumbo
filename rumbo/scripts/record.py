@@ -378,7 +378,15 @@ def _is_number_sourced(num, source_text, excluded_unit=None):
 # 20 hours.
 MONEY_EXCLUDED_UNIT = re.compile(
     r"(?:(?:[^\S\n]|-)*(?:minutes?|mins?|hours?|hrs?|h|seconds?|secs?|days?|weeks?|months?|years?|nights?)"
-    r"|st|nd|rd|th|[^\S\n]*[ap]\.?[^\S\n]*m)\b", re.IGNORECASE)
+    r"|st|nd|rd|th)\b", re.IGNORECASE)
+# "9am" or "9.30pm" is a clock time, not $9; a number no clock shows, as in "Rent
+# 500 pm" (a month), stays money.
+MERIDIEM_AFTER = re.compile(r"[^\S\n]*[ap]\.?[^\S\n]*m\b", re.IGNORECASE)
+
+
+def _clock_time(value, text, end):
+    """True when value, ending at end in text, reads as an hour with am or pm after it."""
+    return 0 < value < 13 and MERIDIEM_AFTER.match(text, end) is not None
 # Only whole month names and their usual abbreviations: MONTH_NAME takes any word
 # that starts like one, and "marketing 50" is money.
 WHOLE_MONTH = (r"(?:(?i:january|february|march|april|june|july|august|september|october|november|december|"
@@ -467,6 +475,8 @@ def _read_numbers(source_text, excluded_unit=None):
         if excluded and excluded_unit.match(no_commas, match.end()):
             continue
         value = decimal.Decimal(match.group(1))
+        if excluded_unit is MONEY_EXCLUDED_UNIT and not currency and _clock_time(value, no_commas, match.end()):
+            continue
         if (_after_fraction_prefix(no_commas, match.start())
                 or AMOUNT_CONTINUED.match(no_commas, match.end())
                 or _after_decimal_word(no_commas, match.start())
@@ -513,7 +523,8 @@ def _read_numbers(source_text, excluded_unit=None):
                 pos -= 1
         # As with digits, a currency sign makes it money whatever follows: "£five hundred pm".
         if (excluded_unit is not None and not (currency and excluded_unit is MONEY_EXCLUDED_UNIT)
-                and excluded_unit.match(source_text, end)):
+                and (excluded_unit.match(source_text, end)
+                     or excluded_unit is MONEY_EXCLUDED_UNIT and _clock_time(value, source_text, end))):
             continue
         ends_scaled = re.search(r"(?:hundred|thousand|million|billion)$", source_text[start:end], re.IGNORECASE)
         if (_after_fraction_prefix(source_text, start)

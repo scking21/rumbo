@@ -75,6 +75,10 @@ class MoneyReadingTests(unittest.TestCase):
         self.assertEqual(unsourced(budget([31]), "Budget 600, due May 31."), ["amounts 31"])
         self.assertEqual(unsourced(budget([20]), "Budget 600, due 2026-12-20."), ["amounts 20"])
         self.assertEqual(unsourced(budget([30]), "Budget 600, code 2026-13-30."), [])
+        # Only a value a clock shows is a time before am or pm.
+        self.assertEqual(unsourced(budget([500, 450]), "Budget 600. Rent 500 pm, or five hundred pm, or 450 am."), [])
+        self.assertEqual(unsourced(budget([9.3]), "Budget 600. Doors at 9.30pm."), ["amounts 9.3"])
+        self.assertEqual(unsourced(budget([9]), "Budget 600. Doors at nine pm."), ["amounts 9"])
         # A currency word after the day makes it money too.
         self.assertEqual(unsourced(budget([25, 20]), "Budget 600. Rent: June 25 euros, May 20 dollars."), [])
 
