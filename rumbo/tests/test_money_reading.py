@@ -87,6 +87,11 @@ class MoneyReadingTests(unittest.TestCase):
         self.assertEqual(unsourced(budget([500, 450]), "Budget 600. Rent 500 pm, or five hundred pm, or 450 am."), [])
         self.assertEqual(unsourced(budget([9.3]), "Budget 600. Doors at 9.30pm."), ["amounts 9.3"])
         self.assertEqual(unsourced(budget([9]), "Budget 600. Doors at nine pm."), ["amounts 9"])
+        # So does a scale word: "May 2 thousand dollars" is 2000 (Codex review on 0.3.26).
+        said = "Budget 6000. Monthly costs: May 2 thousand dollars, June 3 thousand dollars."
+        self.assertEqual(unsourced(budget([2000, 3000], total_cap=6000), said), [])
+        self.assertEqual(stated("Monthly costs: May 2 thousand dollars (my estimate).", budget([2000], total_cap=6000),
+                                "Budget 6000."), {"C1"})
         # A currency word after the day makes it money too.
         self.assertEqual(unsourced(budget([25, 20]), "Budget 600. Rent: June 25 euros, May 20 dollars."), [])
 

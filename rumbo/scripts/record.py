@@ -402,12 +402,14 @@ DATE_TEXT = re.compile(r"\b" + WHOLE_MONTH + r"[^\S\n]*" + DAY + r"(?:st|nd|rd|t
 
 
 CURRENCY_WORD = re.compile(r"[^\S\n]*(?:dollars?|bucks|euros?|pounds?|quid|usd|eur|gbp|cad|aud)\b", re.IGNORECASE)
+# A number with a scale word after it is an amount: "May 2 thousand dollars" is 2000.
+SCALE_WORD_AFTER = re.compile(r"[^\S\n]+(?:thousand|million|billion)\b", re.IGNORECASE)
 
 
 def _blank_dates(text):
     """text with its dates blanked for the money reading, but never a piece of a
-    number or a price: "$20.50 May fee", "$ 20 May fee", "May 20.50" and "June 25
-    euros" keep theirs."""
+    number or a price: "$20.50 May fee", "$ 20 May fee", "May 20.50", "June 25
+    euros" and "May 2 thousand dollars" keep theirs."""
     def blank(match):
         start, end = match.span()
         before = start - 1
@@ -419,7 +421,7 @@ def _blank_dates(text):
             return match.group(0)
         if end + 1 < len(text) and text[end] in ".," and text[end + 1].isdecimal():
             return match.group(0)
-        if CURRENCY_WORD.match(text, end):
+        if CURRENCY_WORD.match(text, end) or SCALE_WORD_AFTER.match(text, end):
             return match.group(0)
         return " "
     return DATE_TEXT.sub(blank, text)
