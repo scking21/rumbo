@@ -401,9 +401,26 @@ MONEY_EXCLUDED_UNIT = re.compile(
 MERIDIEM_AFTER = re.compile(r"[^\S\n]*[ap]\.?[^\S\n]*m\b", re.IGNORECASE)
 
 
+# The start of a range that ends in a time is a clock time too, as BARE_HOUR_RANGE
+# reads it: the 2 in "2-4pm" and the 9 in "9-10:30".
+RANGE_TO_CLOCK = re.compile(
+    r"(?:[^\S\n]*[-\u2013\u2014][^\S\n]*|[^\S\n]+(?:to|until|till)[^\S\n]+)[0-9]{1,2}"
+    r"(?::[0-9]{2}(?![0-9])|(?:\.[0-9]{2})?(?![0-9])[^\S\n]*[ap]\.?[^\S\n]*m\b)", re.IGNORECASE)
+
+
 def _clock_time(value, text, end):
-    """True when value, ending at end in text, reads as an hour with am or pm after it."""
-    return 0 < value < 13 and _next_letter(text, end) and MERIDIEM_AFTER.match(text, end) is not None
+    """True when value, ending at end in text, reads as an hour with am or pm after it,
+    directly or at the end of a range it starts."""
+    if not 0 < value < 13:
+        return False
+    after = end
+    while after < len(text) and _line_space(text[after]):
+        after += 1
+    if after == len(text):
+        return False
+    if text[after].isalpha():
+        return MERIDIEM_AFTER.match(text, end) is not None or RANGE_TO_CLOCK.match(text, end) is not None
+    return text[after] in "-\u2013\u2014" and RANGE_TO_CLOCK.match(text, end) is not None
 # Only whole month names and their usual abbreviations: MONTH_NAME takes any word
 # that starts like one, and "marketing 50" is money.
 WHOLE_MONTH = (r"(?:(?i:january|february|march|april|june|july|august|september|october|november|december|"
@@ -463,14 +480,18 @@ ZERO_QUANTITY = re.compile(
     r"\b(0(?:\.0+)?(?![\d.])|zero|no)\s+([A-Za-z][\w-]*)\b",
     re.IGNORECASE,
 )
+# "free" after a hyphen is free of something else ("sugar-free snacks", "hands-free")
+# unless that is a price ("cost-free", "rent-free", "fee-free").
 ZERO_UNIT = re.compile(
-    r"(?:\bfree\b|\bat\s+no\s+charge\b|\bno\s+charge\b|[$€£]\s*0(?:\.0+)?(?![\d.])|"
+    r"(?:(?<![\w-])free\b|\b(?:cost|charge|fee|rent|toll|royalty|commission|tuition|admission)-free\b|"
+    r"\bat\s+no\s+charge\b|\bno\s+charge\b|[$€£]\s*0(?:\.0+)?(?![\d.])|"
     r"\bzero\s+(?:dollars?|euros?|pounds?|bucks?|cents?)\b)",
     re.IGNORECASE,
 )
+# A price per count unit: "$25 per seat", "$25 a seat", "$25/seat".
 NUMERIC_RATE = re.compile(
     r"(?<![\w\d.:])(?:[$€£]\s*)?(\d[\d,]*(?:\.\d+)?)\s*"
-    r"(?:dollars?|euros?|pounds?|bucks?|cents?)?\s+per\s+([A-Za-z][\w-]*)\b",
+    r"(?:dollars?|euros?|pounds?|bucks?|cents?)?(?:\s+(?:per|an?)\s+|\s*/\s*)([A-Za-z][\w-]*)\b",
     re.IGNORECASE,
 )
 ZERO_NOT_QUANTITY = {
@@ -972,72 +993,121 @@ HALF_OF_DAY = re.compile(r"[AaPp](?![A-Za-z])|\s+[AaPp](?=\s*(?:[^\w\s$€£]|$)
                          re.IGNORECASE)
 
 
+# "9.30pm": a dot between the hour and its minutes makes a time only with am or pm
+# after it on the same line, as MERIDIEM_AFTER reads it for money.
+DOT_TIME = re.compile(r"(?<![0-9:.$€£])([0-9]{1,2})\.([0-9]{2})(?![0-9])[^\S\n]*([AaPp])\.?[^\S\n]*[Mm]\b")
+# A range's start is a bare hour that the end's time tells how to read: "2-4pm",
+# "9 to 11am", "9-10:30". The end is read as the time reader reads it alone: as a
+# TIME_TOKEN with its seconds and am or pm, as a DOT_TIME, or as an hour with am or
+# pm. An end with neither minutes nor am/pm ("June 3-5", "9 to 5") makes no time.
+BARE_HOUR_RANGE = re.compile(
+    r"(?<![0-9:.$€£])([0-9]{1,2})(?:[^\S\n]*[-\u2013\u2014][^\S\n]*|[^\S\n]+(?:to|until|till)[^\S\n]+)([0-9]{1,2})"
+    r"(?::([0-9]{2})(?::([0-9]{2}))?(?![0-9]|:[0-9])(?:\s*([AaPp])\.?\s*[Mm]\b)?"
+    r"|\.([0-9]{2})(?![0-9])[^\S\n]*([AaPp])\.?[^\S\n]*[Mm]\b"
+    r"|(?![0-9])\s*([AaPp])\.?\s*[Mm]\b)", re.IGNORECASE)
+
+
+def _range_starts(text):
+    """For each time range in text, the hours its bare start can mean (see BARE_HOUR_RANGE).
+
+    With am or pm on the end, the start is the hour that comes up to 12 hours before
+    it: "2-4pm" starts at 14, "11-1pm" at 11, "8-1am" at 20. With no am or pm, the
+    start reads like a time with none ("9-10:30" starts at 9 or 21, see _is_time_sourced).
+    """
+    for match in BARE_HOUR_RANGE.finditer(text):
+        start, end_hour = int(match.group(1)), int(match.group(2))
+        seconds = match.group(4)
+        # As for any time token, an end with seconds other than 00 states no time.
+        if seconds is not None and seconds != "00":
+            continue
+        end_minute = int(match.group(3) or match.group(6) or 0)
+        meridiem = match.group(5) or match.group(7) or match.group(8)
+        if end_minute > 59:
+            continue
+        if meridiem:
+            if not (1 <= start <= 12 and 1 <= end_hour <= 12):
+                continue
+            end = (end_hour % 12 + (12 if meridiem.lower() == "p" else 0)) * 60 + end_minute
+            yield {hour for hour in (start % 12, start % 12 + 12) if 0 < (end - hour * 60) % 1440 <= 720}
+        elif start <= 23 and end_hour <= 23:
+            # The start takes the other half of the day only where the end could:
+            # not after a leading zero, seconds or "in the morning" (see TIME_TOKEN).
+            other = (start + 12) % 24 if 1 <= start <= 12 and match.group(1)[0] != "0" and seconds is None and \
+                not HALF_OF_DAY.match(text, match.end()) else start
+            yield {start, other}
+
+
+TIME_TOKEN = re.compile(r"(?<![0-9:])([0-9]{1,2}):([0-9]{2})(?::([0-9]{2}))?(?![0-9]|:[0-9])(?:\s*([AaPp])\.?\s*[Mm]\b\.?)?")
+HOUR_MERIDIEM = re.compile(r"(?<![0-9:.$])([0-9]{1,2})\s*([AaPp])\.?\s*[Mm]\b")
+# As for numbers, which times a text states does not depend on the time looked
+# for, so each text is read once (see _SOURCED_NUMBERS).
+_SOURCED_TIMES = {}
+
+
+def _sourced_times(source_text):
+    """The (hour, minute) times source_text states, read as _is_time_sourced reads them."""
+    found = _SOURCED_TIMES.get(source_text)
+    if found is not None:
+        return found
+    times = set()
+    for match in TIME_TOKEN.finditer(source_text):
+        hour_group, minute_group, seconds_group, meridiem = match.groups()
+        if seconds_group is not None and seconds_group != "00":
+            continue
+        hour, minute = int(hour_group), int(minute_group)
+        if meridiem in ("p", "P") and hour < 12:
+            hour += 12
+        elif meridiem in ("a", "A") and hour == 12:
+            hour = 0
+        if hour > 23 or minute > 59:
+            continue
+        times.add((hour, minute))
+        if 1 <= hour <= 12 and hour_group[0] != "0" and not meridiem and seconds_group is None \
+                and not HALF_OF_DAY.match(source_text, match.end()):
+            times.add(((hour + 12) % 24, minute))
+    for match in DOT_TIME.finditer(source_text):
+        hour, minute = int(match.group(1)), int(match.group(2))
+        if 1 <= hour <= 12 and minute <= 59:
+            times.add((hour % 12 + (12 if match.group(3) in ("p", "P") else 0), minute))
+    for starts in _range_starts(source_text):
+        times.update((hour, 0) for hour in starts)
+    # "9am", "9 p.m.": an hour with a meridiem and no minutes.
+    for match in HOUR_MERIDIEM.finditer(source_text):
+        hour = int(match.group(1))
+        if 1 <= hour <= 12:
+            times.add((hour % 12 + (12 if match.group(2) in ("p", "P") else 0), 0))
+    if re.search(r"\bmidnight\b", source_text, re.IGNORECASE):
+        times.add((0, 0))
+    if re.search(r"\bnoon\b", source_text, re.IGNORECASE):
+        times.add((12, 0))
+    if len(_SOURCED_TIMES) >= _SOURCED_NUMBERS_KEPT:
+        _SOURCED_TIMES.clear()
+    found = _SOURCED_TIMES[source_text] = frozenset(times)
+    return found
+
+
 def _is_time_sourced(time_str, source_text):
-    """Return True if time_str (HH:MM) is sourced in source_text.
-    Parse the check time as (h, m) from "HH:MM"; return False if malformed.
-    Find time tokens with re.finditer("(?<![0-9:])([0-9]{1,2}):([0-9]{2})(?::([0-9]{2}))?(?![0-9]|:[0-9])(?:\\s*([AaPp])\\.?\\s*[Mm]\\b\\.)?", text).
-    Skip a token whose seconds group is present and not "00". Meridiem: p/P and hour < 12 -> hour + 12; a/A and hour == 12 -> 0. Skip hours > 23 or minutes > 59.
-    A token with no meridiem and an hour 1-12 written without a leading zero also reads in the
-    other half of the day (hour + 12, or 0 for 12): the values are the user's, the half is the agent's reading.
-    Sourced if any token's (hour, minute) or other-half reading == (h, m).
+    """Return True if time_str (HH:MM) is sourced in source_text; False if it is malformed.
+
+    A time token (TIME_TOKEN) with seconds other than 00 states nothing. Its am or
+    pm moves the hour (p and an hour below 12: +12; a and 12: 0), and hours over 23
+    or minutes over 59 state nothing. A token with no meridiem and an hour 1-12
+    written without a leading zero also reads in the other half of the day (hour +
+    12, or 0 for 12): the values are the user's, the half is the agent's reading.
+    Times with a dot (DOT_TIME), range starts (_range_starts), hours with am or pm
+    and no minutes, "noon" and "midnight" count too.
     """
     if not isinstance(time_str, str):
         return False
     parts = time_str.split(":")
-    if len(parts) != 2 or not (parts[0].isdigit() and parts[1].isdigit()):
+    # Decimal digits, as parse_time takes them: "²" is a digit int() cannot read.
+    if len(parts) != 2 or not (parts[0].isdecimal() and parts[1].isdecimal()):
         return False
     h = int(parts[0])
     m = int(parts[1])
     if h > 23 or m > 59:
         return False
-
-    # Find time tokens with the specified regex
-    for match in re.finditer(r"(?<![0-9:])([0-9]{1,2}):([0-9]{2})(?::([0-9]{2}))?(?![0-9]|:[0-9])(?:\s*([AaPp])\.?\s*[Mm]\b\.?)?", source_text):
-        hour_group = match.group(1)
-        minute_group = match.group(2)
-        seconds_group = match.group(3)
-        meridiem_group = match.group(4)
-
-        # Skip if seconds group is present and not "00"
-        if seconds_group is not None and seconds_group != "00":
-            continue
-
-        try:
-            hour = int(hour_group)
-            minute = int(minute_group)
-        except ValueError:
-            continue
-
-        # Apply meridiem correction
-        if meridiem_group:
-            meridiem = meridiem_group.lower()
-            if meridiem.startswith('p') and hour < 12:
-                hour += 12
-            elif meridiem.startswith('a') and hour == 12:
-                hour = 0
-
-        # Skip hours > 23 or minutes > 59 after meridiem correction
-        if hour > 23 or minute > 59:
-            continue
-
-        if minute == m and (hour == h or h == (hour + 12) % 24 and 1 <= hour <= 12 and hour_group[0] != "0"
-                            and not meridiem_group and seconds_group is None
-                            and not HALF_OF_DAY.match(source_text, match.end())):
-            return True
-
-    if m == 0:
-        # "9am", "9 p.m.": an hour with a meridiem and no minutes.
-        for match in re.finditer(r"(?<![0-9:.$])([0-9]{1,2})\s*([AaPp])\.?\s*[Mm]\b", source_text):
-            hour = int(match.group(1))
-            if not 1 <= hour <= 12:
-                continue
-            hour = hour % 12 + (12 if match.group(2).lower() == "p" else 0)
-            if hour == h:
-                return True
-        if h in (0, 12) and re.search(r"\bmidnight\b" if h == 0 else r"\bnoon\b", source_text, re.IGNORECASE):
-            return True
-
-    return False
+    return (h, m) in _sourced_times(source_text)
 
 
 MONTHS = ["January", "February", "March", "April", "May", "June", "July",
@@ -1049,9 +1119,11 @@ def _is_date_sourced(date_str, source_text):
 
     Month-day is sourced by the month name or its abbreviation with the day in
     either order ("March 20", "Mar. 20th", "20 March", "the 20th of March"), by
-    "03-20", or by the two numbers around a slash ("3/20" or "20/3": the values
-    are the user's, the reading is the agent's). The year only by the 4-digit
-    year. An MM-DD date has no year, so year_sourced is False.
+    "03-20" (also in "2026-03-20T10:00"), by "2026/03/20", or by the two numbers
+    around a slash ("3/20" or "20/3": the values are the user's, the reading is
+    the agent's). A range's two ends count, joined by a dash or by "to",
+    "through", "thru", "until" or "till". The year only by the 4-digit year. An
+    MM-DD date has no year, so year_sourced is False.
     """
     date = parse_date(date_str)
     if date is None:
@@ -1061,7 +1133,7 @@ def _is_date_sourced(date_str, source_text):
     month = rf"(?:{name}|{name[:3]}\.?{sept})"
     day = rf"0?{date.day}(?:st|nd|rd|th)?"
     other = r"\d{1,2}(?:st|nd|rd|th)?"
-    dash = r"\s*[-\u2013\u2014]\s*"
+    dash = r"(?:\s*[-\u2013\u2014]\s*|\s+(?:to|through|thru|until|till)\s+)"
     any_month = (r"(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?"
                  r"|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\.?(?![a-z])")
     patterns = [
@@ -1074,7 +1146,9 @@ def _is_date_sourced(date_str, source_text):
         rf"\b{month}\s+{other}{dash}{day}\b(?!\s+(?:of\s+)?{any_month})",
         rf"(?<![\d/.:-]){day}{dash}{other}\s+(?:of\s+)?{month}(?![a-z])",
         rf"(?<![\d/.:-]){other}{dash}{day}\s+(?:of\s+)?{month}(?![a-z])",
-        rf"\b{date.month:02d}-{date.day:02d}\b",
+        # "03-20", also inside "2026-03-20T10:00".
+        rf"\b{date.month:02d}-{date.day:02d}(?:\b|(?=[Tt]\d))",
+        rf"(?<![\d/.:-])\d{{4}}/0?{date.month}/0?{date.day}(?!\d)",
         rf"(?<![\d/.:-])0?{date.month}/0?{date.day}(?!\d)",
         rf"(?<![\d/.:-])0?{date.day}/0?{date.month}(?!\d)",
     ]
@@ -3405,8 +3479,11 @@ def _says(reading, value, line):
     """
     if reading == "time":
         hours, minutes = value.split(":")
-        if ":" + minutes not in line and not (minutes == "00" and (
-                str(int(hours) % 12 or 12) in line or re.search(r"noon|midnight", line, re.IGNORECASE))):
+        # A whole hour can be stated without its minutes: "9am", "noon", or the start
+        # of a range in either clock ("2-4pm", "14-16:30").
+        if ":" + minutes not in line and "." + minutes not in line and not (minutes == "00" and (
+                str(int(hours) % 12 or 12) in line or str(int(hours)) in line
+                or re.search(r"noon|midnight", line, re.IGNORECASE))):
             return False
         return _is_time_sourced(value, line)
     if reading == "date":
