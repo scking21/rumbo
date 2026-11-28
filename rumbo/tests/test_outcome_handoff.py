@@ -106,6 +106,27 @@ class OutcomeHandoffTests(unittest.TestCase):
         self.assertEqual(block["decision"], "block")
         self.assertIn("OUTCOME O2: RUNNABLE", block["reason"])
 
+    def test_a_pinned_handoff_refuses_a_record_that_changed_after_review(self):
+        # The OpenAI adapter's CLI had this flag; the Claude CLI read it but did not offer it.
+        self.write(self.base([self.verified()]))
+        pin = self.sha(self.record_path)
+        args = ("handoff", "--record", self.record_path, "--root", self.project)
+        self.assertEqual(self.run_cli(*args, "--reviewed-record-sha256", pin).returncode, 0)
+        changed = self.base([self.verified()])
+        changed["outcomes"][0]["owner"] = "another worker"
+        self.write(changed)
+        refused = self.run_cli(*args, "--reviewed-record-sha256", pin)
+        self.assertEqual((refused.returncode, refused.stdout), (2, ""))
+        self.assertIn("HANDOFF_RECORD_CHANGED", refused.stderr)
+        self.assertIn("INVALID_REVIEW_DIGEST", self.run_cli(*args, "--reviewed-record-sha256", "bad").stderr)
+        self.assertEqual(json.loads(self.run_cli(*args).stdout)["outcomes"][0]["owner"], "another worker")
+
+    def test_a_repeat_names_a_runnable_outcome_by_its_text(self):
+        self.write(self.base([self.runnable()]))
+        self.assertIn("OUTCOME O2: RUNNABLE", json.loads(self.stop("repeat").stdout)["reason"])
+        repeat = json.loads(self.stop("repeat").stdout)["reason"]
+        self.assertIn("OUTCOME O2 (Index saved and read back)", repeat)
+
     def test_real_blocker_does_not_hide_unrelated_runnable_work(self):
         self.write(self.base([self.blocked(), self.runnable()]))
         report = json.loads(self.handoff().stdout)
